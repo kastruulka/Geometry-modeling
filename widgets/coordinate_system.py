@@ -129,27 +129,28 @@ class CoordinateSystemWidget(QWidget):
             center_x = self.width() // 2
             center_y = self.height() // 2
             
-            # Преобразуем экранные координаты в математические
             math_x = event.position().x() - center_x
             math_y = center_y - event.position().y()
+            current_math_point = QPointF(math_x, math_y)
             
             if not self.is_drawing:
-                # Начинаем новый отрезок
+                # Начало нового отрезка
                 self.current_line = LineSegment(
-                    QPointF(math_x, math_y),
-                    QPointF(math_x, math_y),
+                    current_math_point,
+                    current_math_point,  # Пока конечная точка = начальной
                     self.line_color,
                     self.line_width
                 )
                 self.is_drawing = True
             else:
-                # Заканчиваем рисование текущего отрезка
+                # Завершение текущего отрезка
                 if self.current_line:
-                    self.current_line.end_point = QPointF(math_x, math_y)
-                    self.lines.append(self.current_line)
+                    self.current_line.end_point = current_math_point
+                    self.lines.append(self.current_line)  # АВТОМАТИЧЕСКОЕ СОХРАНЕНИЕ
                     self.current_line = None
                 self.is_drawing = False
-                self.current_point = None
+            
+            self.current_point = current_math_point
             self.update()
     
     def mouseMoveEvent(self, event):
@@ -166,13 +167,16 @@ class CoordinateSystemWidget(QWidget):
     
     def start_new_line(self):
         """Начинает новый отрезок"""
-        if self.is_drawing and self.current_line:
-            # Сохраняем текущий отрезок если он есть
+        # Если уже рисуем отрезок, сохраняем его с текущим положением мыши
+        if self.is_drawing and self.current_line and self.current_point:
+            self.current_line.end_point = self.current_point
             self.lines.append(self.current_line)
         
+        # Начинаем новый отрезок
         self.is_drawing = True
         self.current_point = None
         self.current_line = None
+        self.update()
     
     def delete_last_line(self):
         """Удаляет последний добавленный отрезок"""
@@ -220,18 +224,20 @@ class CoordinateSystemWidget(QWidget):
         else:
             return QPointF(0, 0), QPointF(0, 0)
     
-    def set_points_from_input(self, start_point, end_point):
+    def set_points_from_input(self, start_point, end_point, apply=False):
         """Установка точек из числового ввода"""
-        if self.is_drawing:
-            # Если мы в режиме рисования, обновляем текущий отрезок
+        if apply:
+            # Фиксируем отрезок при нажатии "Применить координаты"
+            new_line = LineSegment(start_point, end_point, self.line_color, self.line_width)
+            self.lines.append(new_line)
+            self.update()
+        else:
+            # Только предпросмотр без сохранения
             if not self.current_line:
                 self.current_line = LineSegment(start_point, end_point, self.line_color, self.line_width)
             else:
                 self.current_line.start_point = start_point
                 self.current_line.end_point = end_point
-        else:
-            # Создаем новый отрезок
-            new_line = LineSegment(start_point, end_point, self.line_color, self.line_width)
-            self.lines.append(new_line)
+            self.update()
         
         self.update()

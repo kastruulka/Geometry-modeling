@@ -33,21 +33,17 @@ class MainWindow(QMainWindow):
         # Панель инструментов
         tools_group = QGroupBox("Инструменты")
         tools_layout = QVBoxLayout()
-        
-        self.line_btn = QPushButton("Новый отрезок")
-        self.line_btn.clicked.connect(self.start_new_line)
-        
-        self.finish_btn = QPushButton("Завершить отрезок")
-        self.finish_btn.clicked.connect(self.finish_current_line)
-        
+
+        self.new_line_btn = QPushButton("Сохранить отрезок")
+        self.new_line_btn.clicked.connect(self.start_new_line)
+
         self.delete_last_btn = QPushButton("Удалить последний")
         self.delete_last_btn.clicked.connect(self.delete_last_line)
-        
+
         self.delete_all_btn = QPushButton("Удалить все")
         self.delete_all_btn.clicked.connect(self.delete_all_lines)
-        
-        tools_layout.addWidget(self.line_btn)
-        tools_layout.addWidget(self.finish_btn)
+
+        tools_layout.addWidget(self.new_line_btn)
         tools_layout.addWidget(self.delete_last_btn)
         tools_layout.addWidget(self.delete_all_btn)
         tools_group.setLayout(tools_layout)
@@ -260,6 +256,14 @@ class MainWindow(QMainWindow):
     
     def start_new_line(self):
         """Начинает новый отрезок"""
+        # Если уже рисуем отрезок, сохраняем его
+        if self.canvas.is_drawing and self.canvas.current_line:
+            # Берем текущее положение мыши как конечную точку
+            if self.canvas.current_point:
+                self.canvas.current_line.end_point = self.canvas.current_point
+                self.canvas.lines.append(self.canvas.current_line)
+        
+        # Начинаем новый отрезок
         self.canvas.start_new_line()
         self.update_info()
     
@@ -284,7 +288,7 @@ class MainWindow(QMainWindow):
         self.update_info()
     
     def apply_coordinates(self):
-        """Применяет координаты из полей ввода"""
+        """Применяет координаты из полей ввода и фиксирует отрезок"""
         start_point = QPointF(self.start_x_spin.value(), self.start_y_spin.value())
         
         if self.coordinate_system == "cartesian":
@@ -303,7 +307,13 @@ class MainWindow(QMainWindow):
             end_y = radius * math.sin(angle_rad)
             end_point = QPointF(end_x, end_y)
         
-        self.canvas.set_points_from_input(start_point, end_point)
+        # Фиксируем отрезок (apply=True)
+        self.canvas.set_points_from_input(start_point, end_point, apply=True)
+        
+        # Очищаем текущий отрезок после фиксации
+        self.canvas.current_line = None
+        self.canvas.is_drawing = False
+        
         self.update_info()
     
     def change_coordinate_system(self, system):
@@ -379,14 +389,38 @@ class MainWindow(QMainWindow):
             self.angle_spin.blockSignals(False)
     
     def on_coordinates_changed(self):
-        """Обработчик изменения декартовых координат"""
+        """Обработчик изменения декартовых координат - только предпросмотр"""
         if self.coordinate_system == "cartesian":
-            self.apply_coordinates()
-    
+            self.preview_coordinates()
+
     def on_polar_changed(self):
-        """Обработчик изменения полярных координат"""
+        """Обработчик изменения полярных координат - только предпросмотр"""
         if self.coordinate_system == "polar":
-            self.apply_coordinates()
+            self.preview_coordinates()
+
+    def preview_coordinates(self):
+        """Предпросмотр отрезка без сохранения"""
+        start_point = QPointF(self.start_x_spin.value(), self.start_y_spin.value())
+        
+        if self.coordinate_system == "cartesian":
+            end_point = QPointF(self.end_x_spin.value(), self.end_y_spin.value())
+        else:
+            # Преобразуем полярные координаты в декартовы
+            radius = self.radius_spin.value()
+            angle = self.angle_spin.value()
+            
+            if self.angle_units == "degrees":
+                angle_rad = math.radians(angle)
+            else:
+                angle_rad = angle
+            
+            end_x = radius * math.cos(angle_rad)
+            end_y = radius * math.sin(angle_rad)
+            end_point = QPointF(end_x, end_y)
+        
+        # Только предпросмотр без сохранения (apply=False)
+        self.canvas.set_points_from_input(start_point, end_point, apply=False)
+        self.update_info()
     
     def update_info(self):
         """Обновляет информационную панель"""
