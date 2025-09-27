@@ -160,6 +160,14 @@ class CoordinateSystemWidget(QWidget):
     def set_grid_color(self, color):
         self.grid_color = color
         self.update()
+    
+    def set_points(self, start_point, end_point):
+        """Установка точек извне"""
+        self.start_point = start_point
+        self.end_point = end_point
+        self.is_drawing = False
+        self.current_point = None
+        self.update()
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -197,6 +205,82 @@ class MainWindow(QMainWindow):
         tools_layout.addWidget(self.delete_btn)
         tools_group.setLayout(tools_layout)
         left_panel.addWidget(tools_group)
+        
+        # Панель ввода координат
+        input_group = QGroupBox("Ввод координат")
+        input_layout = QGridLayout()
+        
+        # Начальная точка (всегда в декартовых координатах)
+        input_layout.addWidget(QLabel("Начальная точка (x, y):"), 0, 0)
+        self.start_x_spin = QDoubleSpinBox()
+        self.start_x_spin.setRange(-1000, 1000)
+        self.start_x_spin.setDecimals(2)
+        self.start_x_spin.setSingleStep(10)
+        self.start_x_spin.valueChanged.connect(self.on_coordinates_changed)
+        
+        self.start_y_spin = QDoubleSpinBox()
+        self.start_y_spin.setRange(-1000, 1000)
+        self.start_y_spin.setDecimals(2)
+        self.start_y_spin.setSingleStep(10)
+        self.start_y_spin.valueChanged.connect(self.on_coordinates_changed)
+        
+        input_layout.addWidget(QLabel("x:"), 0, 1)
+        input_layout.addWidget(self.start_x_spin, 0, 2)
+        input_layout.addWidget(QLabel("y:"), 0, 3)
+        input_layout.addWidget(self.start_y_spin, 0, 4)
+        
+        # Конечная точка (зависит от системы координат)
+        input_layout.addWidget(QLabel("Конечная точка:"), 1, 0)
+        
+        # Декартовы координаты
+        self.cartesian_group = QWidget()
+        cartesian_layout = QHBoxLayout()
+        self.end_x_spin = QDoubleSpinBox()
+        self.end_x_spin.setRange(-1000, 1000)
+        self.end_x_spin.setDecimals(2)
+        self.end_x_spin.setSingleStep(10)
+        self.end_x_spin.valueChanged.connect(self.on_coordinates_changed)
+        
+        self.end_y_spin = QDoubleSpinBox()
+        self.end_y_spin.setRange(-1000, 1000)
+        self.end_y_spin.setDecimals(2)
+        self.end_y_spin.setSingleStep(10)
+        self.end_y_spin.valueChanged.connect(self.on_coordinates_changed)
+        
+        cartesian_layout.addWidget(QLabel("x:"))
+        cartesian_layout.addWidget(self.end_x_spin)
+        cartesian_layout.addWidget(QLabel("y:"))
+        cartesian_layout.addWidget(self.end_y_spin)
+        self.cartesian_group.setLayout(cartesian_layout)
+        
+        # Полярные координаты
+        self.polar_group = QWidget()
+        polar_layout = QHBoxLayout()
+        self.radius_spin = QDoubleSpinBox()
+        self.radius_spin.setRange(0, 1000)
+        self.radius_spin.setDecimals(2)
+        self.radius_spin.setSingleStep(10)
+        self.radius_spin.valueChanged.connect(self.on_polar_changed)
+        
+        self.angle_spin = QDoubleSpinBox()
+        self.angle_spin.setRange(-360, 360)
+        self.angle_spin.setDecimals(2)
+        self.angle_spin.setSingleStep(15)
+        self.angle_spin.valueChanged.connect(self.on_polar_changed)
+        
+        polar_layout.addWidget(QLabel("r:"))
+        polar_layout.addWidget(self.radius_spin)
+        polar_layout.addWidget(QLabel("θ:"))
+        polar_layout.addWidget(self.angle_spin)
+        polar_layout.addWidget(QLabel("°" if self.angle_units == "degrees" else "rad"))
+        self.polar_group.setLayout(polar_layout)
+        self.polar_group.hide()
+        
+        input_layout.addWidget(self.cartesian_group, 1, 1, 1, 4)
+        input_layout.addWidget(self.polar_group, 1, 1, 1, 4)
+        
+        input_group.setLayout(input_layout)
+        left_panel.addWidget(input_group)
         
         # Панель настроек
         settings_group = QGroupBox("Настройки")
@@ -262,11 +346,11 @@ class MainWindow(QMainWindow):
         info_layout = QGridLayout()
         
         info_layout.addWidget(QLabel("Начальная точка:"), 0, 0)
-        self.start_point_label = QLabel("(0, 0)")
+        self.start_point_label = QLabel("(0.00, 0.00)")
         info_layout.addWidget(self.start_point_label, 0, 1)
         
         info_layout.addWidget(QLabel("Конечная точка:"), 1, 0)
-        self.end_point_label = QLabel("(0, 0)")
+        self.end_point_label = QLabel("(0.00, 0.00)")
         info_layout.addWidget(self.end_point_label, 1, 1)
         
         info_layout.addWidget(QLabel("Длина отрезка:"), 2, 0)
@@ -282,6 +366,14 @@ class MainWindow(QMainWindow):
         
         main_layout.addLayout(left_panel, 1)
         main_layout.addLayout(right_panel, 3)
+        
+        # Инициализация значений
+        self.start_x_spin.setValue(0)
+        self.start_y_spin.setValue(0)
+        self.end_x_spin.setValue(100)
+        self.end_y_spin.setValue(100)
+        self.radius_spin.setValue(100)
+        self.angle_spin.setValue(45)
     
     def start_new_line(self):
         self.canvas.is_drawing = True
@@ -294,14 +386,25 @@ class MainWindow(QMainWindow):
         self.canvas.is_drawing = False
         self.canvas.current_point = None
         self.canvas.update()
+        
+        # Сброс полей ввода
+        self.start_x_spin.setValue(0)
+        self.start_y_spin.setValue(0)
+        self.end_x_spin.setValue(0)
+        self.end_y_spin.setValue(0)
+        self.radius_spin.setValue(0)
+        self.angle_spin.setValue(0)
+        
         self.update_info()
     
     def change_coordinate_system(self, system):
         self.coordinate_system = "polar" if system == "Полярная" else "cartesian"
+        self.update_input_fields()
         self.update_info()
     
     def change_angle_units(self, units):
         self.angle_units = "radians" if units == "Радианы" else "degrees"
+        self.update_angle_units()
         self.update_info()
     
     def change_grid_step(self, step):
@@ -322,16 +425,105 @@ class MainWindow(QMainWindow):
         if color.isValid():
             self.canvas.set_grid_color(color)
     
+    def update_input_fields(self):
+        """Обновляет отображение полей ввода в зависимости от системы координат"""
+        if self.coordinate_system == "cartesian":
+            self.cartesian_group.show()
+            self.polar_group.hide()
+        else:
+            self.cartesian_group.hide()
+            self.polar_group.show()
+            
+            # При переключении на полярные координаты преобразуем текущие декартовы координаты
+            end_x = self.end_x_spin.value()
+            end_y = self.end_y_spin.value()
+            
+            radius = math.sqrt(end_x**2 + end_y**2)
+            angle = math.atan2(end_y, end_x)
+            
+            if self.angle_units == "degrees":
+                angle = math.degrees(angle)
+            
+            self.radius_spin.setValue(radius)
+            self.angle_spin.setValue(angle)
+    
+    def update_angle_units(self):
+        """Обновляет единицы измерения углов"""
+        angle_label = self.polar_group.layout().itemAt(4).widget()
+        angle_label.setText("°" if self.angle_units == "degrees" else "rad")
+        
+        # Конвертируем угол при смене единиц измерения
+        if self.coordinate_system == "polar":
+            current_angle = self.angle_spin.value()
+            if self.angle_units == "degrees":
+                # Были радианы, стали градусы
+                current_angle = math.degrees(current_angle)
+            else:
+                # Были градусы, стали радианы
+                current_angle = math.radians(current_angle)
+            
+            self.angle_spin.blockSignals(True)
+            self.angle_spin.setValue(current_angle)
+            self.angle_spin.blockSignals(False)
+    
+    def on_coordinates_changed(self):
+        """Обработчик изменения декартовых координат"""
+        if self.coordinate_system == "cartesian":
+            start_point = QPointF(self.start_x_spin.value(), self.start_y_spin.value())
+            end_point = QPointF(self.end_x_spin.value(), self.end_y_spin.value())
+            self.canvas.set_points(start_point, end_point)
+            self.update_info()
+    
+    def on_polar_changed(self):
+        """Обработчик изменения полярных координат"""
+        if self.coordinate_system == "polar":
+            # Начальная точка всегда в декартовых координатах
+            start_point = QPointF(self.start_x_spin.value(), self.start_y_spin.value())
+            
+            # Конечная точка в полярных координатах
+            radius = self.radius_spin.value()
+            angle = self.angle_spin.value()
+            
+            # Преобразуем в декартовы координаты
+            if self.angle_units == "degrees":
+                angle_rad = math.radians(angle)
+            else:
+                angle_rad = angle
+            
+            end_x = radius * math.cos(angle_rad)
+            end_y = radius * math.sin(angle_rad)
+            end_point = QPointF(end_x, end_y)
+            
+            self.canvas.set_points(start_point, end_point)
+            self.update_info()
+            
+            # Обновляем декартовы координаты для согласованности
+            self.end_x_spin.blockSignals(True)
+            self.end_y_spin.blockSignals(True)
+            self.end_x_spin.setValue(end_x)
+            self.end_y_spin.setValue(end_y)
+            self.end_x_spin.blockSignals(False)
+            self.end_y_spin.blockSignals(False)
+    
     def update_info(self):
-        # Обновляем информацию о точках
+        """Обновляет информационную панель"""
         start_x, start_y = self.canvas.start_point.x(), self.canvas.start_point.y()
         end_x, end_y = self.canvas.end_point.x(), self.canvas.end_point.y()
         
+        # Обновляем поля ввода
+        self.start_x_spin.blockSignals(True)
+        self.start_y_spin.blockSignals(True)
+        self.start_x_spin.setValue(start_x)
+        self.start_y_spin.setValue(start_y)
+        self.start_x_spin.blockSignals(False)
+        self.start_y_spin.blockSignals(False)
+        
+        # Отображаем координаты в информационной панели
         if self.coordinate_system == "cartesian":
             self.start_point_label.setText(f"({start_x:.2f}, {start_y:.2f})")
             self.end_point_label.setText(f"({end_x:.2f}, {end_y:.2f})")
         else:
-            # Преобразуем в полярные координаты
+            # Преобразуем в полярные координаты для отображения
             r1 = math.sqrt(start_x**2 + start_y**2)
             theta1 = math.atan2(start_y, start_x)
             
@@ -354,7 +546,7 @@ class MainWindow(QMainWindow):
         self.length_label.setText(f"{length:.2f}")
         
         # Вычисляем угол наклона
-        if dx != 0:
+        if dx != 0 or dy != 0:
             angle_rad = math.atan2(dy, dx)
             if self.angle_units == "degrees":
                 angle = math.degrees(angle_rad)
@@ -362,15 +554,7 @@ class MainWindow(QMainWindow):
             else:
                 self.angle_label.setText(f"{angle_rad:.2f} rad")
         else:
-            if dy > 0:
-                angle = 90 if self.angle_units == "degrees" else math.pi/2
-            else:
-                angle = -90 if self.angle_units == "degrees" else -math.pi/2
-                
-            if self.angle_units == "degrees":
-                self.angle_label.setText(f"{angle:.2f}°")
-            else:
-                self.angle_label.setText(f"{angle:.2f} rad")
+            self.angle_label.setText("0.00°" if self.angle_units == "degrees" else "0.00 rad")
 
 def main():
     app = QApplication(sys.argv)
