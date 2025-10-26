@@ -294,7 +294,7 @@ class MainWindow(QMainWindow):
         if self.coordinate_system == "cartesian":
             end_point = QPointF(self.end_x_spin.value(), self.end_y_spin.value())
         else:
-            # Преобразуем полярные координаты в декартовы
+            # Преобразуем полярные координаты в декартовы ОТНОСИТЕЛЬНО НАЧАЛЬНОЙ ТОЧКИ
             radius = self.radius_spin.value()
             angle = self.angle_spin.value()
             
@@ -303,8 +303,13 @@ class MainWindow(QMainWindow):
             else:
                 angle_rad = angle
             
-            end_x = radius * math.cos(angle_rad)
-            end_y = radius * math.sin(angle_rad)
+            # Вычисляем смещение от начальной точки
+            delta_x = radius * math.cos(angle_rad)
+            delta_y = radius * math.sin(angle_rad)
+            
+            # Конечная точка = начальная + смещение
+            end_x = start_point.x() + delta_x
+            end_y = start_point.y() + delta_y
             end_point = QPointF(end_x, end_y)
         
         # Фиксируем отрезок (apply=True)
@@ -358,17 +363,29 @@ class MainWindow(QMainWindow):
             self.polar_group.show()
             
             # При переключении на полярные координаты преобразуем текущие декартовы координаты
+            # ОТНОСИТЕЛЬНО НАЧАЛЬНОЙ ТОЧКИ
+            start_x = self.start_x_spin.value()
+            start_y = self.start_y_spin.value()
             end_x = self.end_x_spin.value()
             end_y = self.end_y_spin.value()
             
-            radius = math.sqrt(end_x**2 + end_y**2)
-            angle = math.atan2(end_y, end_x)
+            # Вычисляем смещение от начальной точки
+            delta_x = end_x - start_x
+            delta_y = end_y - start_y
+            
+            # Преобразуем смещение в полярные координаты
+            radius = math.sqrt(delta_x**2 + delta_y**2)
+            angle = math.atan2(delta_y, delta_x)
             
             if self.angle_units == "degrees":
                 angle = math.degrees(angle)
             
+            self.radius_spin.blockSignals(True)
+            self.angle_spin.blockSignals(True)
             self.radius_spin.setValue(radius)
             self.angle_spin.setValue(angle)
+            self.radius_spin.blockSignals(False)
+            self.angle_spin.blockSignals(False)
     
     def update_angle_units(self):
         """Обновляет единицы измерения углов"""
@@ -405,7 +422,7 @@ class MainWindow(QMainWindow):
         if self.coordinate_system == "cartesian":
             end_point = QPointF(self.end_x_spin.value(), self.end_y_spin.value())
         else:
-            # Преобразуем полярные координаты в декартовы
+            # Преобразуем полярные координаты в декартовы ОТНОСИТЕЛЬНО НАЧАЛЬНОЙ ТОЧКИ
             radius = self.radius_spin.value()
             angle = self.angle_spin.value()
             
@@ -414,8 +431,13 @@ class MainWindow(QMainWindow):
             else:
                 angle_rad = angle
             
-            end_x = radius * math.cos(angle_rad)
-            end_y = radius * math.sin(angle_rad)
+            # Вычисляем смещение от начальной точки
+            delta_x = radius * math.cos(angle_rad)
+            delta_y = radius * math.sin(angle_rad)
+            
+            # Конечная точка = начальная + смещение
+            end_x = start_point.x() + delta_x
+            end_y = start_point.y() + delta_y
             end_point = QPointF(end_x, end_y)
         
         # Только предпросмотр без сохранения (apply=False)
@@ -439,21 +461,20 @@ class MainWindow(QMainWindow):
             self.start_point_label.setText(f"({start_x:.2f}, {start_y:.2f})")
             self.end_point_label.setText(f"({end_x:.2f}, {end_y:.2f})")
         else:
-            # Преобразуем в полярные координаты для отображения
-            r1 = math.sqrt(start_x**2 + start_y**2)
-            theta1 = math.atan2(start_y, start_x)
+            # Преобразуем в полярные координаты ОТНОСИТЕЛЬНО НАЧАЛЬНОЙ ТОЧКИ
+            delta_x = end_x - start_x
+            delta_y = end_y - start_y
             
-            r2 = math.sqrt(end_x**2 + end_y**2)
-            theta2 = math.atan2(end_y, end_x)
+            r = math.sqrt(delta_x**2 + delta_y**2)
+            theta = math.atan2(delta_y, delta_x)
             
             if self.angle_units == "degrees":
-                theta1 = math.degrees(theta1)
-                theta2 = math.degrees(theta2)
-                self.start_point_label.setText(f"(r={r1:.2f}, θ={theta1:.2f}°)")
-                self.end_point_label.setText(f"(r={r2:.2f}, θ={theta2:.2f}°)")
+                theta = math.degrees(theta)
+                self.start_point_label.setText(f"({start_x:.2f}, {start_y:.2f})")
+                self.end_point_label.setText(f"(Δr={r:.2f}, Δθ={theta:.2f}°)")
             else:
-                self.start_point_label.setText(f"(r={r1:.2f}, θ={theta1:.2f} rad)")
-                self.end_point_label.setText(f"(r={r2:.2f}, θ={theta2:.2f} rad)")
+                self.start_point_label.setText(f"({start_x:.2f}, {start_y:.2f})")
+                self.end_point_label.setText(f"(Δr={r:.2f}, Δθ={theta:.2f} rad)")
         
         # Вычисляем длину отрезка
         dx = end_x - start_x
