@@ -2,9 +2,10 @@ import sys
 import math
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                                QPushButton, QLabel, QComboBox, QDoubleSpinBox, QGroupBox,
-                               QGridLayout, QSpinBox, QColorDialog, QMessageBox)
-from PySide6.QtCore import QPointF
-from PySide6.QtGui import QColor
+                               QGridLayout, QSpinBox, QColorDialog, QMessageBox, QToolBar,
+                               QStatusBar, QMenu, QSizePolicy)
+from PySide6.QtCore import QPointF, Qt, QSize
+from PySide6.QtGui import QColor, QAction, QIcon, QKeySequence
 
 from widgets.coordinate_system import CoordinateSystemWidget
 
@@ -17,6 +18,9 @@ class MainWindow(QMainWindow):
         self.coordinate_system = "cartesian"  # "cartesian" или "polar"
         self.angle_units = "degrees"  # "degrees" или "radians"
         
+        # Сначала создаем canvas
+        self.canvas = CoordinateSystemWidget()
+        
         self.init_ui()
         self.update_info()
     
@@ -25,6 +29,15 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central_widget)
         
         main_layout = QHBoxLayout(central_widget)
+        
+        # Создаем меню
+        self.create_menus()
+        
+        # Создаем панель инструментов
+        self.create_toolbar()
+        
+        # Создаем строку состояния
+        self.create_statusbar()
         
         # Левая панель с настройками
         left_panel = QVBoxLayout()
@@ -203,7 +216,6 @@ class MainWindow(QMainWindow):
         right_panel = QVBoxLayout()
         
         # Рабочая область
-        self.canvas = CoordinateSystemWidget()
         right_panel.addWidget(self.canvas)
         
         # Информационная панель
@@ -253,6 +265,151 @@ class MainWindow(QMainWindow):
         self.end_y_spin.blockSignals(False)
         self.radius_spin.blockSignals(False)
         self.angle_spin.blockSignals(False)
+        
+        # Подключаем сигналы от canvas для обновления статусбара
+        self.canvas.view_changed.connect(self.update_statusbar)
+        self.update_statusbar()
+    
+    def create_menus(self):
+        """Создает меню навигации"""
+        menubar = self.menuBar()
+        
+        # Меню "Вид"
+        view_menu = menubar.addMenu("Вид")
+        
+        # Действия для навигации
+        zoom_in_action = QAction("Увеличить", self)
+        zoom_in_action.setShortcut(QKeySequence.ZoomIn)
+        zoom_in_action.triggered.connect(self.canvas.zoom_in)
+        view_menu.addAction(zoom_in_action)
+        
+        zoom_out_action = QAction("Уменьшить", self)
+        zoom_out_action.setShortcut(QKeySequence.ZoomOut)
+        zoom_out_action.triggered.connect(self.canvas.zoom_out)
+        view_menu.addAction(zoom_out_action)
+        
+        view_menu.addSeparator()
+        
+        show_all_action = QAction("Показать всё", self)
+        show_all_action.setShortcut("Ctrl+A")
+        show_all_action.triggered.connect(self.canvas.show_all)
+        view_menu.addAction(show_all_action)
+        
+        reset_view_action = QAction("Сбросить вид", self)
+        reset_view_action.setShortcut("Ctrl+R")
+        reset_view_action.triggered.connect(self.canvas.reset_view)
+        view_menu.addAction(reset_view_action)
+        
+        view_menu.addSeparator()
+        
+        rotate_left_action = QAction("Повернуть налево", self)
+        rotate_left_action.setShortcut("Ctrl+Left")
+        rotate_left_action.triggered.connect(self.canvas.rotate_left)
+        view_menu.addAction(rotate_left_action)
+        
+        rotate_right_action = QAction("Повернуть направо", self)
+        rotate_right_action.setShortcut("Ctrl+Right")
+        rotate_right_action.triggered.connect(self.canvas.rotate_right)
+        view_menu.addAction(rotate_right_action)
+    
+    def create_toolbar(self):
+        """Создает панель инструментов навигации"""
+        toolbar = QToolBar("Навигация")
+        toolbar.setIconSize(QSize(24, 24))
+        self.addToolBar(toolbar)
+        
+        # Инструмент "Рука" для панорамирования
+        self.pan_action = QAction("🖐", self)
+        self.pan_action.setCheckable(True)
+        self.pan_action.setToolTip("Панорамирование (Пробел)")
+        self.pan_action.setShortcut(Qt.Key_Space)
+        self.pan_action.toggled.connect(self.canvas.set_pan_mode)
+        toolbar.addAction(self.pan_action)
+        
+        toolbar.addSeparator()
+        
+        # Увеличение
+        zoom_in_action = QAction("➕", self)
+        zoom_in_action.setToolTip("Увеличить")
+        zoom_in_action.triggered.connect(self.canvas.zoom_in)
+        toolbar.addAction(zoom_in_action)
+        
+        # Уменьшение
+        zoom_out_action = QAction("➖", self)
+        zoom_out_action.setToolTip("Уменьшить")
+        zoom_out_action.triggered.connect(self.canvas.zoom_out)
+        toolbar.addAction(zoom_out_action)
+        
+        # Показать всё
+        show_all_action = QAction("⊞", self)
+        show_all_action.setToolTip("Показать всё")
+        show_all_action.triggered.connect(self.canvas.show_all)
+        toolbar.addAction(show_all_action)
+        
+        toolbar.addSeparator()
+        
+        # Поворот налево
+        rotate_left_action = QAction("↶", self)
+        rotate_left_action.setToolTip("Повернуть налево")
+        rotate_left_action.triggered.connect(self.canvas.rotate_left)
+        toolbar.addAction(rotate_left_action)
+        
+        # Поворот направо
+        rotate_right_action = QAction("↷", self)
+        rotate_right_action.setToolTip("Повернуть направо")
+        rotate_right_action.triggered.connect(self.canvas.rotate_right)
+        toolbar.addAction(rotate_right_action)
+        
+        # Сброс вида
+        reset_view_action = QAction("⟲", self)
+        reset_view_action.setToolTip("Сбросить вид")
+        reset_view_action.triggered.connect(self.canvas.reset_view)
+        toolbar.addAction(reset_view_action)
+    
+    def create_statusbar(self):
+        """Создает строку состояния"""
+        statusbar = QStatusBar()
+        self.setStatusBar(statusbar)
+        
+        # Координаты курсора
+        self.cursor_coords_label = QLabel("Координаты: (0.00, 0.00)")
+        statusbar.addPermanentWidget(self.cursor_coords_label)
+        
+        # Масштаб
+        self.scale_label = QLabel("Масштаб: 100%")
+        statusbar.addPermanentWidget(self.scale_label)
+        
+        # Угол поворота
+        self.rotation_label = QLabel("Поворот: 0°")
+        statusbar.addPermanentWidget(self.rotation_label)
+        
+        # Активный инструмент
+        self.tool_label = QLabel("Инструмент: Рисование")
+        statusbar.addWidget(self.tool_label)
+    
+    def update_statusbar(self):
+        """Обновляет информацию в строке состояния"""
+        # Координаты курсора (если доступны)
+        cursor_pos = self.canvas.get_cursor_world_coords()
+        if cursor_pos:
+            self.cursor_coords_label.setText(
+                f"Координаты: ({cursor_pos.x():.2f}, {cursor_pos.y():.2f})"
+            )
+
+        # Масштаб
+        scale = self.canvas.get_scale() * 100
+        self.scale_label.setText(f"Масштаб: {scale:.1f}%")
+
+        # Угол поворота
+        rotation = self.canvas.get_rotation()
+        self.rotation_label.setText(f"Поворот: {rotation:.1f}°")
+
+        # Активный инструмент
+        if self.pan_action.isChecked():
+            self.tool_label.setText("Инструмент: Панорамирование")
+        else:
+            self.tool_label.setText("Инструмент: Рисование")
+
     
     def start_new_line(self):
         """Начинает новый отрезок"""
