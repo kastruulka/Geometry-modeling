@@ -229,6 +229,7 @@ class CoordinateSystemWidget(QWidget):
         self.update()
 
     def update_base_transform(self):
+        """Обновляет базовую трансформацию (масштаб и поворот)"""
         self.base_transform = QTransform()
         self.base_transform.scale(self.scale_factor, self.scale_factor)
         self.base_transform.rotate(self.rotation_angle)
@@ -264,44 +265,79 @@ class CoordinateSystemWidget(QWidget):
         self.zoom_at_point(QPointF(self.width() / 2, self.height() / 2), 1.0 / 1.2)
 
     def show_all(self):
+        """Показывает все отрезки с подходящим масштабом и центрированием"""
         if not self.lines:
+            # Если нет отрезков, просто сбрасываем вид
+            self.reset_view()
             return
 
-        min_x = min(line.start_point.x() for line in self.lines)
-        max_x = max(line.start_point.x() for line in self.lines)
-        min_y = min(line.start_point.y() for line in self.lines)
-        max_y = max(line.start_point.y() for line in self.lines)
+        # Инициализируем границы очень большими значениями
+        min_x = float('inf')
+        max_x = float('-inf')
+        min_y = float('inf')
+        max_y = float('-inf')
 
+        # Находим реальные границы всех отрезков
         for line in self.lines:
-            min_x = min(min_x, line.end_point.x())
-            max_x = max(max_x, line.end_point.x())
-            min_y = min(min_y, line.end_point.y())
-            max_y = max(max_y, line.end_point.y())
+            min_x = min(min_x, line.start_point.x(), line.end_point.x())
+            max_x = max(max_x, line.start_point.x(), line.end_point.x())
+            min_y = min(min_y, line.start_point.y(), line.end_point.y())
+            max_y = max(max_y, line.start_point.y(), line.end_point.y())
 
-        padding = 20
+        # Добавляем отступ
+        padding = 50
         min_x -= padding
         max_x += padding
         min_y -= padding
         max_y += padding
 
+        # Вычисляем центр и размеры
         center_x = (min_x + max_x) / 2
         center_y = (min_y + max_y) / 2
         width = max_x - min_x
         height = max_y - min_y
 
-        scale_x = self.width() / width if width > 0 else 1
-        scale_y = self.height() / height if height > 0 else 1
-        new_scale = min(scale_x, scale_y) * 0.9
+        # Если границы некорректны (все точки в одном месте)
+        if width <= 0 or height <= 0:
+            width = height = 200  # Размер по умолчанию
+            min_x = center_x - width / 2
+            max_x = center_x + width / 2
+            min_y = center_y - height / 2
+            max_y = center_y + height / 2
 
-        self.scale_factor = max(self.min_scale, min(self.max_scale, new_scale))
+        # Вычисляем масштаб для обеих осей
+        widget_width = self.width()
+        widget_height = self.height()
+        
+        scale_x = widget_width / width if width > 0 else 1.0
+        scale_y = widget_height / height if height > 0 else 1.0
+        
+        # Выбираем меньший масштаб, чтобы всё поместилось
+        new_scale = min(scale_x, scale_y) * 0.9  # 90% от вычисленного масштаба
+        
+        # Ограничиваем масштаб
+        new_scale = max(self.min_scale, min(self.max_scale, new_scale))
+
+        # Сбрасываем трансформации
+        self.scale_factor = new_scale
         self.rotation_angle = 0
-        self.translation = QPointF(-center_x * self.scale_factor, -center_y * self.scale_factor)
+        
+        # Вычисляем смещение для центрирования
+        # Центр виджета должен соответствовать центру bounding box
+        self.translation = QPointF(
+            -center_x * self.scale_factor,
+            -center_y * self.scale_factor
+        )
+
+        print(f"Show all: center=({center_x:.1f}, {center_y:.1f}), "
+            f"scale={new_scale:.3f}, translation=({self.translation.x():.1f}, {self.translation.y():.1f})")
 
         self.update_base_transform()
         self.view_changed.emit()
         self.update()
 
     def reset_view(self):
+        """Полностью сбрасывает вид к начальному состоянию"""
         self.scale_factor = 1.0
         self.rotation_angle = 0
         self.translation = QPointF(0, 0)
