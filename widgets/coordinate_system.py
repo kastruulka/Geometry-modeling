@@ -185,7 +185,6 @@ class CoordinateSystemWidget(QWidget):
         self.scale_factor = max(self.min_scale, min(self.max_scale, self.scale_factor))
 
         world_point = self.screen_to_world(screen_point)
-        scale_change = self.scale_factor / old_scale
 
         self.update_base_transform()
         new_screen_point = self.world_to_screen(world_point)
@@ -208,8 +207,11 @@ class CoordinateSystemWidget(QWidget):
         return transform
 
     def screen_to_world(self, screen_point):
-        transform = self.get_total_transform().inverted()[0]
-        return transform.map(screen_point)
+        """Преобразует экранные координаты в мировые"""
+        transform, success = self.get_total_transform().inverted()
+        if success:
+            return transform.map(screen_point)
+        return screen_point
 
     def world_to_screen(self, world_point):
         transform = self.get_total_transform()
@@ -280,17 +282,28 @@ class CoordinateSystemWidget(QWidget):
         if screen_point is None:
             screen_point = QPointF(self.width() / 2, self.height() / 2)
 
+        # Получаем мировые координаты точки вращения
         world_point = self.screen_to_world(screen_point)
 
-        tentative_angle = self.rotation_angle + angle
+        # Рассчитываем новый угол с учетом привязки к 90° при Shift
         modifiers = QApplication.keyboardModifiers()
         if modifiers & Qt.ShiftModifier:
-            tentative_angle = round(tentative_angle / 90.0) * 90.0
+            # Привязка к 90°
+            new_angle = round((self.rotation_angle + angle) / 90.0) * 90.0
+            angle = new_angle - self.rotation_angle
+        else:
+            new_angle = self.rotation_angle + angle
 
-        self.rotation_angle = tentative_angle
+        # Сохраняем новый угол
+        self.rotation_angle = new_angle
+
+        # Обновляем базовую трансформацию
         self.update_base_transform()
 
+        # Пересчитываем положение точки вращения после поворота
         new_screen_point = self.world_to_screen(world_point)
+        
+        # Корректируем смещение так, чтобы точка вращения осталась на месте
         delta = screen_point - new_screen_point
         self.translation += delta
 
@@ -298,9 +311,11 @@ class CoordinateSystemWidget(QWidget):
         self.update()
 
     def rotate_left(self, angle=15):
+        """Поворот налево на указанный угол"""
         self.rotate(angle, QPointF(self.width() / 2, self.height() / 2))
 
     def rotate_right(self, angle=15):
+        """Поворот направо на указанный угол"""
         self.rotate(-angle, QPointF(self.width() / 2, self.height() / 2))
 
     # ----------------------- СЛУЖЕБНЫЕ -----------------------

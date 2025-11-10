@@ -270,6 +270,16 @@ class MainWindow(QMainWindow):
         self.canvas.view_changed.connect(self.update_statusbar)
         self.update_statusbar()
     
+    def rotate_left(self):
+        """Поворот налево"""
+        print("Поворот налево")  # Отладочное сообщение
+        self.canvas.rotate_left(15)
+        
+    def rotate_right(self):
+        """Поворот направо"""
+        print("Поворот направо")  # Отладочное сообщение
+        self.canvas.rotate_right(15)
+    
     def create_menus(self):
         """Создает меню навигации"""
         menubar = self.menuBar()
@@ -304,12 +314,12 @@ class MainWindow(QMainWindow):
         
         rotate_left_action = QAction("Повернуть налево", self)
         rotate_left_action.setShortcut("Ctrl+Left")
-        rotate_left_action.triggered.connect(self.canvas.rotate_left)
+        rotate_left_action.triggered.connect(self.rotate_left)
         view_menu.addAction(rotate_left_action)
         
         rotate_right_action = QAction("Повернуть направо", self)
         rotate_right_action.setShortcut("Ctrl+Right")
-        rotate_right_action.triggered.connect(self.canvas.rotate_right)
+        rotate_right_action.triggered.connect(self.rotate_right)
         view_menu.addAction(rotate_right_action)
     
     def create_toolbar(self):
@@ -351,13 +361,13 @@ class MainWindow(QMainWindow):
         # Поворот налево
         rotate_left_action = QAction("↶", self)
         rotate_left_action.setToolTip("Повернуть налево")
-        rotate_left_action.triggered.connect(self.canvas.rotate_left)
+        rotate_left_action.triggered.connect(self.rotate_left)
         toolbar.addAction(rotate_left_action)
         
         # Поворот направо
         rotate_right_action = QAction("↷", self)
         rotate_right_action.setToolTip("Повернуть направо")
-        rotate_right_action.triggered.connect(self.canvas.rotate_right)
+        rotate_right_action.triggered.connect(self.rotate_right)
         toolbar.addAction(rotate_right_action)
         
         # Сброс вида
