@@ -432,8 +432,39 @@ class MainWindow(QMainWindow):
         
         # Начинаем новый отрезок
         self.canvas.start_new_line()
+        
+        # Сбрасываем значения в полях ввода для нового отрезка
+        self.start_x_spin.blockSignals(True)
+        self.start_y_spin.blockSignals(True)
+        self.end_x_spin.blockSignals(True)
+        self.end_y_spin.blockSignals(True)
+        self.radius_spin.blockSignals(True)
+        self.angle_spin.blockSignals(True)
+        
+        # Устанавливаем начальную точку в текущее положение курсора, если доступно
+        cursor_pos = self.canvas.get_cursor_world_coords()
+        if cursor_pos:
+            self.start_x_spin.setValue(cursor_pos.x())
+            self.start_y_spin.setValue(cursor_pos.y())
+        else:
+            self.start_x_spin.setValue(0)
+            self.start_y_spin.setValue(0)
+        
+        # Сбрасываем конечные точки
+        self.end_x_spin.setValue(100)
+        self.end_y_spin.setValue(100)
+        self.radius_spin.setValue(100)
+        self.angle_spin.setValue(45)
+        
+        self.start_x_spin.blockSignals(False)
+        self.start_y_spin.blockSignals(False)
+        self.end_x_spin.blockSignals(False)
+        self.end_y_spin.blockSignals(False)
+        self.radius_spin.blockSignals(False)
+        self.angle_spin.blockSignals(False)
+        
         self.update_info()
-    
+        
     def finish_current_line(self):
         """Завершает текущий отрезок и сохраняет его"""
         if self.canvas.is_drawing and self.canvas.current_line:
@@ -485,6 +516,31 @@ class MainWindow(QMainWindow):
         # Очищаем текущий отрезок после фиксации
         self.canvas.current_line = None
         self.canvas.is_drawing = False
+        
+        # АВТОМАТИЧЕСКИ ПОКАЗЫВАЕМ ВСЕ ОТРЕЗКИ
+        self.canvas.show_all()
+        
+        # Сбрасываем значения для следующего отрезка
+        self.start_x_spin.blockSignals(True)
+        self.start_y_spin.blockSignals(True)
+        self.end_x_spin.blockSignals(True)
+        self.end_y_spin.blockSignals(True)
+        self.radius_spin.blockSignals(True)
+        self.angle_spin.blockSignals(True)
+        
+        self.start_x_spin.setValue(0)
+        self.start_y_spin.setValue(0)
+        self.end_x_spin.setValue(100)
+        self.end_y_spin.setValue(100)
+        self.radius_spin.setValue(100)
+        self.angle_spin.setValue(45)
+        
+        self.start_x_spin.blockSignals(False)
+        self.start_y_spin.blockSignals(False)
+        self.end_x_spin.blockSignals(False)
+        self.end_y_spin.blockSignals(False)
+        self.radius_spin.blockSignals(False)
+        self.angle_spin.blockSignals(False)
         
         self.update_info()
     
