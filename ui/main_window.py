@@ -329,7 +329,7 @@ class MainWindow(QMainWindow):
         self.addToolBar(toolbar)
         
         # Инструмент "Рука" для панорамирования
-        self.pan_action = QAction("🖐", self)
+        self.pan_action = QAction("🖑", self)
         self.pan_action.setCheckable(True)
         self.pan_action.setToolTip("Панорамирование (Пробел)")
         self.pan_action.setShortcut(Qt.Key_Space)
@@ -339,19 +339,19 @@ class MainWindow(QMainWindow):
         toolbar.addSeparator()
         
         # Увеличение
-        zoom_in_action = QAction("➕", self)
+        zoom_in_action = QAction("🞢", self)
         zoom_in_action.setToolTip("Увеличить")
         zoom_in_action.triggered.connect(self.canvas.zoom_in)
         toolbar.addAction(zoom_in_action)
         
         # Уменьшение
-        zoom_out_action = QAction("➖", self)
+        zoom_out_action = QAction("‒", self)
         zoom_out_action.setToolTip("Уменьшить")
         zoom_out_action.triggered.connect(self.canvas.zoom_out)
         toolbar.addAction(zoom_out_action)
         
         # Показать всё
-        show_all_action = QAction("⊞", self)
+        show_all_action = QAction("ⓘ", self)
         show_all_action.setToolTip("Показать всё")
         show_all_action.triggered.connect(self.canvas.show_all)
         toolbar.addAction(show_all_action)
