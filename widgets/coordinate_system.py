@@ -1,6 +1,6 @@
 import math
-from PySide6.QtWidgets import QWidget, QApplication
-from PySide6.QtCore import Qt, QPointF, Signal
+from PySide6.QtWidgets import QWidget, QApplication, QMenu
+from PySide6.QtCore import Qt, QPointF, QPoint, Signal
 from PySide6.QtGui import QPainter, QPen, QColor, QFont, QTransform
 
 from .line_segment import LineSegment
@@ -8,6 +8,7 @@ from .line_segment import LineSegment
 
 class CoordinateSystemWidget(QWidget):
     view_changed = Signal()  # Сигнал при изменении вида
+    context_menu_requested = Signal(QPoint)  # Сигнал для запроса контекстного меню
 
     def __init__(self):
         super().__init__()
@@ -44,6 +45,39 @@ class CoordinateSystemWidget(QWidget):
 
         self.setMinimumSize(600, 400)
         self.setMouseTracking(True)
+        self.setContextMenuPolicy(Qt.CustomContextMenu)  # Включаем контекстное меню
+        self.customContextMenuRequested.connect(self.show_context_menu)
+
+    def show_context_menu(self, position):
+        """Показывает контекстное меню"""
+        menu = QMenu(self)
+        
+        # Команды навигации
+        zoom_in_action = menu.addAction("Увеличить")
+        zoom_in_action.triggered.connect(self.zoom_in)
+        
+        zoom_out_action = menu.addAction("Уменьшить")
+        zoom_out_action.triggered.connect(self.zoom_out)
+        
+        menu.addSeparator()
+        
+        show_all_action = menu.addAction("Показать всё")
+        show_all_action.triggered.connect(self.show_all)
+        
+        reset_view_action = menu.addAction("Сбросить вид")
+        reset_view_action.triggered.connect(self.reset_view)
+        
+        menu.addSeparator()
+        
+        rotate_left_action = menu.addAction("Повернуть налево")
+        rotate_left_action.triggered.connect(lambda: self.rotate_left(15))
+        
+        rotate_right_action = menu.addAction("Повернуть направо")
+        rotate_right_action.triggered.connect(lambda: self.rotate_right(15))
+        
+        # Показываем меню в позиции клика
+        menu.exec_(self.mapToGlobal(position))
+
 
     # ----------------------- РИСОВАНИЕ -----------------------
 

@@ -270,6 +270,49 @@ class MainWindow(QMainWindow):
         self.canvas.view_changed.connect(self.update_statusbar)
         self.update_statusbar()
     
+    def create_context_menu(self, position):
+        """Создает контекстное меню для рабочей области"""
+        menu = QMenu(self)
+        
+        # Команды навигации
+        zoom_in_action = menu.addAction("Увеличить")
+        zoom_in_action.setShortcut(QKeySequence.ZoomIn)
+        zoom_in_action.triggered.connect(self.canvas.zoom_in)
+        
+        zoom_out_action = menu.addAction("Уменьшить")
+        zoom_out_action.setShortcut(QKeySequence.ZoomOut)
+        zoom_out_action.triggered.connect(self.canvas.zoom_out)
+        
+        menu.addSeparator()
+        
+        show_all_action = menu.addAction("Показать всё")
+        show_all_action.setShortcut("Ctrl+A")
+        show_all_action.triggered.connect(self.canvas.show_all)
+        
+        reset_view_action = menu.addAction("Сбросить вид")
+        reset_view_action.setShortcut("Ctrl+R")
+        reset_view_action.triggered.connect(self.canvas.reset_view)
+        
+        menu.addSeparator()
+        
+        rotate_left_action = menu.addAction("Повернуть налево")
+        rotate_left_action.setShortcut("Ctrl+Left")
+        rotate_left_action.triggered.connect(self.rotate_left)
+        
+        rotate_right_action = menu.addAction("Повернуть направо")
+        rotate_right_action.setShortcut("Ctrl+Right")
+        rotate_right_action.triggered.connect(self.rotate_right)
+        
+        menu.addSeparator()
+        
+        # Инструменты
+        pan_action = menu.addAction("Панорамирование")
+        pan_action.setCheckable(True)
+        pan_action.setChecked(self.pan_action.isChecked())
+        pan_action.triggered.connect(self.pan_action.toggle)
+        
+        menu.exec_(self.mapToGlobal(position))
+    
     def rotate_left(self):
         """Поворот налево"""
         print("Поворот налево")  # Отладочное сообщение
