@@ -393,9 +393,9 @@ class MainWindow(QMainWindow):
         zoom_out_action.triggered.connect(self.canvas.zoom_out)
         toolbar.addAction(zoom_out_action)
         
-        # Показать всё
+        # Показать всё (сохраняя поворот)
         show_all_action = QAction("ⓘ", self)
-        show_all_action.setToolTip("Показать всё")
+        show_all_action.setToolTip("Показать всё (сохранить поворот)")
         show_all_action.triggered.connect(self.canvas.show_all)
         toolbar.addAction(show_all_action)
         
@@ -560,8 +560,8 @@ class MainWindow(QMainWindow):
         self.canvas.current_line = None
         self.canvas.is_drawing = False
         
-        # АВТОМАТИЧЕСКИ ПОКАЗЫВАЕМ ВСЕ ОТРЕЗКИ
-        self.canvas.show_all()
+        # АВТОМАТИЧЕСКИ ПОКАЗЫВАЕМ ВСЕ ОТРЕЗКИ С СОХРАНЕНИЕМ ПОВОРОТА
+        self.canvas.show_all_preserve_rotation()
         
         # Сбрасываем значения для следующего отрезка
         self.start_x_spin.blockSignals(True)

@@ -1,6 +1,6 @@
 import math
 from PySide6.QtWidgets import QWidget, QApplication, QMenu
-from PySide6.QtCore import Qt, QPointF, QPoint, Signal
+from PySide6.QtCore import Qt, QPointF, QPoint, Signal, QRectF
 from PySide6.QtGui import QPainter, QPen, QColor, QFont, QTransform
 
 from .line_segment import LineSegment
@@ -30,15 +30,16 @@ class CoordinateSystemWidget(QWidget):
         # Параметры навигации
         self.pan_mode = False
         self.last_mouse_pos = None
-        self.transform = QTransform()
-        self.base_transform = QTransform()
-        self.translation = QPointF(0, 0)
-
-        # Масштаб и поворот
+        
+        # Единая система трансформаций
         self.scale_factor = 1.0
         self.min_scale = 0.1
         self.max_scale = 10.0
         self.rotation_angle = 0.0  # в градусах
+        self.translation = QPointF(0, 0)
+        
+        # Центр сцены (мировые координаты)
+        self.scene_center = QPointF(0, 0)
 
         # Координаты курсора
         self.cursor_world_coords = None
@@ -78,17 +79,14 @@ class CoordinateSystemWidget(QWidget):
         # Показываем меню в позиции клика
         menu.exec_(self.mapToGlobal(position))
 
-
-    # ----------------------- РИСОВАНИЕ -----------------------
-
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
 
-        # ✅ Фон рисуем без трансформации (иначе заливает только часть)
+        # Фон рисуем без трансформации
         painter.fillRect(self.rect(), self.background_color)
 
-        # ✅ Применяем текущее преобразование
+        # Применяем текущее преобразование
         transform = self.get_total_transform()
         painter.setTransform(transform)
 
@@ -113,8 +111,12 @@ class CoordinateSystemWidget(QWidget):
     def draw_grid(self, painter):
         painter.setPen(QPen(self.grid_color, 1, Qt.DotLine))
 
-        transform = self.get_total_transform().inverted()[0]
-        visible_rect = transform.mapRect(self.rect())
+        # Получаем видимую область в мировых координатах
+        transform, success = self.get_total_transform().inverted()
+        if not success:
+            return
+            
+        visible_rect = transform.mapRect(QRectF(self.rect()))
 
         start_x = math.floor(visible_rect.left() / self.grid_step) * self.grid_step
         end_x = math.ceil(visible_rect.right() / self.grid_step) * self.grid_step
@@ -131,12 +133,19 @@ class CoordinateSystemWidget(QWidget):
 
     def draw_axes(self, painter):
         painter.setPen(QPen(self.axis_color, 2))
-        transform = self.get_total_transform().inverted()[0]
-        visible_rect = transform.mapRect(self.rect())
+        
+        # Получаем видимую область
+        transform, success = self.get_total_transform().inverted()
+        if not success:
+            return
+            
+        visible_rect = transform.mapRect(QRectF(self.rect()))
 
-        painter.drawLine(visible_rect.left(), 0, visible_rect.right(), 0)
-        painter.drawLine(0, visible_rect.top(), 0, visible_rect.bottom())
+        # Оси координат
+        painter.drawLine(visible_rect.left(), 0, visible_rect.right(), 0)  # X axis
+        painter.drawLine(0, visible_rect.top(), 0, visible_rect.bottom())  # Y axis
 
+        # Подписи осей
         painter.setFont(QFont("Arial", 10))
         painter.drawText(visible_rect.right() - 20, 15, "X")
         painter.drawText(5, visible_rect.top() + 15, "Y")
@@ -146,15 +155,15 @@ class CoordinateSystemWidget(QWidget):
         painter.setPen(QPen(line.color, line.width))
         painter.drawLine(line.start_point, line.end_point)
         painter.setBrush(line.color)
-        painter.drawEllipse(line.start_point, 4 / self.scale_factor, 4 / self.scale_factor)
-        painter.drawEllipse(line.end_point, 4 / self.scale_factor, 4 / self.scale_factor)
+        point_size = max(2, 4 / self.scale_factor)  # Минимальный размер точки
+        painter.drawEllipse(line.start_point, point_size, point_size)
+        painter.drawEllipse(line.end_point, point_size, point_size)
 
     def draw_current_point(self, painter):
         painter.setPen(QPen(Qt.blue, 2))
         painter.setBrush(Qt.blue)
-        painter.drawEllipse(self.current_point, 3 / self.scale_factor, 3 / self.scale_factor)
-
-    # ----------------------- СОБЫТИЯ МЫШИ -----------------------
+        point_size = max(2, 3 / self.scale_factor)  # Минимальный размер точки
+        painter.drawEllipse(self.current_point, point_size, point_size)
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
@@ -185,13 +194,20 @@ class CoordinateSystemWidget(QWidget):
         if self.pan_mode and event.buttons() & Qt.LeftButton:
             if self.last_mouse_pos:
                 delta = event.position() - self.last_mouse_pos
-                self.translation += delta
+                # Панорамирование в мировых координатах
+                transform, success = self.get_total_transform().inverted()
+                if success:
+                    delta_world = transform.map(delta) - transform.map(QPointF(0, 0))
+                    self.translation += delta_world
                 self.last_mouse_pos = event.position()
                 self.update()
         elif event.buttons() & Qt.MiddleButton:
             if self.last_mouse_pos:
                 delta = event.position() - self.last_mouse_pos
-                self.translation += delta
+                transform, success = self.get_total_transform().inverted()
+                if success:
+                    delta_world = transform.map(delta) - transform.map(QPointF(0, 0))
+                    self.translation += delta_world
                 self.last_mouse_pos = event.position()
                 self.update()
         elif self.is_drawing and self.current_line and event.buttons() & Qt.LeftButton:
@@ -211,34 +227,39 @@ class CoordinateSystemWidget(QWidget):
         else:
             self.zoom_at_point(event.position(), 1.0 / zoom_factor)
 
-    # ----------------------- ТРАНСФОРМАЦИИ -----------------------
-
     def zoom_at_point(self, screen_point, factor):
-        old_scale = self.scale_factor
+        """Масштабирование относительно точки с сохранением положения этой точки"""
+        world_point_before = self.screen_to_world(screen_point)
+        
+        # Применяем масштаб
         self.scale_factor *= factor
         self.scale_factor = max(self.min_scale, min(self.max_scale, self.scale_factor))
-
-        world_point = self.screen_to_world(screen_point)
-
-        self.update_base_transform()
-        new_screen_point = self.world_to_screen(world_point)
-        delta = screen_point - new_screen_point
-        self.translation += delta
+        
+        world_point_after = self.screen_to_world(screen_point)
+        
+        # Корректируем трансляцию для сохранения положения точки
+        delta = world_point_after - world_point_before
+        self.translation -= delta
 
         self.view_changed.emit()
         self.update()
 
-    def update_base_transform(self):
-        """Обновляет базовую трансформацию (масштаб и поворот)"""
-        self.base_transform = QTransform()
-        self.base_transform.scale(self.scale_factor, self.scale_factor)
-        self.base_transform.rotate(self.rotation_angle)
-
     def get_total_transform(self):
+        """Возвращает полную матрицу преобразования"""
         transform = QTransform()
+        
+        # 1. Центрирование (перевод в центр виджета)
         transform.translate(self.width() / 2, self.height() / 2)
+        
+        # 2. Трансляция (панорамирование)
         transform.translate(self.translation.x(), self.translation.y())
-        transform = transform * self.base_transform
+        
+        # 3. Масштабирование
+        transform.scale(self.scale_factor, self.scale_factor)
+        
+        # 4. Поворот вокруг центра
+        transform.rotate(self.rotation_angle)
+        
         return transform
 
     def screen_to_world(self, screen_point):
@@ -249,10 +270,9 @@ class CoordinateSystemWidget(QWidget):
         return screen_point
 
     def world_to_screen(self, world_point):
+        """Преобразует мировые координаты в экранные"""
         transform = self.get_total_transform()
         return transform.map(world_point)
-
-    # ----------------------- НАВИГАЦИЯ -----------------------
 
     def set_pan_mode(self, enabled):
         self.pan_mode = enabled
@@ -265,24 +285,28 @@ class CoordinateSystemWidget(QWidget):
         self.zoom_at_point(QPointF(self.width() / 2, self.height() / 2), 1.0 / 1.2)
 
     def show_all(self):
-        """Показывает все отрезки с подходящим масштабом и центрированием"""
-        if not self.lines:
-            # Если нет отрезков, просто сбрасываем вид
+        """Показывает все отрезки с правильным учетом поворота"""
+        if not self.lines and not self.current_line:
             self.reset_view()
             return
 
-        # Инициализируем границы очень большими значениями
-        min_x = float('inf')
-        max_x = float('-inf')
-        min_y = float('inf')
-        max_y = float('-inf')
-
-        # Находим реальные границы всех отрезков
+        # Собираем все точки
+        all_points = []
         for line in self.lines:
-            min_x = min(min_x, line.start_point.x(), line.end_point.x())
-            max_x = max(max_x, line.start_point.x(), line.end_point.x())
-            min_y = min(min_y, line.start_point.y(), line.end_point.y())
-            max_y = max(max_y, line.start_point.y(), line.end_point.y())
+            all_points.append(line.start_point)
+            all_points.append(line.end_point)
+        if self.current_line:
+            all_points.append(self.current_line.start_point)
+            all_points.append(self.current_line.end_point)
+
+        if not all_points:
+            return
+
+        # Вычисляем bounding box всех точек
+        min_x = min(p.x() for p in all_points)
+        max_x = max(p.x() for p in all_points)
+        min_y = min(p.y() for p in all_points)
+        max_y = max(p.y() for p in all_points)
 
         # Добавляем отступ
         padding = 50
@@ -291,116 +315,80 @@ class CoordinateSystemWidget(QWidget):
         min_y -= padding
         max_y += padding
 
-        # Вычисляем центр и размеры
-        center_x = (min_x + max_x) / 2
-        center_y = (min_y + max_y) / 2
-        width = max_x - min_x
-        height = max_y - min_y
+        # Вычисляем центр и размеры сцены
+        scene_width = max_x - min_x
+        scene_height = max_y - min_y
+        scene_center = QPointF((min_x + max_x) / 2, (min_y + max_y) / 2)
 
-        # Если границы некорректны (все точки в одном месте)
-        if width <= 0 or height <= 0:
-            width = height = 200  # Размер по умолчанию
-            min_x = center_x - width / 2
-            max_x = center_x + width / 2
-            min_y = center_y - height / 2
-            max_y = center_y + height / 2
-
-        # Вычисляем масштаб для обеих осей
+        # Вычисляем масштаб для вписывания в виджет
         widget_width = self.width()
         widget_height = self.height()
         
-        scale_x = widget_width / width if width > 0 else 1.0
-        scale_y = widget_height / height if height > 0 else 1.0
+        scale_x = widget_width / scene_width if scene_width > 0 else 1.0
+        scale_y = widget_height / scene_height if scene_height > 0 else 1.0
         
-        # Выбираем меньший масштаб, чтобы всё поместилось
-        new_scale = min(scale_x, scale_y) * 0.9  # 90% от вычисленного масштаба
-        
-        # Ограничиваем масштаб
+        new_scale = min(scale_x, scale_y) * 0.9  # 90% от размера для отступов
         new_scale = max(self.min_scale, min(self.max_scale, new_scale))
 
-        # Сбрасываем трансформации
+        # Устанавливаем новые параметры
         self.scale_factor = new_scale
-        self.rotation_angle = 0
+        self.translation = QPointF(0, 0)  # Сбрасываем трансляцию
         
-        # Вычисляем смещение для центрирования
-        # Центр виджета должен соответствовать центру bounding box
-        self.translation = QPointF(
-            -center_x * self.scale_factor,
-            -center_y * self.scale_factor
-        )
+        # Центрируем сцену
+        self.center_on_point(scene_center)
 
-        print(f"Show all: center=({center_x:.1f}, {center_y:.1f}), "
-            f"scale={new_scale:.3f}, translation=({self.translation.x():.1f}, {self.translation.y():.1f})")
-
-        self.update_base_transform()
         self.view_changed.emit()
         self.update()
+
+    def center_on_point(self, world_point):
+        """Центрирует вид на указанной мировой точке"""
+        # Преобразуем мировую точку в экранные координаты с текущими настройками
+        screen_pos = self.world_to_screen(world_point)
+        
+        # Вычисляем смещение для центрирования
+        center_screen = QPointF(self.width() / 2, self.height() / 2)
+        delta_screen = center_screen - screen_pos
+        
+        # Преобразуем экранное смещение в мировое
+        transform, success = self.get_total_transform().inverted()
+        if success:
+            delta_world = transform.map(delta_screen) - transform.map(QPointF(0, 0))
+            self.translation += delta_world
 
     def reset_view(self):
         """Полностью сбрасывает вид к начальному состоянию"""
         self.scale_factor = 1.0
         self.rotation_angle = 0
         self.translation = QPointF(0, 0)
-        self.update_base_transform()
         self.view_changed.emit()
         self.update()
 
-    # ----------------------- ВРАЩЕНИЕ -----------------------
-
-    def rotate(self, angle, screen_point: QPointF | None = None):
-        """Вращает вид на указанный угол вокруг screen_point. При Shift — привязка к 90°."""
-        if screen_point is None:
-            screen_point = QPointF(self.width() / 2, self.height() / 2)
-
-        # Получаем мировые координаты точки вращения
-        world_point = self.screen_to_world(screen_point)
-
-        # Рассчитываем новый угол с учетом привязки к 90° при Shift
-        # ВАЖНО: проверяем модификаторы в реальном времени
-        modifiers = QApplication.keyboardModifiers()
-        if modifiers & Qt.ShiftModifier:
-            # Привязка к 90° - округляем до ближайшего кратного 90°
-            new_angle = round((self.rotation_angle + angle) / 90.0) * 90.0
-        else:
-            new_angle = self.rotation_angle + angle
-
-        # Вычисляем фактическое изменение угла
-        actual_angle_change = new_angle - self.rotation_angle
+    def rotate(self, angle):
+        """Вращает вид вокруг центра экрана"""
+        # Сохраняем текущий центр экрана в мировых координатах
+        screen_center = QPointF(self.width() / 2, self.height() / 2)
+        world_center_before = self.screen_to_world(screen_center)
         
-        # Если изменение угла практически нулевое (уже находимся на привязанном угле),
-        # принудительно меняем на минимальный шаг
-        if abs(actual_angle_change) < 0.1 and abs(angle) > 0.1:
-            if angle > 0:
-                actual_angle_change = 90.0 if (modifiers & Qt.ShiftModifier) else angle
-            else:
-                actual_angle_change = -90.0 if (modifiers & Qt.ShiftModifier) else angle
-            new_angle = self.rotation_angle + actual_angle_change
-
-        # Сохраняем новый угол
-        self.rotation_angle = new_angle
-
-        # Обновляем базовую трансформацию
-        self.update_base_transform()
-
-        # Пересчитываем положение точки вращения после поворота
-        new_screen_point = self.world_to_screen(world_point)
+        # Применяем поворот
+        self.rotation_angle += angle
         
-        # Корректируем смещение так, чтобы точка вращения осталась на месте
-        delta = screen_point - new_screen_point
-        self.translation += delta
+        # Получаем новое положение центра
+        world_center_after = self.screen_to_world(screen_center)
+        
+        # Корректируем трансляцию для сохранения центра
+        delta = world_center_after - world_center_before
+        self.translation -= delta
 
         self.view_changed.emit()
         self.update()
 
     def rotate_left(self, angle=15):
         """Поворот налево на указанный угол"""
-        self.rotate(angle, QPointF(self.width() / 2, self.height() / 2))
+        self.rotate(angle)
 
     def rotate_right(self, angle=15):
         """Поворот направо на указанный угол"""
-        self.rotate(-angle, QPointF(self.width() / 2, self.height() / 2))
-
-    # ----------------------- СЛУЖЕБНЫЕ -----------------------
+        self.rotate(-angle)
 
     def get_cursor_world_coords(self):
         return self.cursor_world_coords
