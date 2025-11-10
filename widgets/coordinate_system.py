@@ -286,13 +286,25 @@ class CoordinateSystemWidget(QWidget):
         world_point = self.screen_to_world(screen_point)
 
         # Рассчитываем новый угол с учетом привязки к 90° при Shift
+        # ВАЖНО: проверяем модификаторы в реальном времени
         modifiers = QApplication.keyboardModifiers()
         if modifiers & Qt.ShiftModifier:
-            # Привязка к 90°
+            # Привязка к 90° - округляем до ближайшего кратного 90°
             new_angle = round((self.rotation_angle + angle) / 90.0) * 90.0
-            angle = new_angle - self.rotation_angle
         else:
             new_angle = self.rotation_angle + angle
+
+        # Вычисляем фактическое изменение угла
+        actual_angle_change = new_angle - self.rotation_angle
+        
+        # Если изменение угла практически нулевое (уже находимся на привязанном угле),
+        # принудительно меняем на минимальный шаг
+        if abs(actual_angle_change) < 0.1 and abs(angle) > 0.1:
+            if angle > 0:
+                actual_angle_change = 90.0 if (modifiers & Qt.ShiftModifier) else angle
+            else:
+                actual_angle_change = -90.0 if (modifiers & Qt.ShiftModifier) else angle
+            new_angle = self.rotation_angle + actual_angle_change
 
         # Сохраняем новый угол
         self.rotation_angle = new_angle
