@@ -18,7 +18,7 @@ class MainWindow(QMainWindow):
         self.coordinate_system = "cartesian"  # "cartesian" или "polar"
         self.angle_units = "degrees"  # "degrees" или "radians"
         
-        # Сначала создаем canvas
+        # сначала создаем canvas
         self.canvas = CoordinateSystemWidget()
         
         self.init_ui()
@@ -30,20 +30,20 @@ class MainWindow(QMainWindow):
         
         main_layout = QHBoxLayout(central_widget)
         
-        # Создаем меню
+        # меню
         self.create_menus()
         
-        # Создаем панель инструментов
+        # панель инструментов
         self.create_toolbar()
         
-        # Создаем строку состояния
+        # строка состояния
         self.create_statusbar()
         
-        # Левая панель с настройками
+        # левая панель с настройками
         left_panel = QVBoxLayout()
         left_panel.setSpacing(10)
         
-        # Панель инструментов
+        # панель инструментов
         tools_group = QGroupBox("Инструменты")
         tools_layout = QVBoxLayout()
 
@@ -62,11 +62,11 @@ class MainWindow(QMainWindow):
         tools_group.setLayout(tools_layout)
         left_panel.addWidget(tools_group)
         
-        # Панель ввода координат
+        # панель ввода координат
         input_group = QGroupBox("Ввод координат")
         input_layout = QGridLayout()
         
-        # Начальная точка (всегда в декартовых координатах)
+        # начальная точка (всегда в декартовых координатах)
         input_layout.addWidget(QLabel("Начальная точка (x, y):"), 0, 0)
         self.start_x_spin = QDoubleSpinBox()
         self.start_x_spin.setRange(-1000, 1000)
@@ -85,10 +85,10 @@ class MainWindow(QMainWindow):
         input_layout.addWidget(QLabel("y:"), 0, 3)
         input_layout.addWidget(self.start_y_spin, 0, 4)
         
-        # Конечная точка (зависит от системы координат)
+        # конечная точка (зависит от системы координат)
         input_layout.addWidget(QLabel("Конечная точка:"), 1, 0)
         
-        # Декартовы координаты
+        # декартовы координаты
         self.cartesian_group = QWidget()
         cartesian_layout = QHBoxLayout()
         self.end_x_spin = QDoubleSpinBox()
@@ -109,7 +109,7 @@ class MainWindow(QMainWindow):
         cartesian_layout.addWidget(self.end_y_spin)
         self.cartesian_group.setLayout(cartesian_layout)
         
-        # Полярные координаты
+        # полярные координаты
         self.polar_group = QWidget()
         polar_layout = QHBoxLayout()
         self.radius_spin = QDoubleSpinBox()
@@ -137,7 +137,7 @@ class MainWindow(QMainWindow):
         input_layout.addWidget(self.cartesian_group, 1, 1, 1, 4)
         input_layout.addWidget(self.polar_group, 1, 1, 1, 4)
         
-        # Кнопка применения координат
+        # кнопка применения координат
         self.apply_coords_btn = QPushButton("Применить координаты")
         self.apply_coords_btn.clicked.connect(self.apply_coordinates)
         input_layout.addWidget(self.apply_coords_btn, 2, 0, 1, 5)
@@ -145,11 +145,11 @@ class MainWindow(QMainWindow):
         input_group.setLayout(input_layout)
         left_panel.addWidget(input_group)
         
-        # Панель настроек
+        # панель настроек
         settings_group = QGroupBox("Настройки")
         settings_layout = QVBoxLayout()
         
-        # Система координат
+        # система координат
         coord_layout = QHBoxLayout()
         coord_layout.addWidget(QLabel("Система координат:"))
         self.coord_combo = QComboBox()
@@ -158,7 +158,7 @@ class MainWindow(QMainWindow):
         coord_layout.addWidget(self.coord_combo)
         settings_layout.addLayout(coord_layout)
         
-        # Единицы измерения углов
+        # единицы измерения углов
         angle_layout = QHBoxLayout()
         angle_layout.addWidget(QLabel("Единицы углов:"))
         self.angle_combo = QComboBox()
@@ -167,7 +167,7 @@ class MainWindow(QMainWindow):
         angle_layout.addWidget(self.angle_combo)
         settings_layout.addLayout(angle_layout)
         
-        # Шаг сетки
+        # шаг сетки
         grid_layout = QHBoxLayout()
         grid_layout.addWidget(QLabel("Шаг сетки:"))
         self.grid_spin = QSpinBox()
@@ -177,7 +177,7 @@ class MainWindow(QMainWindow):
         grid_layout.addWidget(self.grid_spin)
         settings_layout.addLayout(grid_layout)
         
-        # Толщина линии
+        # толщина линии
         width_layout = QHBoxLayout()
         width_layout.addWidget(QLabel("Толщина линии:"))
         self.width_spin = QSpinBox()
@@ -187,7 +187,7 @@ class MainWindow(QMainWindow):
         width_layout.addWidget(self.width_spin)
         settings_layout.addLayout(width_layout)
         
-        # Цвета
+        # цвета
         color_layout = QVBoxLayout()
         self.line_color_btn = QPushButton("Цвет отрезка")
         self.line_color_btn.clicked.connect(self.change_line_color)
@@ -206,19 +206,19 @@ class MainWindow(QMainWindow):
         settings_group.setLayout(settings_layout)
         left_panel.addWidget(settings_group)
         
-        # Информация о количестве отрезков
+        # информация о количестве отрезков
         self.lines_count_label = QLabel("Отрезков на экране: 0")
         left_panel.addWidget(self.lines_count_label)
         
         left_panel.addStretch()
         
-        # Правая часть с рабочей областью и информацией
+        # правая часть с рабочей областью и информацией
         right_panel = QVBoxLayout()
         
-        # Рабочая область
+        # рабочая область
         right_panel.addWidget(self.canvas)
         
-        # Информационная панель
+        # информационная панель
         info_group = QGroupBox("Информация о текущем отрезке")
         info_layout = QGridLayout()
         
@@ -244,7 +244,7 @@ class MainWindow(QMainWindow):
         main_layout.addLayout(left_panel, 1)
         main_layout.addLayout(right_panel, 3)
         
-        # Инициализация значений
+        # инициализация значений
         self.start_x_spin.blockSignals(True)
         self.start_y_spin.blockSignals(True)
         self.end_x_spin.blockSignals(True)
@@ -266,15 +266,15 @@ class MainWindow(QMainWindow):
         self.radius_spin.blockSignals(False)
         self.angle_spin.blockSignals(False)
         
-        # Подключаем сигналы от canvas для обновления статусбара
+        # подключаем сигналы от canvas для обновления статусбара
         self.canvas.view_changed.connect(self.update_statusbar)
         self.update_statusbar()
     
     def create_context_menu(self, position):
-        """Создает контекстное меню для рабочей области"""
+        # контекстное меню для рабочей области
         menu = QMenu(self)
         
-        # Команды навигации
+        # команды навигации
         zoom_in_action = menu.addAction("Увеличить")
         zoom_in_action.setShortcut(QKeySequence.ZoomIn)
         zoom_in_action.triggered.connect(self.canvas.zoom_in)
@@ -305,7 +305,7 @@ class MainWindow(QMainWindow):
         
         menu.addSeparator()
         
-        # Инструменты
+        # инструменты
         pan_action = menu.addAction("Панорамирование")
         pan_action.setCheckable(True)
         pan_action.setChecked(self.pan_action.isChecked())
@@ -314,23 +314,20 @@ class MainWindow(QMainWindow):
         menu.exec_(self.mapToGlobal(position))
     
     def rotate_left(self):
-        """Поворот налево"""
-        print("Поворот налево")  # Отладочное сообщение
+        # поворот налево
         self.canvas.rotate_left(15)
         
     def rotate_right(self):
-        """Поворот направо"""
-        print("Поворот направо")  # Отладочное сообщение
+        # поворот направо
         self.canvas.rotate_right(15)
     
     def create_menus(self):
-        """Создает меню навигации"""
         menubar = self.menuBar()
         
-        # Меню "Вид"
+        # меню "Вид"
         view_menu = menubar.addMenu("Вид")
         
-        # Действия для навигации
+        # действия для навигации
         zoom_in_action = QAction("Увеличить", self)
         zoom_in_action.setShortcut(QKeySequence.ZoomIn)
         zoom_in_action.triggered.connect(self.canvas.zoom_in)
@@ -366,12 +363,12 @@ class MainWindow(QMainWindow):
         view_menu.addAction(rotate_right_action)
     
     def create_toolbar(self):
-        """Создает панель инструментов навигации"""
+        # панель инструментов навигации
         toolbar = QToolBar("Навигация")
         toolbar.setIconSize(QSize(24, 24))
         self.addToolBar(toolbar)
         
-        # Инструмент "Рука" для панорамирования
+        # инструмент "Рука" для панорамирования
         self.pan_action = QAction("🖑", self)
         self.pan_action.setCheckable(True)
         self.pan_action.setToolTip("Панорамирование (Пробел)")
@@ -381,19 +378,19 @@ class MainWindow(QMainWindow):
         
         toolbar.addSeparator()
         
-        # Увеличение
+        # увеличение
         zoom_in_action = QAction("🞢", self)
         zoom_in_action.setToolTip("Увеличить")
         zoom_in_action.triggered.connect(self.canvas.zoom_in)
         toolbar.addAction(zoom_in_action)
         
-        # Уменьшение
+        # уменьшение
         zoom_out_action = QAction("‒", self)
         zoom_out_action.setToolTip("Уменьшить")
         zoom_out_action.triggered.connect(self.canvas.zoom_out)
         toolbar.addAction(zoom_out_action)
         
-        # Показать всё (сохраняя поворот)
+        # показать всё сохраняя поворот
         show_all_action = QAction("ⓘ", self)
         show_all_action.setToolTip("Показать всё (сохранить поворот)")
         show_all_action.triggered.connect(self.canvas.show_all)
@@ -401,63 +398,63 @@ class MainWindow(QMainWindow):
         
         toolbar.addSeparator()
         
-        # Поворот налево
+        # поворот налево
         rotate_left_action = QAction("↶", self)
         rotate_left_action.setToolTip("Повернуть налево")
         rotate_left_action.triggered.connect(self.rotate_left)
         toolbar.addAction(rotate_left_action)
         
-        # Поворот направо
+        # поворот направо
         rotate_right_action = QAction("↷", self)
         rotate_right_action.setToolTip("Повернуть направо")
         rotate_right_action.triggered.connect(self.rotate_right)
         toolbar.addAction(rotate_right_action)
         
-        # Сброс вида
+        # сброс вида
         reset_view_action = QAction("⟲", self)
         reset_view_action.setToolTip("Сбросить вид")
         reset_view_action.triggered.connect(self.canvas.reset_view)
         toolbar.addAction(reset_view_action)
     
     def create_statusbar(self):
-        """Создает строку состояния"""
+        # строка состояния
         statusbar = QStatusBar()
         self.setStatusBar(statusbar)
         
-        # Координаты курсора
+        # координаты курсора
         self.cursor_coords_label = QLabel("Координаты: (0.00, 0.00)")
         statusbar.addPermanentWidget(self.cursor_coords_label)
         
-        # Масштаб
+        # масштаб
         self.scale_label = QLabel("Масштаб: 100%")
         statusbar.addPermanentWidget(self.scale_label)
         
-        # Угол поворота
+        # угол поворота
         self.rotation_label = QLabel("Поворот: 0°")
         statusbar.addPermanentWidget(self.rotation_label)
         
-        # Активный инструмент
+        # активный инструмент
         self.tool_label = QLabel("Инструмент: Рисование")
         statusbar.addWidget(self.tool_label)
     
     def update_statusbar(self):
-        """Обновляет информацию в строке состояния"""
-        # Координаты курсора (если доступны)
+        # информация в строке состояния
+        # координаты курсора (если доступны)
         cursor_pos = self.canvas.get_cursor_world_coords()
         if cursor_pos:
             self.cursor_coords_label.setText(
                 f"Координаты: ({cursor_pos.x():.2f}, {cursor_pos.y():.2f})"
             )
 
-        # Масштаб
+        # масштаб
         scale = self.canvas.get_scale() * 100
         self.scale_label.setText(f"Масштаб: {scale:.1f}%")
 
-        # Угол поворота
+        # угол поворота
         rotation = self.canvas.get_rotation()
         self.rotation_label.setText(f"Поворот: {rotation:.1f}°")
 
-        # Активный инструмент
+        # активный инструмент
         if self.pan_action.isChecked():
             self.tool_label.setText("Инструмент: Панорамирование")
         else:
@@ -465,18 +462,18 @@ class MainWindow(QMainWindow):
 
     
     def start_new_line(self):
-        """Начинает новый отрезок"""
-        # Если уже рисуем отрезок, сохраняем его
+        # начинает новый отрезок
+        # если уже рисуем отрезок, сохраняем его
         if self.canvas.is_drawing and self.canvas.current_line:
-            # Берем текущее положение мыши как конечную точку
+            # берем текущее положение мыши как конечную точку
             if self.canvas.current_point:
                 self.canvas.current_line.end_point = self.canvas.current_point
                 self.canvas.lines.append(self.canvas.current_line)
         
-        # Начинаем новый отрезок
+        # начинаем новый отрезок
         self.canvas.start_new_line()
         
-        # Сбрасываем значения в полях ввода для нового отрезка
+        # сбрасываем значения в полях ввода для нового отрезка
         self.start_x_spin.blockSignals(True)
         self.start_y_spin.blockSignals(True)
         self.end_x_spin.blockSignals(True)
@@ -484,7 +481,7 @@ class MainWindow(QMainWindow):
         self.radius_spin.blockSignals(True)
         self.angle_spin.blockSignals(True)
         
-        # Устанавливаем начальную точку в текущее положение курсора, если доступно
+        # устанавливаем начальную точку в текущее положение курсора, если доступно
         cursor_pos = self.canvas.get_cursor_world_coords()
         if cursor_pos:
             self.start_x_spin.setValue(cursor_pos.x())
@@ -493,7 +490,7 @@ class MainWindow(QMainWindow):
             self.start_x_spin.setValue(0)
             self.start_y_spin.setValue(0)
         
-        # Сбрасываем конечные точки
+        # сбрасываем конечные точки
         self.end_x_spin.setValue(100)
         self.end_y_spin.setValue(100)
         self.radius_spin.setValue(100)
@@ -509,7 +506,7 @@ class MainWindow(QMainWindow):
         self.update_info()
         
     def finish_current_line(self):
-        """Завершает текущий отрезок и сохраняет его"""
+        # завершает текущий отрезок и сохраняет его
         if self.canvas.is_drawing and self.canvas.current_line:
             self.canvas.lines.append(self.canvas.current_line)
             self.canvas.current_line = None
@@ -519,23 +516,23 @@ class MainWindow(QMainWindow):
             self.update_info()
     
     def delete_last_line(self):
-        """Удаляет последний отрезок"""
+        # удаление последний отрезок
         self.canvas.delete_last_line()
         self.update_info()
     
     def delete_all_lines(self):
-        """Удаляет все отрезки"""
+        #  удаляет все отрезки
         self.canvas.delete_all_lines()
         self.update_info()
     
     def apply_coordinates(self):
-        """Применяет координаты из полей ввода и фиксирует отрезок"""
+        # координаты из полей ввода и фикс отрезка
         start_point = QPointF(self.start_x_spin.value(), self.start_y_spin.value())
         
         if self.coordinate_system == "cartesian":
             end_point = QPointF(self.end_x_spin.value(), self.end_y_spin.value())
         else:
-            # Преобразуем полярные координаты в декартовы ОТНОСИТЕЛЬНО НАЧАЛЬНОЙ ТОЧКИ
+            # преобразуем полярные координаты в декартовы ОТНОСИТЕЛЬНО НАЧАЛЬНОЙ ТОЧКИ
             radius = self.radius_spin.value()
             angle = self.angle_spin.value()
             
@@ -544,26 +541,26 @@ class MainWindow(QMainWindow):
             else:
                 angle_rad = angle
             
-            # Вычисляем смещение от начальной точки
+            # вычисляем смещение от начальной точки
             delta_x = radius * math.cos(angle_rad)
             delta_y = radius * math.sin(angle_rad)
             
-            # Конечная точка = начальная + смещение
+            # конечная точка = начальная + смещение
             end_x = start_point.x() + delta_x
             end_y = start_point.y() + delta_y
             end_point = QPointF(end_x, end_y)
         
-        # Фиксируем отрезок (apply=True)
+        # фиксируем отрезок (apply=True)
         self.canvas.set_points_from_input(start_point, end_point, apply=True)
         
-        # Очищаем текущий отрезок после фиксации
+        # очищаем текущий отрезок после фиксации
         self.canvas.current_line = None
         self.canvas.is_drawing = False
         
         # АВТОМАТИЧЕСКИ ПОКАЗЫВАЕМ ВСЕ ОТРЕЗКИ С СОХРАНЕНИЕМ ПОВОРОТА
         self.canvas.show_all_preserve_rotation()
         
-        # Сбрасываем значения для следующего отрезка
+        # сбрасываем значения для следующего отрезка
         self.start_x_spin.blockSignals(True)
         self.start_y_spin.blockSignals(True)
         self.end_x_spin.blockSignals(True)
@@ -620,7 +617,7 @@ class MainWindow(QMainWindow):
             self.canvas.set_grid_color(color)
     
     def update_input_fields(self):
-        """Обновляет отображение полей ввода в зависимости от системы координат"""
+        #  обновляет отображение полей ввода в зависимости от системы координат
         if self.coordinate_system == "cartesian":
             self.cartesian_group.show()
             self.polar_group.hide()
@@ -628,18 +625,18 @@ class MainWindow(QMainWindow):
             self.cartesian_group.hide()
             self.polar_group.show()
             
-            # При переключении на полярные координаты преобразуем текущие декартовы координаты
+            # при переключении на полярные координаты преобразуем текущие декартовы координаты
             # ОТНОСИТЕЛЬНО НАЧАЛЬНОЙ ТОЧКИ
             start_x = self.start_x_spin.value()
             start_y = self.start_y_spin.value()
             end_x = self.end_x_spin.value()
             end_y = self.end_y_spin.value()
             
-            # Вычисляем смещение от начальной точки
+            # вычисляем смещение от начальной точки
             delta_x = end_x - start_x
             delta_y = end_y - start_y
             
-            # Преобразуем смещение в полярные координаты
+            # преобразуем смещение в полярные координаты
             radius = math.sqrt(delta_x**2 + delta_y**2)
             angle = math.atan2(delta_y, delta_x)
             
@@ -654,17 +651,17 @@ class MainWindow(QMainWindow):
             self.angle_spin.blockSignals(False)
     
     def update_angle_units(self):
-        """Обновляет единицы измерения углов"""
+        # обновляет единицы измерения углов
         self.angle_label.setText("°" if self.angle_units == "degrees" else "rad")
         
-        # Конвертируем угол при смене единиц измерения
+        # конвертируем угол при смене единиц измерения
         if self.coordinate_system == "polar":
             current_angle = self.angle_spin.value()
             if self.angle_units == "degrees":
-                # Были радианы, стали градусы
+                # были радианы, стали градусы
                 current_angle = math.degrees(current_angle)
             else:
-                # Были градусы, стали радианы
+                # были градусы, стали радианы
                 current_angle = math.radians(current_angle)
             
             self.angle_spin.blockSignals(True)
@@ -672,23 +669,23 @@ class MainWindow(QMainWindow):
             self.angle_spin.blockSignals(False)
     
     def on_coordinates_changed(self):
-        """Обработчик изменения декартовых координат - только предпросмотр"""
+        # обработчик изменения декартовых координат только предпросмотр
         if self.coordinate_system == "cartesian":
             self.preview_coordinates()
 
     def on_polar_changed(self):
-        """Обработчик изменения полярных координат - только предпросмотр"""
+        # обработчик изменения полярных координат только предпросмотр
         if self.coordinate_system == "polar":
             self.preview_coordinates()
 
     def preview_coordinates(self):
-        """Предпросмотр отрезка без сохранения"""
+        # предпросмотр отрезка без сохранения
         start_point = QPointF(self.start_x_spin.value(), self.start_y_spin.value())
         
         if self.coordinate_system == "cartesian":
             end_point = QPointF(self.end_x_spin.value(), self.end_y_spin.value())
         else:
-            # Преобразуем полярные координаты в декартовы ОТНОСИТЕЛЬНО НАЧАЛЬНОЙ ТОЧКИ
+            # преобразуем полярные координаты в декартовы ОТНОСИТЕЛЬНО НАЧАЛЬНОЙ ТОЧКИ
             radius = self.radius_spin.value()
             angle = self.angle_spin.value()
             
@@ -697,37 +694,37 @@ class MainWindow(QMainWindow):
             else:
                 angle_rad = angle
             
-            # Вычисляем смещение от начальной точки
+            # вычисляем смещение от начальной точки
             delta_x = radius * math.cos(angle_rad)
             delta_y = radius * math.sin(angle_rad)
             
-            # Конечная точка = начальная + смещение
+            # конечная точка = начальная + смещение
             end_x = start_point.x() + delta_x
             end_y = start_point.y() + delta_y
             end_point = QPointF(end_x, end_y)
         
-        # Только предпросмотр без сохранения (apply=False)
+        # только предпросмотр без сохранения (apply=False)
         self.canvas.set_points_from_input(start_point, end_point, apply=False)
         self.update_info()
     
     def update_info(self):
-        """Обновляет информационную панель"""
+        # обновляет информационную панель
         start_point, end_point = self.canvas.get_current_points()
         start_x, start_y = start_point.x(), start_point.y()
         end_x, end_y = end_point.x(), end_point.y()
         
-        # Обновляем счетчик отрезков
+        # обновляем счетчик отрезков
         total_lines = len(self.canvas.lines)
         if self.canvas.current_line:
             total_lines += 1
         self.lines_count_label.setText(f"Отрезков на экране: {total_lines}")
         
-        # Отображаем координаты в информационной панели
+        # отображаем координаты в информационной панели
         if self.coordinate_system == "cartesian":
             self.start_point_label.setText(f"({start_x:.2f}, {start_y:.2f})")
             self.end_point_label.setText(f"({end_x:.2f}, {end_y:.2f})")
         else:
-            # Преобразуем в полярные координаты ОТНОСИТЕЛЬНО НАЧАЛЬНОЙ ТОЧКИ
+            # преобразуем в полярные координаты ОТНОСИТЕЛЬНО НАЧАЛЬНОЙ ТОЧКИ
             delta_x = end_x - start_x
             delta_y = end_y - start_y
             
@@ -742,13 +739,13 @@ class MainWindow(QMainWindow):
                 self.start_point_label.setText(f"({start_x:.2f}, {start_y:.2f})")
                 self.end_point_label.setText(f"(Δr={r:.2f}, Δθ={theta:.2f} rad)")
         
-        # Вычисляем длину отрезка
+        # вычисляем длину отрезка
         dx = end_x - start_x
         dy = end_y - start_y
         length = math.sqrt(dx**2 + dy**2)
         self.length_label.setText(f"{length:.2f}")
         
-        # Вычисляем угол наклона
+        # вычисляем угол наклона
         if dx != 0 or dy != 0:
             angle_rad = math.atan2(dy, dx)
             if self.angle_units == "degrees":
