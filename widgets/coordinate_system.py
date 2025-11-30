@@ -24,7 +24,7 @@ class CoordinateSystemWidget(QWidget):
         self.background_color = QColor(255, 255, 255)
         self.grid_color = QColor(200, 200, 200)
         self.axis_color = QColor(0, 0, 0)
-        self.line_color = QColor(255, 0, 0)
+        self.line_color = QColor(0, 0, 0)
         self.line_width = 2
         self.style_manager = style_manager  # Менеджер стилей
 
@@ -242,11 +242,15 @@ class CoordinateSystemWidget(QWidget):
                 pen.setColor(color)
             line_type = line.style.line_type
             
-            # Для волнистой линии и линии с изломами нужна специальная отрисовка
+            # Для волнистой линии, линии с изломами и штриховой нужна специальная отрисовка
             if line_type == LineType.SOLID_WAVY:
                 self._draw_wavy_line(painter, line.start_point, line.end_point, pen)
             elif line_type == LineType.SOLID_THIN_BROKEN:
                 self._draw_broken_line(painter, line.start_point, line.end_point, pen)
+            elif line_type == LineType.DASHED:
+                self._draw_dashed_line(painter, line.start_point, line.end_point, pen, line.style)
+            elif line_type in [LineType.DASH_DOT_THICK, LineType.DASH_DOT_THIN, LineType.DASH_DOT_TWO_DOTS]:
+                self._draw_dash_dot_line(painter, line.start_point, line.end_point, pen, line.style)
             else:
                 painter.setPen(pen)
                 painter.drawLine(line.start_point, line.end_point)
@@ -417,6 +421,98 @@ class CoordinateSystemWidget(QWidget):
         painter.setPen(pen)
         painter.setBrush(Qt.NoBrush)  # Отключаем заливку
         painter.drawPath(path)
+
+    def _draw_dashed_line(self, painter, start_point, end_point, pen, style):
+        """Отрисовывает штриховую линию вручную, разбивая на сегменты"""
+        # Вычисляем длину и направление линии
+        dx = end_point.x() - start_point.x()
+        dy = end_point.y() - start_point.y()
+        length = math.sqrt(dx*dx + dy*dy)
+        
+        if length < 0.1:
+            return
+        
+        # Получаем параметры штрихов из стиля (в миллиметрах, мировых координатах)
+        dash_length = style.dash_length  # Длина штриха в мм
+        dash_gap = style.dash_gap  # Пробел в мм
+        
+        # Единичный вектор направления линии
+        cos_angle = dx / length
+        sin_angle = dy / length
+        
+        # Рисуем штрихи вдоль линии
+        current_pos = 0.0
+        painter.setPen(pen)
+        
+        while current_pos < length:
+            # Рисуем штрих
+            dash_end = min(current_pos + dash_length, length)
+            start_seg = QPointF(
+                start_point.x() + current_pos * cos_angle,
+                start_point.y() + current_pos * sin_angle
+            )
+            end_seg = QPointF(
+                start_point.x() + dash_end * cos_angle,
+                start_point.y() + dash_end * sin_angle
+            )
+            painter.drawLine(start_seg, end_seg)
+            
+            # Переходим к следующему штриху (пропускаем пробел)
+            current_pos += dash_length + dash_gap
+
+    def _draw_dash_dot_line(self, painter, start_point, end_point, pen, style):
+        """Отрисовывает штрихпунктирную линию вручную"""
+        # Вычисляем длину и направление линии
+        dx = end_point.x() - start_point.x()
+        dy = end_point.y() - start_point.y()
+        length = math.sqrt(dx*dx + dy*dy)
+        
+        if length < 0.1:
+            return
+        
+        # Получаем параметры из стиля (в миллиметрах, мировых координатах)
+        dash_length = style.dash_length  # Длина штриха в мм
+        dash_gap = style.dash_gap  # Пробел в мм
+        dot_length = style.thickness_mm * 0.5  # Длина точки пропорциональна толщине
+        
+        # Определяем тип линии для количества точек
+        if style.line_type == LineType.DASH_DOT_TWO_DOTS:
+            pattern = [dash_length, dash_gap, dot_length, dash_gap, dot_length, dash_gap]
+        else:
+            pattern = [dash_length, dash_gap, dot_length, dash_gap]
+        
+        # Единичный вектор направления линии
+        cos_angle = dx / length
+        sin_angle = dy / length
+        
+        # Рисуем паттерн вдоль линии
+        current_pos = 0.0
+        pattern_index = 0
+        painter.setPen(pen)
+        
+        while current_pos < length:
+            segment_length = pattern[pattern_index % len(pattern)]
+            segment_end = min(current_pos + segment_length, length)
+            
+            # Определяем, является ли текущий сегмент пробелом
+            # Пробелы - это элементы с нечетными индексами (1, 3, 5...)
+            # или элементы, равные dash_gap
+            is_gap = (segment_length == dash_gap)
+            
+            if not is_gap:
+                # Рисуем только штрихи и точки (не пробелы)
+                start_seg = QPointF(
+                    start_point.x() + current_pos * cos_angle,
+                    start_point.y() + current_pos * sin_angle
+                )
+                end_seg = QPointF(
+                    start_point.x() + segment_end * cos_angle,
+                    start_point.y() + segment_end * sin_angle
+                )
+                painter.drawLine(start_seg, end_seg)
+            
+            current_pos += segment_length
+            pattern_index += 1
 
     def draw_current_point(self, painter):
         painter.setPen(QPen(Qt.blue, 2))

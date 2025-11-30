@@ -144,29 +144,16 @@ class LineStyle(QObject):
             pen.setStyle(Qt.SolidLine)  # Будет обработано отдельно
         elif self._line_type == LineType.DASHED:
             # Штриховая: штрих-пробел
-            # QPen.setDashPattern работает в единицах пера (pen units), которые масштабируются трансформацией
-            # При scale_factor=1.0: 1 мм мировых координат = 1 пиксель экрана
-            # Сетка рисуется в мировых координатах с шагом grid_step (в мм), координаты масштабируются трансформацией
-            # Паттерн штрихов должен быть в тех же единицах, что и координаты сетки (миллиметрах)
-            # При применении трансформации паттерн будет масштабироваться вместе с сеткой
-            dash_length_world = self._dash_length  # Длина штриха в мм (мировых координатах)
-            dash_gap_world = self._dash_gap  # Пробел в мм (мировых координатах)
-            pen.setDashPattern([dash_length_world, dash_gap_world])
+            # Теперь рисуется вручную в _draw_dashed_line, поэтому просто сплошная линия
+            pen.setStyle(Qt.SolidLine)
         elif self._line_type == LineType.DASH_DOT_THICK or self._line_type == LineType.DASH_DOT_THIN:
             # Штрихпунктирная: штрих-пробел-точка-пробел
-            dash_length_world = self._dash_length  # Длина штриха в мм (мировых координатах)
-            dash_gap_world = self._dash_gap  # Пробел в мм (мировых координатах)
-            # Точка пропорциональна толщине, в миллиметрах (мировых координатах)
-            dot_length_world = self._thickness_mm * 0.5
-            pen.setDashPattern([dash_length_world, dash_gap_world, dot_length_world, dash_gap_world])
+            # Теперь рисуется вручную в _draw_dash_dot_line, поэтому просто сплошная линия
+            pen.setStyle(Qt.SolidLine)
         elif self._line_type == LineType.DASH_DOT_TWO_DOTS:
             # Штрихпунктирная с двумя точками: штрих-пробел-точка-пробел-точка-пробел
-            dash_length_world = self._dash_length  # Длина штриха в мм (мировых координатах)
-            dash_gap_world = self._dash_gap  # Пробел в мм (мировых координатах)
-            # Точка пропорциональна толщине, в миллиметрах (мировых координатах)
-            dot_length_world = self._thickness_mm * 0.5
-            pen.setDashPattern([dash_length_world, dash_gap_world, dot_length_world, dash_gap_world, 
-                              dot_length_world, dash_gap_world])
+            # Теперь рисуется вручную в _draw_dash_dot_line, поэтому просто сплошная линия
+            pen.setStyle(Qt.SolidLine)
         elif self._line_type == LineType.SOLID_THIN_BROKEN:
             # Сплошная тонкая с изломами - сплошная линия с острыми углами
             # Будет обработано отдельно в методе отрисовки
@@ -208,7 +195,7 @@ class LineStyleManager(QObject):
             ("Сплошная тонкая", LineType.SOLID_THIN, 0.4),
             ("Сплошная волнистая", LineType.SOLID_WAVY, 0.4),
             ("Штриховая", LineType.DASHED, 0.4, 5.0, 2.5),
-            ("Штрихпунктирная утолщенная", LineType.DASH_DOT_THICK, 0.8, 8.0, 1.0),
+            ("Штрихпунктирная утолщенная", LineType.DASH_DOT_THICK, 0.8, 10.0, 5.0),
             ("Штрихпунктирная тонкая", LineType.DASH_DOT_THIN, 0.4, 5.0, 2.5),
             ("Штрихпунктирная с двумя точками", LineType.DASH_DOT_TWO_DOTS, 0.4, 5.0, 2.5),
             ("Сплошная тонкая с изломами", LineType.SOLID_THIN_BROKEN, 0.4, 3.0, 1.5),
