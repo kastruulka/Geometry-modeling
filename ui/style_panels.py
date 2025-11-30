@@ -4,9 +4,11 @@ UI панели для управления стилями линий
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox,
                                QGroupBox, QPushButton, QDoubleSpinBox, QListWidget,
                                QListWidgetItem, QMessageBox, QDialog, QFormLayout,
-                               QDialogButtonBox, QLineEdit, QCheckBox)
-from PySide6.QtCore import Qt, Signal, QSize
-from PySide6.QtGui import QPainter, QPen, QColor, QPixmap
+                               QDialogButtonBox, QLineEdit, QCheckBox, QStyledItemDelegate,
+                               QToolTip, QStyleOptionViewItem, QFrame, QApplication)
+from PySide6.QtCore import Qt, Signal, QSize, QEvent, QPoint, QRect, QTimer, QPointF
+from PySide6.QtGui import QPainter, QPen, QColor, QPixmap, QHelpEvent, QPainterPath, QScreen
+import math
 
 from widgets.line_style import LineStyleManager, LineType
 
@@ -28,20 +30,404 @@ class StylePreviewWidget(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
         
+        # Рисуем белый фон
+        painter.fillRect(self.rect(), Qt.white)
+        
         if self.style:
             pen = self.style.get_pen()
             painter.setPen(pen)
             
-            # Рисуем линию
+            # Рисуем линию в зависимости от типа
             y = self.height() // 2
             margin = 5
-            painter.drawLine(margin, y, self.width() - margin, y)
+            start_x = margin
+            end_x = self.width() - margin
+            start_point = QPointF(start_x, y)
+            end_point = QPointF(end_x, y)
+            
+            line_type = self.style.line_type
+            if line_type == LineType.SOLID_WAVY:
+                self._draw_wavy_line(painter, start_point, end_point, pen)
+            elif line_type == LineType.SOLID_THIN_BROKEN:
+                self._draw_broken_line(painter, start_point, end_point, pen)
+            elif line_type == LineType.DASHED:
+                self._draw_dashed_line(painter, start_point, end_point, pen)
+            elif line_type in [LineType.DASH_DOT_THICK, LineType.DASH_DOT_THIN, LineType.DASH_DOT_TWO_DOTS]:
+                self._draw_dash_dot_line(painter, start_point, end_point, pen)
+            else:
+                # Сплошная линия
+                painter.drawLine(start_point, end_point)
         else:
             # Рисуем пустую линию
             painter.setPen(QPen(QColor(200, 200, 200), 1))
             y = self.height() // 2
             margin = 5
             painter.drawLine(margin, y, self.width() - margin, y)
+    
+    def _draw_wavy_line(self, painter, start_point, end_point, pen):
+        """Отрисовывает волнистую линию (плавная синусоида) - как в coordinate_system"""
+        # Вычисляем длину и угол линии
+        dx = end_point.x() - start_point.x()
+        dy = end_point.y() - start_point.y()
+        length = math.sqrt(dx*dx + dy*dy)
+        angle = math.atan2(dy, dx)
+        
+        if length < 1:
+            return
+        
+        # Амплитуда волны согласно ГОСТ: от S/3 до S/2, где S - толщина основной линии (0.8 мм)
+        # Для тонкой линии (0.4 мм) используем пропорциональную амплитуду
+        # Используем среднее значение: S/2.5
+        main_thickness_mm = 0.8  # Толщина основной линии по ГОСТ
+        line_thickness_mm = pen.widthF() * 25.4 / 96  # Текущая толщина в мм
+        # Амплитуда пропорциональна толщине линии
+        amplitude_mm = (main_thickness_mm / 2.5) * (line_thickness_mm / 0.4)
+        amplitude_px = (amplitude_mm * 96) / 25.4
+        
+        # Длина волны: примерно 4-6 амплитуд для плавной волны
+        wave_length_px = amplitude_px * 5
+        
+        # Количество полных волн
+        num_waves = max(1, int(length / wave_length_px))
+        actual_wave_length = length / num_waves if num_waves > 0 else length
+        
+        # Создаем путь для волнистой линии с плавной синусоидой
+        path = QPainterPath()
+        
+        # Единичные векторы направления линии и перпендикуляра
+        cos_angle = math.cos(angle)
+        sin_angle = math.sin(angle)
+        perp_cos = -sin_angle  # Перпендикулярный вектор
+        perp_sin = cos_angle
+        
+        # Создаем достаточное количество точек для плавной кривой
+        num_points = max(50, int(length / 2))  # Минимум 50 точек для плавности
+        
+        for i in range(num_points + 1):
+            t = i / num_points
+            # Позиция вдоль линии
+            along_line = t * length
+            
+            # Синусоидальное смещение
+            wave_phase = (along_line / actual_wave_length) * 2 * math.pi
+            wave_offset = amplitude_px * math.sin(wave_phase)
+            
+            # Вычисляем координаты точки
+            x = start_point.x() + along_line * cos_angle + wave_offset * perp_cos
+            y = start_point.y() + along_line * sin_angle + wave_offset * perp_sin
+            
+            if i == 0:
+                path.moveTo(x, y)
+            else:
+                path.lineTo(x, y)
+        
+        # Рисуем путь только обводкой, без заливки
+        painter.setPen(pen)
+        painter.setBrush(Qt.NoBrush)  # Отключаем заливку
+        painter.drawPath(path)
+    
+    def _draw_broken_line(self, painter, start_point, end_point, pen):
+        """Отрисовывает сплошную линию с изломами (острые углы, зигзаг) - как в coordinate_system"""
+        # Вычисляем длину и угол линии
+        dx = end_point.x() - start_point.x()
+        dy = end_point.y() - start_point.y()
+        length = math.sqrt(dx*dx + dy*dy)
+        angle = math.atan2(dy, dx)
+        
+        if length < 1:
+            return
+        
+        # Параметры зигзага: фиксированные размеры в миллиметрах (не зависят от длины линии)
+        # Стандартная высота зигзага: 2.5 мм (чуть больше)
+        zigzag_height_mm = 3.5
+        # Стандартная ширина зигзага: 6.0 мм (фиксированная)
+        zigzag_width_mm = 4.0
+        dpi = 96
+        # Конвертируем миллиметры в пиксели (независимо от масштаба)
+        zigzag_height = (zigzag_height_mm * dpi) / 25.4
+        zigzag_length = (zigzag_width_mm * dpi) / 25.4
+        
+        # Вычисляем длину прямых участков по бокам
+        # Если зигзаг длиннее линии, делаем его короче
+        if zigzag_length > length * 0.8:
+            zigzag_length = length * 0.8
+        
+        straight_length = (length - zigzag_length) / 2  # Длина прямых участков по бокам
+        
+        # Единичные векторы направления линии и перпендикуляра
+        cos_angle = math.cos(angle)
+        sin_angle = math.sin(angle)
+        perp_cos = -sin_angle
+        perp_sin = cos_angle
+        
+        # Создаем путь с острыми углами
+        path = QPainterPath()
+        path.moveTo(start_point)
+        
+        # Первый прямой участок
+        zigzag_start = QPointF(
+            start_point.x() + straight_length * cos_angle,
+            start_point.y() + straight_length * sin_angle
+        )
+        path.lineTo(zigzag_start)
+        
+        # Центральный зигзаг: 3 сегмента
+        # 1. Вверх на половину высоты
+        # 2. Вниз на всю высоту
+        # 3. Вверх на половину высоты
+        # Все три сегмента равной длины вдоль линии
+        # Высота зигзага фиксированная (уже вычислена выше в миллиметрах)
+        
+        # Длина каждого сегмента вдоль линии
+        segment_length_along = zigzag_length / 3
+        
+        # Первый сегмент: вверх на половину высоты
+        point1 = QPointF(
+            zigzag_start.x() + segment_length_along * cos_angle + (zigzag_height / 2) * perp_cos,
+            zigzag_start.y() + segment_length_along * sin_angle + (zigzag_height / 2) * perp_sin
+        )
+        path.lineTo(point1)
+        
+        # Второй сегмент: вниз на всю высоту
+        point2 = QPointF(
+            point1.x() + segment_length_along * cos_angle - zigzag_height * perp_cos,
+            point1.y() + segment_length_along * sin_angle - zigzag_height * perp_sin
+        )
+        path.lineTo(point2)
+        
+        # Третий сегмент: вверх на половину высоты (возврат к прямой линии)
+        zigzag_end = QPointF(
+            zigzag_start.x() + zigzag_length * cos_angle,
+            zigzag_start.y() + zigzag_length * sin_angle
+        )
+        path.lineTo(zigzag_end)
+        
+        # Второй прямой участок до конца
+        path.lineTo(end_point)
+        
+        # Рисуем путь только обводкой, без заливки
+        painter.setPen(pen)
+        painter.setBrush(Qt.NoBrush)  # Отключаем заливку
+        painter.drawPath(path)
+    
+    def _draw_dashed_line(self, painter, start_point, end_point, pen):
+        """Отрисовывает штриховую линию вручную, разбивая на сегменты - как в coordinate_system"""
+        # Вычисляем длину и направление линии
+        dx = end_point.x() - start_point.x()
+        dy = end_point.y() - start_point.y()
+        length = math.sqrt(dx*dx + dy*dy)
+        
+        if length < 0.1:
+            return
+        
+        # Получаем параметры штрихов из стиля (в миллиметрах, мировых координатах)
+        dash_length_mm = self.style.dash_length if self.style else 5.0  # Длина штриха в мм
+        dash_gap_mm = self.style.dash_gap if self.style else 2.5  # Пробел в мм
+        
+        # Конвертируем миллиметры в пиксели для превью
+        # Используем фиксированный масштаб scale_factor = 1.0 и DPI = 96
+        dpi = 96
+        scale_factor = 1.0
+        dash_length = dash_length_mm * scale_factor
+        dash_gap = dash_gap_mm * scale_factor
+        
+        # Единичный вектор направления линии
+        cos_angle = dx / length
+        sin_angle = dy / length
+        
+        # Рисуем штрихи вдоль линии
+        current_pos = 0.0
+        painter.setPen(pen)
+        
+        while current_pos < length:
+            # Рисуем штрих
+            dash_end = min(current_pos + dash_length, length)
+            start_seg = QPointF(
+                start_point.x() + current_pos * cos_angle,
+                start_point.y() + current_pos * sin_angle
+            )
+            end_seg = QPointF(
+                start_point.x() + dash_end * cos_angle,
+                start_point.y() + dash_end * sin_angle
+            )
+            painter.drawLine(start_seg, end_seg)
+            
+            # Переходим к следующему штриху (пропускаем пробел)
+            current_pos += dash_length + dash_gap
+    
+    def _draw_dash_dot_line(self, painter, start_point, end_point, pen):
+        """Отрисовывает штрихпунктирную линию вручную - как в coordinate_system"""
+        # Вычисляем длину и направление линии
+        dx = end_point.x() - start_point.x()
+        dy = end_point.y() - start_point.y()
+        length = math.sqrt(dx*dx + dy*dy)
+        
+        if length < 0.1:
+            return
+        
+        # Получаем параметры из стиля (в миллиметрах, мировых координатах)
+        dash_length_mm = self.style.dash_length if self.style else 5.0  # Длина штриха в мм
+        dash_gap_mm = self.style.dash_gap if self.style else 2.5  # Пробел в мм
+        dot_length_mm = self.style.thickness_mm * 0.5 if self.style else 0.4  # Длина точки пропорциональна толщине
+        
+        # Конвертируем миллиметры в пиксели для превью
+        # Используем фиксированный масштаб scale_factor = 1.0
+        scale_factor = 1.0
+        dash_length = dash_length_mm * scale_factor
+        dash_gap = dash_gap_mm * scale_factor
+        dot_length = dot_length_mm * scale_factor
+        
+        # Определяем тип линии для количества точек
+        if self.style and self.style.line_type == LineType.DASH_DOT_TWO_DOTS:
+            pattern = [dash_length, dash_gap, dot_length, dash_gap, dot_length, dash_gap]
+        else:
+            pattern = [dash_length, dash_gap, dot_length, dash_gap]
+        
+        # Единичный вектор направления линии
+        cos_angle = dx / length
+        sin_angle = dy / length
+        
+        # Рисуем паттерн вдоль линии
+        current_pos = 0.0
+        pattern_index = 0
+        painter.setPen(pen)
+        
+        while current_pos < length:
+            segment_length = pattern[pattern_index % len(pattern)]
+            segment_end = min(current_pos + segment_length, length)
+            
+            # Определяем, является ли текущий сегмент пробелом
+            # Пробелы - это элементы, равные dash_gap
+            is_gap = (segment_length == dash_gap)
+            
+            if not is_gap:
+                # Рисуем только штрихи и точки (не пробелы)
+                start_seg = QPointF(
+                    start_point.x() + current_pos * cos_angle,
+                    start_point.y() + current_pos * sin_angle
+                )
+                end_seg = QPointF(
+                    start_point.x() + segment_end * cos_angle,
+                    start_point.y() + segment_end * sin_angle
+                )
+                painter.drawLine(start_seg, end_seg)
+            
+            current_pos += segment_length
+            pattern_index += 1
+
+
+class StyleTooltipWidget(QFrame):
+    """Виджет tooltip с превью стиля линии"""
+    def __init__(self, style, parent=None):
+        super().__init__(parent)
+        self.style = style
+        self.setWindowFlags(Qt.ToolTip | Qt.FramelessWindowHint)
+        # Убираем прозрачный фон, используем белый
+        self.setStyleSheet("""
+            QFrame {
+                background-color: white;
+                border: 1px solid #888;
+                border-radius: 4px;
+            }
+        """)
+        
+        layout = QVBoxLayout()
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(4)
+        
+        # Название стиля
+        name_label = QLabel(style.name)
+        name_label.setStyleSheet("font-weight: bold;")
+        layout.addWidget(name_label)
+        
+        # Превью линии
+        preview = StylePreviewWidget(style, 250, 50)
+        layout.addWidget(preview)
+        
+        # Информация о типе
+        type_label = QLabel(f"Тип: {style.line_type.name}")
+        type_label.setStyleSheet("color: #666; font-size: 10px;")
+        layout.addWidget(type_label)
+        
+        self.setLayout(layout)
+        self.adjustSize()
+
+
+class StyleComboBoxDelegate(QStyledItemDelegate):
+    """Делегат для ComboBox с tooltip превью при наведении"""
+    def __init__(self, style_manager, parent=None):
+        super().__init__(parent)
+        self.style_manager = style_manager
+        self.tooltip_widget = None
+        self.tooltip_timer = QTimer()
+        self.tooltip_timer.setSingleShot(True)
+        self.tooltip_timer.timeout.connect(self._hide_tooltip)
+        self.current_index = None
+    
+    def _hide_tooltip(self):
+        """Скрывает tooltip виджет"""
+        if self.tooltip_widget:
+            self.tooltip_widget.hide()
+            self.tooltip_widget.deleteLater()
+            self.tooltip_widget = None
+    
+    def helpEvent(self, event, view, option, index):
+        """Обрабатывает события помощи (hover) для показа tooltip"""
+        if event.type() == QEvent.ToolTip:
+            style_name = index.data(Qt.UserRole)
+            if not style_name:
+                style_name = index.data(Qt.DisplayRole)
+            
+            if style_name and self.style_manager:
+                style = self.style_manager.get_style(style_name)
+                if style:
+                    # Скрываем предыдущий tooltip
+                    self._hide_tooltip()
+                    
+                    # Создаем новый tooltip виджет
+                    self.tooltip_widget = StyleTooltipWidget(style, view)
+                    
+                    # Позиционируем tooltip рядом с курсором
+                    pos = event.globalPos()
+                    tooltip_pos = QPoint(pos.x() + 10, pos.y() + 10)
+                    
+                    # Проверяем границы экрана и корректируем позицию
+                    screen = QApplication.primaryScreen()
+                    if screen:
+                        screen_geometry = screen.availableGeometry()
+                        tooltip_size = self.tooltip_widget.size()
+                        
+                        # Проверяем правую границу
+                        if tooltip_pos.x() + tooltip_size.width() > screen_geometry.right():
+                            tooltip_pos.setX(pos.x() - tooltip_size.width() - 10)
+                        
+                        # Проверяем нижнюю границу
+                        if tooltip_pos.y() + tooltip_size.height() > screen_geometry.bottom():
+                            tooltip_pos.setY(pos.y() - tooltip_size.height() - 10)
+                        
+                        # Проверяем левую границу
+                        if tooltip_pos.x() < screen_geometry.left():
+                            tooltip_pos.setX(screen_geometry.left() + 5)
+                        
+                        # Проверяем верхнюю границу
+                        if tooltip_pos.y() < screen_geometry.top():
+                            tooltip_pos.setY(screen_geometry.top() + 5)
+                    
+                    self.tooltip_widget.move(tooltip_pos)
+                    self.tooltip_widget.show()
+                    
+                    # Устанавливаем таймер для автоматического скрытия
+                    self.tooltip_timer.stop()
+                    self.tooltip_timer.start(5000)  # 5 секунд
+                    
+                    self.current_index = index
+                    return True
+        elif event.type() == QEvent.Leave:
+            # Скрываем tooltip при уходе курсора
+            self._hide_tooltip()
+            self.current_index = None
+        
+        return super().helpEvent(event, view, option, index)
 
 
 class StyleComboBox(QComboBox):
@@ -49,13 +435,41 @@ class StyleComboBox(QComboBox):
     def __init__(self, style_manager, parent=None):
         super().__init__(parent)
         self.style_manager = style_manager
+        self.delegate = StyleComboBoxDelegate(style_manager, self)
         self.setup_combobox()
+        
+        # Устанавливаем кастомный делегат для tooltip превью
+        self.setItemDelegate(self.delegate)
         
         # Подключаем сигналы менеджера стилей
         if style_manager:
             style_manager.style_added.connect(self.refresh_styles)
             style_manager.style_removed.connect(self.refresh_styles)
             style_manager.style_changed.connect(self.refresh_styles)
+    
+    def showPopup(self):
+        """Переопределяем для установки обработчика событий на view"""
+        super().showPopup()
+        # Устанавливаем обработчик событий на view для tooltip
+        view = self.view()
+        if view:
+            view.viewport().installEventFilter(self)
+    
+    def hidePopup(self):
+        """Переопределяем для скрытия tooltip при закрытии списка"""
+        # Скрываем tooltip при закрытии выпадающего списка
+        if self.delegate:
+            self.delegate._hide_tooltip()
+        super().hidePopup()
+    
+    def eventFilter(self, obj, event):
+        """Обрабатывает события для показа tooltip"""
+        if obj == self.view().viewport():
+            if event.type() == QEvent.Leave:
+                # Скрываем tooltip при уходе курсора
+                if self.delegate:
+                    self.delegate._hide_tooltip()
+        return super().eventFilter(obj, event)
     
     def setup_combobox(self):
         """Настраивает ComboBox с превью"""
@@ -65,6 +479,8 @@ class StyleComboBox(QComboBox):
         
         for style in self.style_manager.get_all_styles():
             self.addItem(style.name, style.name)
+            # Сохраняем имя стиля в UserRole для делегата
+            self.setItemData(self.count() - 1, style.name, Qt.UserRole)
             # Создаем превью для каждого стиля
             preview = StylePreviewWidget(style, 80, 16)
             pixmap = QPixmap(80, 16)
@@ -467,4 +883,3 @@ class StyleEditDialog(QDialog):
             super().accept()
         except ValueError as e:
             QMessageBox.warning(self, "Ошибка", str(e))
-
