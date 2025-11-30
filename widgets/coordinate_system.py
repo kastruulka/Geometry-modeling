@@ -1,6 +1,6 @@
 import math
 from PySide6.QtWidgets import QWidget, QApplication, QMenu
-from PySide6.QtCore import Qt, QPointF, QPoint, Signal, QRectF
+from PySide6.QtCore import Qt, QPointF, QPoint, Signal, QRectF, QTimer
 from PySide6.QtGui import QPainter, QPen, QColor, QFont, QTransform, QPainterPath
 
 from .line_segment import LineSegment
@@ -52,6 +52,8 @@ class CoordinateSystemWidget(QWidget):
         self.selection_end = None  # Текущая точка выделения (экранные координаты)
         self.right_button_press_pos = None  # Позиция нажатия правой кнопки для определения клика/перетаскивания
         self.right_button_press_time = None  # Время нажатия правой кнопки
+        self.right_button_click_count = 0  # Счетчик кликов ПКМ для определения двойного клика
+        self.right_button_click_timer = None  # Таймер для определения двойного клика
         
         # единая система трансформаций
         self.scale_factor = 1.0
@@ -451,6 +453,28 @@ class CoordinateSystemWidget(QWidget):
             # Работает всегда, независимо от состояния рисования
             self.right_button_press_pos = event.position()
             self.right_button_press_time = event.timestamp()  # Время нажатия для определения простого клика
+            
+            # Увеличиваем счетчик кликов
+            self.right_button_click_count += 1
+            
+            # Если это первый клик, запускаем таймер для определения двойного клика
+            if self.right_button_click_count == 1:
+                if self.right_button_click_timer:
+                    self.right_button_click_timer.stop()
+                self.right_button_click_timer = QTimer()
+                self.right_button_click_timer.setSingleShot(True)
+                self.right_button_click_timer.timeout.connect(self._handle_single_right_click)
+                self.right_button_click_timer.start(300)  # 300 мс для определения двойного клика
+            elif self.right_button_click_count == 2:
+                # Двойной клик - отменяем таймер и обрабатываем двойной клик
+                if self.right_button_click_timer:
+                    self.right_button_click_timer.stop()
+                self.right_button_click_count = 0
+                # Открываем контекстное меню
+                pos_point = QPoint(int(event.position().x()), int(event.position().y()))
+                self.show_context_menu(pos_point)
+                return
+            
             # Пока не начинаем выделение - ждем движения мыши
         
         elif event.button() == Qt.MiddleButton:
@@ -465,6 +489,11 @@ class CoordinateSystemWidget(QWidget):
             # Проверяем, что переместились достаточно далеко (больше 3 пикселей)
             delta = (event.position() - self.right_button_press_pos).manhattanLength()
             if delta > 3:
+                # При перетаскивании отменяем обработку одинарного клика
+                if self.right_button_click_timer:
+                    self.right_button_click_timer.stop()
+                self.right_button_click_count = 0
+                
                 # Начинаем выделение рамкой
                 if not self.is_selecting:
                     if not (event.modifiers() & Qt.ControlModifier):
@@ -506,14 +535,24 @@ class CoordinateSystemWidget(QWidget):
             self.current_line.end_point = world_pos
             self.update()
 
+    def _handle_single_right_click(self):
+        """Обрабатывает одинарный клик ПКМ (после таймаута)"""
+        # Сбрасываем счетчик
+        self.right_button_click_count = 0
+        
+        # Сбрасываем инструмент (незаконченный отрезок)
+        if self.is_drawing:
+            self.current_line = None
+            self.is_drawing = False
+            self.current_point = None
+            self.update()
+        
+        # Сбрасываем позицию нажатия
+        self.right_button_press_pos = None
+        self.right_button_press_time = None
+    
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.RightButton:
-            # Сохраняем позицию нажатия перед сбросом
-            press_pos = self.right_button_press_pos
-            # Всегда сбрасываем позицию нажатия
-            self.right_button_press_pos = None
-            self.right_button_press_time = None
-            
             # Если было выделение рамкой - завершаем его
             if self.is_selecting:
                 # Завершаем выделение рамкой
@@ -553,14 +592,13 @@ class CoordinateSystemWidget(QWidget):
                 self.selection_start = None
                 self.selection_end = None
                 self.update()
-            elif press_pos:
-                # Если был простой клик (без движения) - открываем контекстное меню вручную
-                # Проверяем, что не было движения (позиция не изменилась)
-                if (press_pos - event.position()).manhattanLength() < 3:
-                    # Простой клик - открываем контекстное меню
-                    # Преобразуем QPointF в QPoint
-                    pos_point = QPoint(int(event.position().x()), int(event.position().y()))
-                    self.show_context_menu(pos_point)
+                # Сбрасываем позицию нажатия после выделения
+                self.right_button_press_pos = None
+                self.right_button_press_time = None
+                # Сбрасываем счетчик кликов при выделении
+                if self.right_button_click_timer:
+                    self.right_button_click_timer.stop()
+                self.right_button_click_count = 0
         
         if event.button() in (Qt.LeftButton, Qt.MiddleButton):
             self.last_mouse_pos = None
@@ -635,7 +673,7 @@ class CoordinateSystemWidget(QWidget):
             self.reset_view()
             return
 
-        # собираем все точки
+        # собираем все точки отрезков
         all_points = []
         for line in self.lines:
             all_points.append(line.start_point)
@@ -647,58 +685,107 @@ class CoordinateSystemWidget(QWidget):
         if not all_points:
             return
 
-        # создаем матрицу поворота для вычисления границ в повернутой системе
-        rotation_transform = QTransform()
-        rotation_transform.rotate(-self.rotation_angle)  # обратный поворот
-        
-        # поворачиваем все точки для вычисления границ
-        rotated_points = [rotation_transform.map(p) for p in all_points]
-
-        # находим границы повернутых точек
-        min_x = min(p.x() for p in rotated_points)
-        max_x = max(p.x() for p in rotated_points)
-        min_y = min(p.y() for p in rotated_points)
-        max_y = max(p.y() for p in rotated_points)
+        # Находим границы всех точек в мировых координатах
+        min_x = min(p.x() for p in all_points)
+        max_x = max(p.x() for p in all_points)
+        min_y = min(p.y() for p in all_points)
+        max_y = max(p.y() for p in all_points)
 
         # добавляем отступ (20% от размеров)
         width = max_x - min_x
         height = max_y - min_y
-        padding_x = width * 0.2
-        padding_y = height * 0.2
+        padding_x = width * 0.2 if width > 0 else 10
+        padding_y = height * 0.2 if height > 0 else 10
         
         min_x -= padding_x
         max_x += padding_x
         min_y -= padding_y
         max_y += padding_y
 
-        # вычисляем размеры и центр в повернутой системе координат
+        # Вычисляем центр сцены в мировых координатах
+        scene_center = QPointF((min_x + max_x) / 2, (min_y + max_y) / 2)
         scene_width = max_x - min_x
         scene_height = max_y - min_y
-        scene_center = QPointF((min_x + max_x) / 2, (min_y + max_y) / 2)
 
-        # вычисляем масштаб для вписывания в виджет
+        # Создаем углы прямоугольника с отступами
+        corners = [
+            QPointF(min_x, min_y),
+            QPointF(max_x, min_y),
+            QPointF(max_x, max_y),
+            QPointF(min_x, max_y)
+        ]
+        
+        # Применяем поворот к углам прямоугольника относительно центра сцены
+        if abs(self.rotation_angle) > 0.01:
+            rotation_transform = QTransform()
+            rotation_transform.rotate(self.rotation_angle)
+            
+            # Поворачиваем углы относительно центра сцены
+            rotated_corners = []
+            for corner in corners:
+                relative = corner - scene_center
+                rotated_relative = rotation_transform.map(relative)
+                rotated_corners.append(rotated_relative + scene_center)
+            
+            # Находим границы повернутого прямоугольника
+            rotated_min_x = min(p.x() for p in rotated_corners)
+            rotated_max_x = max(p.x() for p in rotated_corners)
+            rotated_min_y = min(p.y() for p in rotated_corners)
+            rotated_max_y = max(p.y() for p in rotated_corners)
+            
+            rotated_width = rotated_max_x - rotated_min_x
+            rotated_height = rotated_max_y - rotated_min_y
+        else:
+            # Если нет поворота, используем исходные размеры
+            rotated_width = scene_width
+            rotated_height = scene_height
+
+        # Вычисляем масштаб для вписывания в виджет
         widget_width = self.width()
         widget_height = self.height()
         
-        scale_x = widget_width / scene_width if scene_width > 0 else 1.0
-        scale_y = widget_height / scene_height if scene_height > 0 else 1.0
-        
-        new_scale = min(scale_x, scale_y) * 0.9  # 90% от размера для отступов
-        new_scale = max(self.min_scale, min(self.max_scale, new_scale))
+        if rotated_width <= 0 or rotated_height <= 0:
+            new_scale = 1.0
+        else:
+            scale_x = widget_width / rotated_width
+            scale_y = widget_height / rotated_height
+            new_scale = min(scale_x, scale_y) * 0.9  # 90% для отступов
+            new_scale = max(self.min_scale, min(self.max_scale, new_scale))
 
-        # применяем новый масштаб
+        # Применяем новый масштаб
         self.scale_factor = new_scale
         
-        # вычисляем трансляцию для центрирования
-        # центр сцены в повернутой системе должен быть в центре виджета
-        center_transform = QTransform()
-        center_transform.rotate(self.rotation_angle)
-        display_center = center_transform.map(scene_center)
+        # Вычисляем трансляцию для центрирования
+        # Нужно, чтобы scene_center оказался в центре виджета после всех трансформаций
+        # Порядок: translate(center) -> translate(translation) -> rotate -> scale
         
-        self.translation = QPointF(
-            -display_center.x() * self.scale_factor,
-            -display_center.y() * self.scale_factor
-        )
+        # Создаем трансформацию rotate -> scale
+        rotation_scale_transform = QTransform()
+        rotation_scale_transform.rotate(self.rotation_angle)
+        rotation_scale_transform.scale(self.scale_factor, self.scale_factor)
+        inv_rotation_scale, success = rotation_scale_transform.inverted()
+        
+        widget_center = QPointF(self.width() / 2, self.height() / 2)
+        
+        if success:
+            # Вычисляем, где окажется scene_center после translate(center) -> rotate -> scale (без translation)
+            temp_transform = QTransform()
+            temp_transform.translate(widget_center.x(), widget_center.y())
+            temp_transform.rotate(self.rotation_angle)
+            temp_transform.scale(self.scale_factor, self.scale_factor)
+            transformed_center = temp_transform.map(scene_center)
+            
+            # Вычисляем разницу между центром виджета и transformed_center
+            delta_screen = widget_center - transformed_center
+            
+            # Преобразуем разницу обратно через rotate -> scale, чтобы получить translation
+            # translation применяется ДО rotate -> scale, поэтому нужно инвертировать
+            delta_before_rotate_scale = inv_rotation_scale.map(delta_screen)
+            self.translation = delta_before_rotate_scale
+        else:
+            # Fallback: просто центрируем без учета поворота
+            self.translation = QPointF(-scene_center.x() * self.scale_factor, 
+                                      -scene_center.y() * self.scale_factor)
 
         self.view_changed.emit()
         self.update()
@@ -716,22 +803,22 @@ class CoordinateSystemWidget(QWidget):
         self.update()
 
     def rotate(self, angle):
-        # вращает вид вокруг центра экрана
-        # сохраняем текущий центр экрана в мировых координатах
-        screen_center = QPointF(self.width() / 2, self.height() / 2)
-        world_center_before = self.screen_to_world(screen_center)
+        # вращает вид вокруг центра координат (0, 0)
+        # Сохраняем текущее положение точки (0, 0) на экране
+        origin_world = QPointF(0, 0)
+        origin_screen_before = self.world_to_screen(origin_world)
         
         # применяем поворот
         self.rotation_angle += angle
         # нормализуем угол
         self.rotation_angle %= 360
         
-        # получаем новое положение центра
-        world_center_after = self.screen_to_world(screen_center)
+        # Вычисляем новое положение точки (0, 0) на экране после поворота
+        origin_screen_after = self.world_to_screen(origin_world)
         
-        # корректируем трансляцию для сохранения центра
-        delta = world_center_after - world_center_before
-        self.translation += QPointF(delta.x() * self.scale_factor, delta.y() * self.scale_factor)
+        # Корректируем трансляцию, чтобы точка (0, 0) оставалась в том же месте на экране
+        delta_screen = origin_screen_after - origin_screen_before
+        self.translation += delta_screen
 
         self.view_changed.emit()
         self.update()

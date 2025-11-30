@@ -69,16 +69,12 @@ class MainWindow(QMainWindow):
         tools_group = QGroupBox("Инструменты")
         tools_layout = QVBoxLayout()
 
-        self.new_line_btn = QPushButton("Сохранить отрезок")
-        self.new_line_btn.clicked.connect(self.start_new_line)
-
         self.delete_last_btn = QPushButton("Удалить последний")
         self.delete_last_btn.clicked.connect(self.delete_last_line)
 
         self.delete_all_btn = QPushButton("Удалить все")
         self.delete_all_btn.clicked.connect(self.delete_all_lines)
 
-        tools_layout.addWidget(self.new_line_btn)
         tools_layout.addWidget(self.delete_last_btn)
         tools_layout.addWidget(self.delete_all_btn)
         tools_group.setLayout(tools_layout)
