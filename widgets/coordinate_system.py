@@ -691,23 +691,12 @@ class CoordinateSystemWidget(QWidget):
         min_y = min(p.y() for p in all_points)
         max_y = max(p.y() for p in all_points)
 
-        # добавляем отступ (20% от размеров)
-        width = max_x - min_x
-        height = max_y - min_y
-        padding_x = width * 0.2 if width > 0 else 10
-        padding_y = height * 0.2 if height > 0 else 10
-        
-        min_x -= padding_x
-        max_x += padding_x
-        min_y -= padding_y
-        max_y += padding_y
-
         # Вычисляем центр сцены в мировых координатах
         scene_center = QPointF((min_x + max_x) / 2, (min_y + max_y) / 2)
         scene_width = max_x - min_x
         scene_height = max_y - min_y
 
-        # Создаем углы прямоугольника с отступами
+        # Создаем углы прямоугольника
         corners = [
             QPointF(min_x, min_y),
             QPointF(max_x, min_y),
@@ -716,6 +705,7 @@ class CoordinateSystemWidget(QWidget):
         ]
         
         # Применяем поворот к углам прямоугольника относительно центра сцены
+        # Это даст нам bounding box повернутого прямоугольника в мировых координатах
         if abs(self.rotation_angle) > 0.01:
             rotation_transform = QTransform()
             rotation_transform.rotate(self.rotation_angle)
@@ -739,6 +729,12 @@ class CoordinateSystemWidget(QWidget):
             # Если нет поворота, используем исходные размеры
             rotated_width = scene_width
             rotated_height = scene_height
+        
+        # Добавляем отступ (20% от размеров) после поворота
+        padding_x = rotated_width * 0.2 if rotated_width > 0 else 10
+        padding_y = rotated_height * 0.2 if rotated_height > 0 else 10
+        rotated_width += 2 * padding_x
+        rotated_height += 2 * padding_y
 
         # Вычисляем масштаб для вписывания в виджет
         widget_width = self.width()
@@ -757,7 +753,9 @@ class CoordinateSystemWidget(QWidget):
         
         # Вычисляем трансляцию для центрирования
         # Нужно, чтобы scene_center оказался в центре виджета после всех трансформаций
-        # Порядок: translate(center) -> translate(translation) -> rotate -> scale
+        # Порядок трансформации: translate(center) -> translate(translation) -> rotate -> scale
+        
+        widget_center = QPointF(self.width() / 2, self.height() / 2)
         
         # Создаем трансформацию rotate -> scale
         rotation_scale_transform = QTransform()
@@ -765,23 +763,25 @@ class CoordinateSystemWidget(QWidget):
         rotation_scale_transform.scale(self.scale_factor, self.scale_factor)
         inv_rotation_scale, success = rotation_scale_transform.inverted()
         
-        widget_center = QPointF(self.width() / 2, self.height() / 2)
-        
         if success:
-            # Вычисляем, где окажется scene_center после translate(center) -> rotate -> scale (без translation)
-            temp_transform = QTransform()
-            temp_transform.translate(widget_center.x(), widget_center.y())
-            temp_transform.rotate(self.rotation_angle)
-            temp_transform.scale(self.scale_factor, self.scale_factor)
-            transformed_center = temp_transform.map(scene_center)
+            # Правильный подход:
+            # Порядок трансформации: translate(center) -> translate(translation) -> rotate -> scale
+            # После translate(center), координаты (0,0) в мировых координатах становятся widget_center на экране
+            # После translate(translation), координаты (0,0) в мировых координатах становятся widget_center + translation на экране
+            # После rotate -> scale, точка scene_center в мировых координатах переходит в:
+            # widget_center + translation + (scene_center после rotate -> scale)
             
-            # Вычисляем разницу между центром виджета и transformed_center
-            delta_screen = widget_center - transformed_center
+            # Мы хотим, чтобы эта точка оказалась в widget_center:
+            # widget_center + translation + (scene_center после rotate -> scale) = widget_center
+            # Поэтому: translation = -(scene_center после rotate -> scale)
             
-            # Преобразуем разницу обратно через rotate -> scale, чтобы получить translation
-            # translation применяется ДО rotate -> scale, поэтому нужно инвертировать
-            delta_before_rotate_scale = inv_rotation_scale.map(delta_screen)
-            self.translation = delta_before_rotate_scale
+            # Вычисляем scene_center после rotate -> scale (в экранных координатах)
+            # Это будет смещение от (0,0) в мировых координатах после rotate -> scale
+            rotated_scaled_center = rotation_scale_transform.map(scene_center)
+            
+            # translation должен быть таким, чтобы widget_center + translation + rotated_scaled_center = widget_center
+            # Поэтому: translation = -rotated_scaled_center
+            self.translation = QPointF(-rotated_scaled_center.x(), -rotated_scaled_center.y())
         else:
             # Fallback: просто центрируем без учета поворота
             self.translation = QPointF(-scene_center.x() * self.scale_factor, 
