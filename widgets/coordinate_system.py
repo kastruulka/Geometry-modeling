@@ -1,26 +1,41 @@
 import math
 from PySide6.QtWidgets import QWidget, QApplication, QMenu
 from PySide6.QtCore import Qt, QPointF, QPoint, Signal, QRectF
-from PySide6.QtGui import QPainter, QPen, QColor, QFont, QTransform
+from PySide6.QtGui import QPainter, QPen, QColor, QFont, QTransform, QPainterPath
 
 from .line_segment import LineSegment
+from .line_style import LineType
 
 
 class CoordinateSystemWidget(QWidget):
     view_changed = Signal()  # сигнал при изменении вида
     context_menu_requested = Signal(QPoint)  # сигнал для запроса контекстного меню
+    selection_changed = Signal(list)  # сигнал при изменении выделения
+    line_finished = Signal()  # сигнал при завершении рисования отрезка
 
-    def __init__(self):
+    def __init__(self, style_manager=None):
         super().__init__()
-        self.grid_step = 20
+        # Шаг сетки в миллиметрах (по умолчанию 20 мм)
+        # Сетка рисуется в мировых координатах, где 1 мм = 1 единица
+        self.grid_step_mm = 20.0
+        self.dpi = 96
+        # Шаг сетки в мировых координатах (в миллиметрах)
+        self.grid_step = self.grid_step_mm
         self.background_color = QColor(255, 255, 255)
         self.grid_color = QColor(200, 200, 200)
         self.axis_color = QColor(0, 0, 0)
         self.line_color = QColor(255, 0, 0)
         self.line_width = 2
+        self.style_manager = style_manager  # Менеджер стилей
 
         # хранилище всех отрезков
         self.lines = []
+        
+        # выделенные объекты
+        self.selected_lines = set()
+        
+        # режим выделения (по умолчанию включен)
+        self.selection_mode = True
 
         # текущий рисуемый отрезок
         self.current_line = None
@@ -30,6 +45,13 @@ class CoordinateSystemWidget(QWidget):
         # параметры навигации
         self.pan_mode = False
         self.last_mouse_pos = None
+        
+        # параметры выделения рамкой
+        self.is_selecting = False
+        self.selection_start = None  # Начальная точка выделения (экранные координаты)
+        self.selection_end = None  # Текущая точка выделения (экранные координаты)
+        self.right_button_press_pos = None  # Позиция нажатия правой кнопки для определения клика/перетаскивания
+        self.right_button_press_time = None  # Время нажатия правой кнопки
         
         # единая система трансформаций
         self.scale_factor = 1.0
@@ -43,8 +65,7 @@ class CoordinateSystemWidget(QWidget):
 
         self.setMinimumSize(600, 400)
         self.setMouseTracking(True)
-        self.setContextMenuPolicy(Qt.CustomContextMenu)  # включаем контекстное меню
-        self.customContextMenuRequested.connect(self.show_context_menu)
+        self.setContextMenuPolicy(Qt.NoContextMenu)  # отключаем автоматическое контекстное меню
 
     def show_context_menu(self, position):
         """Показывает контекстное меню"""
@@ -104,6 +125,14 @@ class CoordinateSystemWidget(QWidget):
         # рисуем текущую точку при рисовании
         if self.is_drawing and self.current_point:
             self.draw_current_point(painter)
+        
+        # рисуем рамку выделения
+        if self.is_selecting and self.selection_start and self.selection_end:
+            self._draw_selection_rect(painter)
+        
+        # рисуем рамку выделения
+        if self.is_selecting and self.selection_start and self.selection_end:
+            self._draw_selection_rect(painter)
 
     def draw_grid(self, painter):
         painter.setPen(QPen(self.grid_color, 1, Qt.DotLine))
@@ -153,12 +182,201 @@ class CoordinateSystemWidget(QWidget):
         painter.drawText(5, 15, "0")
 
     def draw_saved_line(self, painter, line):
-        painter.setPen(QPen(line.color, line.width))
-        painter.drawLine(line.start_point, line.end_point)
-        painter.setBrush(line.color)
+        """Отрисовывает линию с учетом стиля"""
+        # Проверяем, выделена ли линия
+        is_selected = line in self.selected_lines
+        
+        if line.style:
+            # Используем стиль линии
+            pen = line.style.get_pen(scale_factor=self.scale_factor)
+            # Если у линии есть legacy цвет, используем его вместо цвета стиля
+            if hasattr(line, '_legacy_color') and line._legacy_color != line.style.color:
+                pen.setColor(line._legacy_color)
+            # Если линия выделена, делаем её более заметной
+            if is_selected:
+                # Увеличиваем толщину для выделенной линии
+                pen.setWidthF(pen.widthF() * 1.5)
+                # Делаем цвет более ярким
+                color = pen.color()
+                color.setAlpha(255)
+                pen.setColor(color)
+            line_type = line.style.line_type
+            
+            # Для волнистой линии и линии с изломами нужна специальная отрисовка
+            if line_type == LineType.SOLID_WAVY:
+                self._draw_wavy_line(painter, line.start_point, line.end_point, pen)
+            elif line_type == LineType.SOLID_THIN_BROKEN:
+                self._draw_broken_line(painter, line.start_point, line.end_point, pen)
+            else:
+                painter.setPen(pen)
+                painter.drawLine(line.start_point, line.end_point)
+        else:
+            # Обратная совместимость - используем старый способ
+            pen = QPen(line.color, line.width)
+            if is_selected:
+                pen.setWidthF(pen.widthF() * 1.5)
+            painter.setPen(pen)
+            painter.drawLine(line.start_point, line.end_point)
+        
+        # Рисуем точки на концах
+        if is_selected:
+            # Выделенные линии - рисуем точки другим цветом
+            painter.setBrush(QColor(0, 100, 255))  # Синий для выделенных
+        else:
+            painter.setBrush(line.color)
         point_size = max(2, 4 / self.scale_factor)  # минимальный размер точки
         painter.drawEllipse(line.start_point, point_size, point_size)
         painter.drawEllipse(line.end_point, point_size, point_size)
+        
+        # Рисуем рамку выделения вокруг выделенной линии
+        if is_selected:
+            self._draw_selection_highlight(painter, line)
+    
+    def _draw_wavy_line(self, painter, start_point, end_point, pen):
+        """Отрисовывает волнистую линию (плавная синусоида)"""
+        # Вычисляем длину и угол линии
+        dx = end_point.x() - start_point.x()
+        dy = end_point.y() - start_point.y()
+        length = math.sqrt(dx*dx + dy*dy)
+        angle = math.atan2(dy, dx)
+        
+        if length < 1:
+            return
+        
+        # Амплитуда волны согласно ГОСТ: от S/3 до S/2, где S - толщина основной линии (0.8 мм)
+        # Для тонкой линии (0.4 мм) используем пропорциональную амплитуду
+        # Используем среднее значение: S/2.5
+        main_thickness_mm = 0.8  # Толщина основной линии по ГОСТ
+        line_thickness_mm = pen.widthF() * 25.4 / 96  # Текущая толщина в мм
+        # Амплитуда пропорциональна толщине линии
+        amplitude_mm = (main_thickness_mm / 2.5) * (line_thickness_mm / 0.4)
+        amplitude_px = (amplitude_mm * 96) / 25.4
+        
+        # Длина волны: примерно 4-6 амплитуд для плавной волны
+        wave_length_px = amplitude_px * 5
+        
+        # Количество полных волн
+        num_waves = max(1, int(length / wave_length_px))
+        actual_wave_length = length / num_waves if num_waves > 0 else length
+        
+        # Создаем путь для волнистой линии с плавной синусоидой
+        path = QPainterPath()
+        
+        # Единичные векторы направления линии и перпендикуляра
+        cos_angle = math.cos(angle)
+        sin_angle = math.sin(angle)
+        perp_cos = -sin_angle  # Перпендикулярный вектор
+        perp_sin = cos_angle
+        
+        # Создаем достаточное количество точек для плавной кривой
+        num_points = max(50, int(length / 2))  # Минимум 50 точек для плавности
+        
+        for i in range(num_points + 1):
+            t = i / num_points
+            # Позиция вдоль линии
+            along_line = t * length
+            
+            # Синусоидальное смещение
+            wave_phase = (along_line / actual_wave_length) * 2 * math.pi
+            wave_offset = amplitude_px * math.sin(wave_phase)
+            
+            # Вычисляем координаты точки
+            x = start_point.x() + along_line * cos_angle + wave_offset * perp_cos
+            y = start_point.y() + along_line * sin_angle + wave_offset * perp_sin
+            
+            if i == 0:
+                path.moveTo(x, y)
+            else:
+                path.lineTo(x, y)
+        
+        # Рисуем путь только обводкой, без заливки
+        painter.setPen(pen)
+        painter.setBrush(Qt.NoBrush)  # Отключаем заливку
+        painter.drawPath(path)
+    
+    def _draw_broken_line(self, painter, start_point, end_point, pen):
+        """Отрисовывает сплошную линию с изломами (острые углы, зигзаг)"""
+        # Вычисляем длину и угол линии
+        dx = end_point.x() - start_point.x()
+        dy = end_point.y() - start_point.y()
+        length = math.sqrt(dx*dx + dy*dy)
+        angle = math.atan2(dy, dx)
+        
+        if length < 1:
+            return
+        
+        # Параметры зигзага: фиксированные размеры в миллиметрах (не зависят от длины линии)
+        # Стандартная высота зигзага: 2.5 мм (чуть больше)
+        zigzag_height_mm = 3.5
+        # Стандартная ширина зигзага: 6.0 мм (фиксированная)
+        zigzag_width_mm = 4.0
+        dpi = 96
+        # Конвертируем миллиметры в пиксели (независимо от масштаба)
+        zigzag_height = (zigzag_height_mm * dpi) / 25.4
+        zigzag_length = (zigzag_width_mm * dpi) / 25.4
+        
+        # Вычисляем длину прямых участков по бокам
+        # Если зигзаг длиннее линии, делаем его короче
+        if zigzag_length > length * 0.8:
+            zigzag_length = length * 0.8
+        
+        straight_length = (length - zigzag_length) / 2  # Длина прямых участков по бокам
+        
+        # Единичные векторы направления линии и перпендикуляра
+        cos_angle = math.cos(angle)
+        sin_angle = math.sin(angle)
+        perp_cos = -sin_angle
+        perp_sin = cos_angle
+        
+        # Создаем путь с острыми углами
+        path = QPainterPath()
+        path.moveTo(start_point)
+        
+        # Первый прямой участок
+        zigzag_start = QPointF(
+            start_point.x() + straight_length * cos_angle,
+            start_point.y() + straight_length * sin_angle
+        )
+        path.lineTo(zigzag_start)
+        
+        # Центральный зигзаг: 3 сегмента
+        # 1. Вверх на половину высоты
+        # 2. Вниз на всю высоту
+        # 3. Вверх на половину высоты
+        # Все три сегмента равной длины вдоль линии
+        # Высота зигзага фиксированная (уже вычислена выше в миллиметрах)
+        
+        # Длина каждого сегмента вдоль линии
+        segment_length_along = zigzag_length / 3
+        
+        # Первый сегмент: вверх на половину высоты
+        point1 = QPointF(
+            zigzag_start.x() + segment_length_along * cos_angle + (zigzag_height / 2) * perp_cos,
+            zigzag_start.y() + segment_length_along * sin_angle + (zigzag_height / 2) * perp_sin
+        )
+        path.lineTo(point1)
+        
+        # Второй сегмент: вниз на всю высоту
+        point2 = QPointF(
+            point1.x() + segment_length_along * cos_angle - zigzag_height * perp_cos,
+            point1.y() + segment_length_along * sin_angle - zigzag_height * perp_sin
+        )
+        path.lineTo(point2)
+        
+        # Третий сегмент: вверх на половину высоты (возврат к прямой линии)
+        zigzag_end = QPointF(
+            zigzag_start.x() + zigzag_length * cos_angle,
+            zigzag_start.y() + zigzag_length * sin_angle
+        )
+        path.lineTo(zigzag_end)
+        
+        # Второй прямой участок до конца
+        path.lineTo(end_point)
+        
+        # Рисуем путь только обводкой, без заливки
+        painter.setPen(pen)
+        painter.setBrush(Qt.NoBrush)  # Отключаем заливку
+        painter.drawPath(path)
 
     def draw_current_point(self, painter):
         painter.setPen(QPen(Qt.blue, 2))
@@ -172,25 +390,102 @@ class CoordinateSystemWidget(QWidget):
                 self.last_mouse_pos = event.position()
             else:
                 world_pos = self.screen_to_world(event.position())
+                
+                # Проверяем, кликнули ли по существующей линии (для выделения)
+                if not self.is_drawing and self.selection_mode:
+                    clicked_line = self._find_line_at_point(world_pos)
+                    if clicked_line:
+                        # Выделение линии (Ctrl для множественного выделения)
+                        if event.modifiers() & Qt.ControlModifier:
+                            # Множественное выделение
+                            if clicked_line in self.selected_lines:
+                                self.selected_lines.remove(clicked_line)
+                            else:
+                                self.selected_lines.add(clicked_line)
+                        else:
+                            # Одиночное выделение
+                            if clicked_line in self.selected_lines and len(self.selected_lines) == 1:
+                                # Если уже выделена одна эта линия, снимаем выделение
+                                self.selected_lines.clear()
+                            else:
+                                self.selected_lines = {clicked_line}
+                        self.selection_changed.emit(list(self.selected_lines))
+                        self.update()
+                        return
+                    else:
+                        # Клик не по линии - снимаем выделение (если не Ctrl)
+                        if not (event.modifiers() & Qt.ControlModifier):
+                            if self.selected_lines:
+                                self.selected_lines.clear()
+                                self.selection_changed.emit([])
+                        # Продолжаем выполнение для начала рисования линии
+                
                 if not self.is_drawing:
-                    self.current_line = LineSegment(world_pos, world_pos, self.line_color, self.line_width)
+                    # Снимаем выделение при начале рисования новой линии
+                    if self.selected_lines:
+                        self.selected_lines.clear()
+                        self.selection_changed.emit([])
+                    # Используем стиль из менеджера, если доступен
+                    style = None
+                    if self.style_manager:
+                        style = self.style_manager.get_current_style()
+                    self.current_line = LineSegment(world_pos, world_pos, style=style, 
+                                                   color=self.line_color, width=self.line_width)
+                    # Сохраняем цвет в legacy_color для использования при отрисовке
+                    self.current_line._legacy_color = self.line_color
                     self.is_drawing = True
                 else:
                     if self.current_line:
                         self.current_line.end_point = world_pos
                         self.lines.append(self.current_line)
                         self.current_line = None
+                        # Эмитируем сигнал о завершении рисования отрезка
+                        self.line_finished.emit()
                     self.is_drawing = False
 
                 self.current_point = world_pos
                 self.update()
 
+        elif event.button() == Qt.RightButton:
+            # Правая кнопка - сохраняем позицию для определения клика/перетаскивания
+            # Работает всегда, независимо от состояния рисования
+            self.right_button_press_pos = event.position()
+            self.right_button_press_time = event.timestamp()  # Время нажатия для определения простого клика
+            # Пока не начинаем выделение - ждем движения мыши
+        
         elif event.button() == Qt.MiddleButton:
             self.last_mouse_pos = event.position()
 
     def mouseMoveEvent(self, event):
         self.cursor_world_coords = self.screen_to_world(event.position())
         self.view_changed.emit()
+        
+        # Проверяем, началось ли перетаскивание правой кнопкой
+        if (event.buttons() & Qt.RightButton and self.right_button_press_pos):
+            # Проверяем, что переместились достаточно далеко (больше 3 пикселей)
+            delta = (event.position() - self.right_button_press_pos).manhattanLength()
+            if delta > 3:
+                # Начинаем выделение рамкой
+                if not self.is_selecting:
+                    if not (event.modifiers() & Qt.ControlModifier):
+                        # Без Ctrl - снимаем текущее выделение
+                        if self.selected_lines:
+                            self.selected_lines.clear()
+                            self.selection_changed.emit([])
+                    self.is_selecting = True
+                    self.selection_start = self.right_button_press_pos
+                    self.selection_end = event.position()
+                    # НЕ сбрасываем right_button_press_pos - он нужен для проверки движения при отпускании
+                else:
+                    self.selection_end = event.position()
+                self.update()
+                return
+        
+        # Обновляем выделение рамкой (правая кнопка мыши)
+        if self.is_selecting and self.selection_start and (event.buttons() & Qt.RightButton):
+            self.selection_end = event.position()
+            self.update()
+            return
 
         if self.pan_mode and event.buttons() & Qt.LeftButton:
             if self.last_mouse_pos:
@@ -212,6 +507,61 @@ class CoordinateSystemWidget(QWidget):
             self.update()
 
     def mouseReleaseEvent(self, event):
+        if event.button() == Qt.RightButton:
+            # Сохраняем позицию нажатия перед сбросом
+            press_pos = self.right_button_press_pos
+            # Всегда сбрасываем позицию нажатия
+            self.right_button_press_pos = None
+            self.right_button_press_time = None
+            
+            # Если было выделение рамкой - завершаем его
+            if self.is_selecting:
+                # Завершаем выделение рамкой
+                if self.selection_start and self.selection_end:
+                    # Преобразуем экранные координаты в мировые
+                    start_world = self.screen_to_world(self.selection_start)
+                    end_world = self.screen_to_world(self.selection_end)
+                    
+                    # Создаем прямоугольник выделения
+                    selection_rect = QRectF(
+                        min(start_world.x(), end_world.x()),
+                        min(start_world.y(), end_world.y()),
+                        abs(end_world.x() - start_world.x()),
+                        abs(end_world.y() - start_world.y())
+                    )
+                    
+                    # Находим все линии, попадающие в рамку
+                    if selection_rect.width() > 1 and selection_rect.height() > 1:
+                        # Выделяем линии, которые пересекаются с рамкой
+                        new_selection = set()
+                        for line in self.lines:
+                            if self._line_intersects_rect(line, selection_rect):
+                                new_selection.add(line)
+                        
+                        # Обновляем выделение
+                        if event.modifiers() & Qt.ControlModifier:
+                            # Добавляем к текущему выделению
+                            self.selected_lines.update(new_selection)
+                        else:
+                            # Заменяем выделение
+                            self.selected_lines = new_selection
+                        
+                        self.selection_changed.emit(list(self.selected_lines))
+                
+                # Сбрасываем выделение рамкой
+                self.is_selecting = False
+                self.selection_start = None
+                self.selection_end = None
+                self.update()
+            elif press_pos:
+                # Если был простой клик (без движения) - открываем контекстное меню вручную
+                # Проверяем, что не было движения (позиция не изменилась)
+                if (press_pos - event.position()).manhattanLength() < 3:
+                    # Простой клик - открываем контекстное меню
+                    # Преобразуем QPointF в QPoint
+                    pos_point = QPoint(int(event.position().x()), int(event.position().y()))
+                    self.show_context_menu(pos_point)
+        
         if event.button() in (Qt.LeftButton, Qt.MiddleButton):
             self.last_mouse_pos = None
 
@@ -424,14 +774,23 @@ class CoordinateSystemWidget(QWidget):
         self.current_point = None
         self.update()
 
-    def set_grid_step(self, step):
-        self.grid_step = step
+    def set_grid_step(self, step_mm):
+        """Устанавливает шаг сетки в миллиметрах"""
+        self.grid_step_mm = step_mm
+        # Шаг сетки в мировых координатах (в миллиметрах)
+        self.grid_step = self.grid_step_mm
         self.update()
 
     def set_line_color(self, color):
         self.line_color = color
+        # Применяем цвет к текущей линии, если она есть
+        # Сохраняем цвет в legacy_color, чтобы не менять стиль
         if self.current_line:
-            self.current_line.color = color
+            self.current_line._legacy_color = color
+            # Если у линии есть стиль, временно меняем цвет стиля только для этой линии
+            # Но лучше сохранить в legacy_color и использовать его при отрисовке
+        # Цвет будет использоваться для новых линий (через self.line_color)
+        self.update()
 
     def set_background_color(self, color):
         self.background_color = color
@@ -442,9 +801,12 @@ class CoordinateSystemWidget(QWidget):
         self.update()
 
     def set_line_width(self, width):
+        # Устаревший метод - толщина теперь управляется через стили
+        # Оставляем для обратной совместимости, но не используем
         self.line_width = width
         if self.current_line:
             self.current_line.width = width
+        self.update()
 
     def get_current_points(self):
         if self.current_line:
@@ -456,14 +818,169 @@ class CoordinateSystemWidget(QWidget):
             return QPointF(0, 0), QPointF(0, 0)
 
     def set_points_from_input(self, start_point, end_point, apply=False):
+        # Получаем текущий стиль из менеджера
+        style = None
+        if self.style_manager:
+            style = self.style_manager.get_current_style()
+            # Если есть стиль, применяем к нему текущий цвет (для этой линии)
+            if style:
+                # Создаем копию стиля или обновляем цвет для этой линии
+                # Но не меняем оригинальный стиль в менеджере
+                pass
+        
         if apply:
-            new_line = LineSegment(start_point, end_point, self.line_color, self.line_width)
+            new_line = LineSegment(start_point, end_point, style=style, 
+                                  color=self.line_color, width=self.line_width)
+            # Сохраняем цвет в legacy_color для использования при отрисовке
+            new_line._legacy_color = self.line_color
             self.lines.append(new_line)
             self.update()
         else:
             if not self.current_line:
-                self.current_line = LineSegment(start_point, end_point, self.line_color, self.line_width)
+                self.current_line = LineSegment(start_point, end_point, style=style,
+                                               color=self.line_color, width=self.line_width)
+                # Сохраняем цвет в legacy_color для использования при отрисовке
+                self.current_line._legacy_color = self.line_color
             else:
                 self.current_line.start_point = start_point
                 self.current_line.end_point = end_point
+                if style and not self.current_line.style:
+                    self.current_line.style = style
+                # Обновляем цвет
+                self.current_line._legacy_color = self.line_color
             self.update()
+    
+    def set_style_manager(self, style_manager):
+        """Устанавливает менеджер стилей"""
+        self.style_manager = style_manager
+    
+    def _find_line_at_point(self, point, tolerance=5.0):
+        """Находит линию, ближайшую к указанной точке"""
+        # Конвертируем tolerance из пикселей в мировые координаты
+        world_tolerance = tolerance / self.scale_factor
+        
+        closest_line = None
+        min_distance = float('inf')
+        
+        for line in self.lines:
+            # Вычисляем расстояние от точки до линии
+            distance = self._point_to_line_distance(point, line.start_point, line.end_point)
+            if distance < world_tolerance and distance < min_distance:
+                min_distance = distance
+                closest_line = line
+        
+        return closest_line
+    
+    def _point_to_line_distance(self, point, line_start, line_end):
+        """Вычисляет расстояние от точки до отрезка"""
+        # Вектор линии
+        dx = line_end.x() - line_start.x()
+        dy = line_end.y() - line_start.y()
+        
+        # Если линия - точка
+        if dx == 0 and dy == 0:
+            return math.sqrt((point.x() - line_start.x())**2 + (point.y() - line_start.y())**2)
+        
+        # Параметр t для проекции точки на линию
+        t = ((point.x() - line_start.x()) * dx + (point.y() - line_start.y()) * dy) / (dx*dx + dy*dy)
+        
+        # Ограничиваем t отрезком [0, 1]
+        t = max(0, min(1, t))
+        
+        # Ближайшая точка на отрезке
+        closest_x = line_start.x() + t * dx
+        closest_y = line_start.y() + t * dy
+        
+        # Расстояние от точки до ближайшей точки на отрезке
+        return math.sqrt((point.x() - closest_x)**2 + (point.y() - closest_y)**2)
+    
+    def _draw_selection_highlight(self, painter, line):
+        """Рисует подсветку выделенной линии"""
+        # Рисуем пунктирную рамку вокруг выделенной линии
+        highlight_pen = QPen(QColor(0, 100, 255), 1, Qt.DashLine)
+        painter.setPen(highlight_pen)
+        painter.setBrush(Qt.NoBrush)
+        
+        # Вычисляем границы линии с отступом
+        margin = 3.0 / self.scale_factor
+        min_x = min(line.start_point.x(), line.end_point.x()) - margin
+        max_x = max(line.start_point.x(), line.end_point.x()) + margin
+        min_y = min(line.start_point.y(), line.end_point.y()) - margin
+        max_y = max(line.start_point.y(), line.end_point.y()) + margin
+        
+        # Рисуем прямоугольник вокруг линии
+        painter.drawRect(min_x, min_y, max_x - min_x, max_y - min_y)
+    
+    def get_selected_lines(self):
+        """Возвращает список выделенных линий"""
+        return list(self.selected_lines)
+    
+    def clear_selection(self):
+        """Очищает выделение"""
+        if self.selected_lines:
+            self.selected_lines.clear()
+            self.selection_changed.emit([])
+            self.update()
+    
+    def _line_intersects_rect(self, line, rect):
+        """Проверяет, пересекается ли линия с прямоугольником"""
+        # Получаем координаты линии
+        x1, y1 = line.start_point.x(), line.start_point.y()
+        x2, y2 = line.end_point.x(), line.end_point.y()
+        
+        # Границы прямоугольника
+        rect_left = rect.left()
+        rect_right = rect.right()
+        rect_top = rect.top()
+        rect_bottom = rect.bottom()
+        
+        # Проверяем, находятся ли обе точки внутри прямоугольника
+        if (rect_left <= x1 <= rect_right and rect_top <= y1 <= rect_bottom and
+            rect_left <= x2 <= rect_right and rect_top <= y2 <= rect_bottom):
+            return True
+        
+        # Проверяем пересечение с каждой стороной прямоугольника
+        if self._line_segment_intersection(x1, y1, x2, y2, rect_left, rect_top, rect_left, rect_bottom):
+            return True
+        if self._line_segment_intersection(x1, y1, x2, y2, rect_right, rect_top, rect_right, rect_bottom):
+            return True
+        if self._line_segment_intersection(x1, y1, x2, y2, rect_left, rect_top, rect_right, rect_top):
+            return True
+        if self._line_segment_intersection(x1, y1, x2, y2, rect_left, rect_bottom, rect_right, rect_bottom):
+            return True
+        
+        return False
+    
+    def _line_segment_intersection(self, x1, y1, x2, y2, x3, y3, x4, y4):
+        """Проверяет пересечение двух отрезков"""
+        denom = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4)
+        if abs(denom) < 1e-10:
+            return False  # Параллельные линии
+        
+        t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / denom
+        u = -((x1 - x2) * (y1 - y3) - (y1 - y2) * (x1 - x3)) / denom
+        
+        return 0 <= t <= 1 and 0 <= u <= 1
+    
+    def _draw_selection_rect(self, painter):
+        """Рисует рамку выделения"""
+        if not self.selection_start or not self.selection_end:
+            return
+        
+        # Преобразуем экранные координаты в мировые
+        start_world = self.screen_to_world(self.selection_start)
+        end_world = self.screen_to_world(self.selection_end)
+        
+        # Создаем прямоугольник
+        rect = QRectF(
+            min(start_world.x(), end_world.x()),
+            min(start_world.y(), end_world.y()),
+            abs(end_world.x() - start_world.x()),
+            abs(end_world.y() - start_world.y())
+        )
+        
+        # Рисуем рамку
+        selection_pen = QPen(QColor(0, 100, 255), 1, Qt.DashLine)
+        painter.setPen(selection_pen)
+        painter.setBrush(QColor(0, 100, 255, 30))  # Полупрозрачная заливка
+        painter.drawRect(rect)

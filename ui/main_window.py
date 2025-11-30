@@ -3,23 +3,31 @@ import math
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                                QPushButton, QLabel, QComboBox, QDoubleSpinBox, QGroupBox,
                                QGridLayout, QSpinBox, QColorDialog, QMessageBox, QToolBar,
-                               QStatusBar, QMenu, QSizePolicy)
+                               QStatusBar, QMenu, QSizePolicy, QSplitter, QScrollArea)
 from PySide6.QtCore import QPointF, Qt, QSize
 from PySide6.QtGui import QColor, QAction, QIcon, QKeySequence
 
 from widgets.coordinate_system import CoordinateSystemWidget
+from widgets.line_style import LineStyleManager
+from ui.style_panels import ObjectPropertiesPanel, StyleManagementPanel, StyleComboBox
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Построение отрезков в различных системах координат")
-        self.setGeometry(100, 100, 1000, 700)
+        self.setGeometry(100, 100, 1200, 800)
         
         self.coordinate_system = "cartesian"  # "cartesian" или "polar"
         self.angle_units = "degrees"  # "degrees" или "radians"
         
+        # Создаем менеджер стилей
+        self.style_manager = LineStyleManager()
+        
         # сначала создаем canvas
-        self.canvas = CoordinateSystemWidget()
+        self.canvas = CoordinateSystemWidget(style_manager=self.style_manager)
+        
+        # Выделенные объекты
+        self.selected_objects = []
         
         self.init_ui()
         self.update_info()
@@ -36,12 +44,26 @@ class MainWindow(QMainWindow):
         # панель инструментов
         self.create_toolbar()
         
+        # панель инструментов стилей
+        self.create_style_toolbar()
+        
         # строка состояния
         self.create_statusbar()
         
-        # левая панель с настройками
-        left_panel = QVBoxLayout()
+        # Используем Splitter для разделения панелей
+        main_splitter = QSplitter(Qt.Horizontal)
+        
+        # Левая панель с настройками
+        left_widget = QWidget()
+        left_panel = QVBoxLayout(left_widget)
         left_panel.setSpacing(10)
+        
+        # Обёртка в скролл для левой панели
+        scroll_area = QScrollArea()
+        scroll_area.setWidget(left_widget)
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         
         # панель инструментов
         tools_group = QGroupBox("Инструменты")
@@ -167,25 +189,17 @@ class MainWindow(QMainWindow):
         angle_layout.addWidget(self.angle_combo)
         settings_layout.addLayout(angle_layout)
         
-        # шаг сетки
+        # шаг сетки (в миллиметрах)
         grid_layout = QHBoxLayout()
         grid_layout.addWidget(QLabel("Шаг сетки:"))
-        self.grid_spin = QSpinBox()
-        self.grid_spin.setRange(5, 100)
-        self.grid_spin.setValue(20)
+        self.grid_spin = QDoubleSpinBox()
+        self.grid_spin.setRange(0.1, 100.0)
+        self.grid_spin.setDecimals(1)
+        self.grid_spin.setSingleStep(1.0)
+        self.grid_spin.setValue(20.0)  # 20 мм по умолчанию
         self.grid_spin.valueChanged.connect(self.change_grid_step)
         grid_layout.addWidget(self.grid_spin)
         settings_layout.addLayout(grid_layout)
-        
-        # толщина линии
-        width_layout = QHBoxLayout()
-        width_layout.addWidget(QLabel("Толщина линии:"))
-        self.width_spin = QSpinBox()
-        self.width_spin.setRange(1, 10)
-        self.width_spin.setValue(2)
-        self.width_spin.valueChanged.connect(self.change_line_width)
-        width_layout.addWidget(self.width_spin)
-        settings_layout.addLayout(width_layout)
         
         # цвета
         color_layout = QVBoxLayout()
@@ -210,10 +224,27 @@ class MainWindow(QMainWindow):
         self.lines_count_label = QLabel("Отрезков на экране: 0")
         left_panel.addWidget(self.lines_count_label)
         
+        # Добавляем панели стилей
+        # Панель свойств объекта
+        self.object_properties_panel = ObjectPropertiesPanel(self.style_manager)
+        self.object_properties_panel.style_changed.connect(self.on_object_style_changed)
+        # Устанавливаем ссылку на canvas для доступа к линиям
+        self.object_properties_panel.canvas = self.canvas
+        # Подключаем сигнал изменения выделения
+        self.canvas.selection_changed.connect(self.on_selection_changed)
+        # Скрываем панель по умолчанию (пока нет выделенных объектов)
+        self.object_properties_panel.hide()
+        left_panel.addWidget(self.object_properties_panel)
+        
+        # Панель управления стилями
+        self.style_management_panel = StyleManagementPanel(self.style_manager)
+        left_panel.addWidget(self.style_management_panel)
+        
         left_panel.addStretch()
         
         # правая часть с рабочей областью и информацией
-        right_panel = QVBoxLayout()
+        right_widget = QWidget()
+        right_panel = QVBoxLayout(right_widget)
         
         # рабочая область
         right_panel.addWidget(self.canvas)
@@ -241,8 +272,13 @@ class MainWindow(QMainWindow):
         info_group.setLayout(info_layout)
         right_panel.addWidget(info_group)
         
-        main_layout.addLayout(left_panel, 1)
-        main_layout.addLayout(right_panel, 3)
+        # Добавляем виджеты в splitter
+        main_splitter.addWidget(scroll_area)
+        main_splitter.addWidget(right_widget)
+        main_splitter.setStretchFactor(0, 1)
+        main_splitter.setStretchFactor(1, 3)
+        
+        main_layout.addWidget(main_splitter)
         
         # инициализация значений
         self.start_x_spin.blockSignals(True)
@@ -268,6 +304,8 @@ class MainWindow(QMainWindow):
         
         # подключаем сигналы от canvas для обновления статусбара
         self.canvas.view_changed.connect(self.update_statusbar)
+        # подключаем сигнал завершения рисования отрезка для обновления информации
+        self.canvas.line_finished.connect(self.update_info)
         self.update_statusbar()
     
     def create_context_menu(self, position):
@@ -415,6 +453,63 @@ class MainWindow(QMainWindow):
         reset_view_action.setToolTip("Сбросить вид")
         reset_view_action.triggered.connect(self.canvas.reset_view)
         toolbar.addAction(reset_view_action)
+    
+    def create_style_toolbar(self):
+        """Создает панель инструментов для стилей линий"""
+        style_toolbar = QToolBar("Стили линий")
+        style_toolbar.setIconSize(QSize(24, 24))
+        self.addToolBar(style_toolbar)
+        
+        # Выпадающий список текущего стиля
+        style_label = QLabel("Текущий стиль:")
+        style_toolbar.addWidget(style_label)
+        
+        self.current_style_combo = StyleComboBox(self.style_manager)
+        self.current_style_combo.currentIndexChanged.connect(self.on_current_style_changed)
+        style_toolbar.addWidget(self.current_style_combo)
+        
+        style_toolbar.addSeparator()
+        
+        # Кнопки быстрого доступа к популярным стилям
+        popular_styles = ["Сплошная основная", "Сплошная тонкая", "Штриховая", "Штрихпунктирная тонкая"]
+        
+        for style_name in popular_styles:
+            style = self.style_manager.get_style(style_name)
+            if style:
+                action = QAction(style_name, self)
+                action.setToolTip(f"Установить стиль: {style_name}")
+                action.triggered.connect(lambda checked, name=style_name: self.set_current_style(name))
+                style_toolbar.addAction(action)
+    
+    def on_current_style_changed(self):
+        """Обработчик изменения текущего стиля"""
+        style = self.current_style_combo.get_current_style()
+        if style:
+            self.style_manager.set_current_style(style.name)
+    
+    def set_current_style(self, style_name):
+        """Устанавливает текущий стиль"""
+        self.style_manager.set_current_style(style_name)
+        index = self.current_style_combo.findText(style_name)
+        if index >= 0:
+            self.current_style_combo.setCurrentIndex(index)
+    
+    def on_object_style_changed(self, style):
+        """Обработчик изменения стиля объекта"""
+        # Обновляем отрисовку
+        self.canvas.update()
+    
+    def on_selection_changed(self, selected_lines):
+        """Обработчик изменения выделения"""
+        # Обновляем выделенные объекты
+        self.selected_objects = selected_lines
+        # Показываем или скрываем панель свойств в зависимости от выделения
+        if selected_lines:
+            self.object_properties_panel.show()
+            # Обновляем панель свойств
+            self.object_properties_panel.set_selected_objects(selected_lines)
+        else:
+            self.object_properties_panel.hide()
     
     def create_statusbar(self):
         # строка состояния
