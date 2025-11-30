@@ -177,11 +177,49 @@ class CoordinateSystemWidget(QWidget):
         painter.drawLine(visible_rect.left(), 0, visible_rect.right(), 0)  # X axis
         painter.drawLine(0, visible_rect.top(), 0, visible_rect.bottom())  # Y axis
 
-        # подписи осей
+        # подписи осей - рисуем в экранных координатах без трансформации
+        # Сохраняем текущую трансформацию
+        saved_transform = painter.transform()
+        # Сбрасываем трансформацию для текста
+        painter.resetTransform()
+        
+        # Преобразуем границы виджета в мировые координаты для правильного размещения подписей
+        widget_rect = QRectF(self.rect())
+        widget_corners = [
+            QPointF(widget_rect.left(), widget_rect.top()),
+            QPointF(widget_rect.right(), widget_rect.top()),
+            QPointF(widget_rect.right(), widget_rect.bottom()),
+            QPointF(widget_rect.left(), widget_rect.bottom())
+        ]
+        inv_transform, success = self.get_total_transform().inverted()
+        if success:
+            world_corners = [inv_transform.map(corner) for corner in widget_corners]
+            world_right = max(c.x() for c in world_corners)
+            world_top = max(c.y() for c in world_corners)  # top в мировых координатах (Y вверх)
+        else:
+            world_right = visible_rect.right()
+            world_top = visible_rect.top()
+        
+        # Используем позиции относительно видимой области, но в мировых координатах
+        # "X" - справа от оси X, немного выше оси
+        x_pos_world = QPointF(world_right - 20, 15)
+        x_pos_screen = saved_transform.map(x_pos_world)
+        # "Y" - выше оси Y, немного справа от оси
+        y_pos_world = QPointF(15, world_top - 15)
+        y_pos_screen = saved_transform.map(y_pos_world)
+        # "0" - в начале координат, немного выше и правее
+        zero_pos_world = QPointF(15, 15)
+        zero_pos_screen = saved_transform.map(zero_pos_world)
+        
         painter.setFont(QFont("Arial", 10))
-        painter.drawText(visible_rect.right() - 20, 15, "X")
-        painter.drawText(5, visible_rect.top() + 15, "Y")
-        painter.drawText(5, 15, "0")
+        painter.setPen(QPen(self.axis_color))
+        # Рисуем текст в экранных координатах (текст не будет инвертирован)
+        painter.drawText(int(x_pos_screen.x()), int(x_pos_screen.y()), "X")
+        painter.drawText(int(y_pos_screen.x()), int(y_pos_screen.y()), "Y")
+        painter.drawText(int(zero_pos_screen.x()), int(zero_pos_screen.y()), "0")
+        
+        # Восстанавливаем трансформацию
+        painter.setTransform(saved_transform)
 
     def draw_saved_line(self, painter, line):
         """Отрисовывает линию с учетом стиля"""
@@ -640,8 +678,8 @@ class CoordinateSystemWidget(QWidget):
         # поворот вокруг центра
         transform.rotate(self.rotation_angle)
         
-        # масштабирование
-        transform.scale(self.scale_factor, self.scale_factor)
+        # масштабирование с инверсией Y (в Qt Y вниз, в математике Y вверх)
+        transform.scale(self.scale_factor, -self.scale_factor)
         
         return transform
 
@@ -757,10 +795,10 @@ class CoordinateSystemWidget(QWidget):
         
         widget_center = QPointF(self.width() / 2, self.height() / 2)
         
-        # Создаем трансформацию rotate -> scale
+        # Создаем трансформацию rotate -> scale (с учетом инверсии Y)
         rotation_scale_transform = QTransform()
         rotation_scale_transform.rotate(self.rotation_angle)
-        rotation_scale_transform.scale(self.scale_factor, self.scale_factor)
+        rotation_scale_transform.scale(self.scale_factor, -self.scale_factor)  # Инверсия Y как в get_total_transform
         inv_rotation_scale, success = rotation_scale_transform.inverted()
         
         if success:
@@ -783,9 +821,9 @@ class CoordinateSystemWidget(QWidget):
             # Поэтому: translation = -rotated_scaled_center
             self.translation = QPointF(-rotated_scaled_center.x(), -rotated_scaled_center.y())
         else:
-            # Fallback: просто центрируем без учета поворота
+            # Fallback: просто центрируем без учета поворота (с учетом инверсии Y)
             self.translation = QPointF(-scene_center.x() * self.scale_factor, 
-                                      -scene_center.y() * self.scale_factor)
+                                      scene_center.y() * self.scale_factor)  # Y инвертирован
 
         self.view_changed.emit()
         self.update()

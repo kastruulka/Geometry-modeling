@@ -127,8 +127,9 @@ class LineStyle(QObject):
     def get_pen(self, scale_factor=1.0, dpi=96):
         """
         Создает QPen для отрисовки линии
-        Толщина и длина штрихов не зависят от масштаба (в пикселях экрана)
-        Это обеспечивает постоянный размер линии при зуме
+        Толщина линии не зависит от масштаба (в пикселях экрана)
+        Длина штрихов задается в миллиметрах (мировых координатах) и масштабируется вместе с сеткой
+        Это обеспечивает соответствие между размером штрихов и шагом сетки
         """
         # Конвертируем миллиметры в пиксели для толщины (независимо от масштаба)
         thickness_px = (self._thickness_mm * dpi) / 25.4
@@ -143,27 +144,29 @@ class LineStyle(QObject):
             pen.setStyle(Qt.SolidLine)  # Будет обработано отдельно
         elif self._line_type == LineType.DASHED:
             # Штриховая: штрих-пробел
-            # Длина штрихов в пикселях (не масштабируется)
-            # Сетка использует мировые координаты, где 1 мм = 1 единица
-            # При начальном масштабе scale_factor=1.0, 1 единица мировых координат = 1 пиксель
-            # Поэтому штрихи должны быть в пикселях равны миллиметрам (без конвертации через DPI)
-            # Это обеспечит соответствие: 5 мм штриха = 5 мм сетки
-            dash_length_px = self._dash_length  # 1 мм = 1 пиксель (при scale_factor=1.0)
-            dash_gap_px = self._dash_gap
-            pen.setDashPattern([dash_length_px, dash_gap_px])
+            # QPen.setDashPattern работает в единицах пера (pen units), которые масштабируются трансформацией
+            # При scale_factor=1.0: 1 мм мировых координат = 1 пиксель экрана
+            # Сетка рисуется в мировых координатах с шагом grid_step (в мм), координаты масштабируются трансформацией
+            # Паттерн штрихов должен быть в тех же единицах, что и координаты сетки (миллиметрах)
+            # При применении трансформации паттерн будет масштабироваться вместе с сеткой
+            dash_length_world = self._dash_length  # Длина штриха в мм (мировых координатах)
+            dash_gap_world = self._dash_gap  # Пробел в мм (мировых координатах)
+            pen.setDashPattern([dash_length_world, dash_gap_world])
         elif self._line_type == LineType.DASH_DOT_THICK or self._line_type == LineType.DASH_DOT_THIN:
             # Штрихпунктирная: штрих-пробел-точка-пробел
-            dash_length_px = self._dash_length  # 1 мм = 1 пиксель (при scale_factor=1.0)
-            dash_gap_px = self._dash_gap
-            dot_length_px = thickness_px * 0.5  # Точка пропорциональна толщине
-            pen.setDashPattern([dash_length_px, dash_gap_px, dot_length_px, dash_gap_px])
+            dash_length_world = self._dash_length  # Длина штриха в мм (мировых координатах)
+            dash_gap_world = self._dash_gap  # Пробел в мм (мировых координатах)
+            # Точка пропорциональна толщине, в миллиметрах (мировых координатах)
+            dot_length_world = self._thickness_mm * 0.5
+            pen.setDashPattern([dash_length_world, dash_gap_world, dot_length_world, dash_gap_world])
         elif self._line_type == LineType.DASH_DOT_TWO_DOTS:
             # Штрихпунктирная с двумя точками: штрих-пробел-точка-пробел-точка-пробел
-            dash_length_px = self._dash_length  # 1 мм = 1 пиксель (при scale_factor=1.0)
-            dash_gap_px = self._dash_gap
-            dot_length_px = thickness_px * 0.5
-            pen.setDashPattern([dash_length_px, dash_gap_px, dot_length_px, dash_gap_px, 
-                              dot_length_px, dash_gap_px])
+            dash_length_world = self._dash_length  # Длина штриха в мм (мировых координатах)
+            dash_gap_world = self._dash_gap  # Пробел в мм (мировых координатах)
+            # Точка пропорциональна толщине, в миллиметрах (мировых координатах)
+            dot_length_world = self._thickness_mm * 0.5
+            pen.setDashPattern([dash_length_world, dash_gap_world, dot_length_world, dash_gap_world, 
+                              dot_length_world, dash_gap_world])
         elif self._line_type == LineType.SOLID_THIN_BROKEN:
             # Сплошная тонкая с изломами - сплошная линия с острыми углами
             # Будет обработано отдельно в методе отрисовки
