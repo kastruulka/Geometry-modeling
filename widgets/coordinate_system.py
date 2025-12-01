@@ -52,6 +52,9 @@ class CoordinateSystemWidget(QWidget):
         # Координаты курсора
         self.cursor_world_coords = None
         
+        # Точки ввода для визуализации (для окружности, дуги, эллипса, прямоугольника)
+        self.input_points = []  # Список точек для отображения
+        
         # Настройки отрисовки
         self.line_color = QColor(0, 0, 0)
         self.line_width = 2
@@ -86,9 +89,16 @@ class CoordinateSystemWidget(QWidget):
     def paintEvent(self, event):
         """Отрисовка виджета"""
         painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        
+        # Сначала рисуем сцену через renderer
         self.renderer.draw(painter)
         
-        # Рисуем рамку выделения
+        # Затем рисуем точки ввода (поверх сцены)
+        if self.input_points:
+            self._draw_input_points(painter)
+        
+        # В конце рисуем рамку выделения (в экранных координатах)
         if self.is_selecting and self.selection_start and self.selection_end:
             self._draw_selection_rect(painter)
     
@@ -120,6 +130,56 @@ class CoordinateSystemWidget(QWidget):
         painter.drawRect(screen_rect)
         
         painter.restore()  # Восстанавливаем состояние
+    
+    def _draw_input_points(self, painter):
+        """Рисует точки ввода для визуализации"""
+        if not self.input_points:
+            return
+        
+        painter.save()
+        painter.setRenderHint(QPainter.Antialiasing)
+        
+        # Применяем трансформацию viewport
+        # После renderer.draw() трансформация может быть сброшена, поэтому применяем заново
+        transform = self.viewport.get_total_transform()
+        painter.setTransform(transform)
+        
+        # Цвет и стиль точек
+        point_color = QColor(255, 100, 0)  # Оранжевый цвет для точек ввода
+        point_pen = QPen(point_color, 1.5)
+        painter.setPen(point_pen)
+        painter.setBrush(QColor(255, 150, 50, 220))  # Полупрозрачная оранжевая заливка
+        
+        # Размер точки в мировых координатах
+        scale_factor = self.viewport.get_scale()
+        # Размер точки в мировых координатах (примерно 4 пикселя на экране)
+        point_size = max(4.0 / scale_factor, 0.5)  # Минимальный размер 0.5 в мировых координатах
+        
+        for point in self.input_points:
+            if point is None:
+                continue
+            # Рисуем точку в мировых координатах
+            # Используем drawEllipse с центром в точке и радиусом point_size
+            from PySide6.QtCore import QRectF
+            rect = QRectF(
+                point.x() - point_size,
+                point.y() - point_size,
+                point_size * 2,
+                point_size * 2
+            )
+            painter.drawEllipse(rect)
+        
+        painter.restore()
+    
+    def set_input_points(self, points):
+        """Устанавливает точки ввода для визуализации"""
+        self.input_points = points if points else []
+        self.update()
+    
+    def clear_input_points(self):
+        """Очищает точки ввода"""
+        self.input_points = []
+        self.update()
     
     def show_context_menu(self, position):
         """Показывает контекстное меню"""
@@ -328,7 +388,8 @@ class CoordinateSystemWidget(QWidget):
                 self.right_button_click_timer = QTimer()
                 self.right_button_click_timer.setSingleShot(True)
                 self.right_button_click_timer.timeout.connect(self._handle_single_right_click)
-                self.right_button_click_timer.start(300)
+                # Уменьшаем время таймера для более быстрой реакции
+                self.right_button_click_timer.start(200)
             elif self.right_button_click_count == 2:
                 if self.right_button_click_timer:
                     self.right_button_click_timer.stop()
@@ -440,8 +501,16 @@ class CoordinateSystemWidget(QWidget):
         """Обрабатывает одинарный клик ПКМ"""
         self.right_button_click_count = 0
         
+        # Отменяем рисование, если оно активно
         if self.scene.is_drawing():
             self.scene.cancel_drawing()
+            self.update()
+        
+        # Очищаем выделение рамкой, если оно было начато
+        if self.is_selecting:
+            self.is_selecting = False
+            self.selection_start = None
+            self.selection_end = None
             self.update()
         
         self.right_button_press_pos = None
@@ -450,8 +519,15 @@ class CoordinateSystemWidget(QWidget):
     def mouseReleaseEvent(self, event):
         """Обработчик отпускания кнопки мыши"""
         if event.button() == Qt.RightButton:
-            if self.is_selecting:
-                if self.selection_start and self.selection_end:
+            # Вычисляем расстояние перемещения от начала нажатия
+            if self.right_button_press_pos:
+                delta = (event.position() - self.right_button_press_pos).manhattanLength()
+            else:
+                delta = 0
+            
+            # Проверяем, было ли движение мыши (выделение рамкой)
+            if self.is_selecting and self.selection_start and self.selection_end:
+                if delta > 3:  # Было движение - обрабатываем выделение
                     # Преобразуем экранные координаты в мировые
                     start_world = self.viewport.screen_to_world(self.selection_start)
                     end_world = self.viewport.screen_to_world(self.selection_end)
@@ -469,16 +545,37 @@ class CoordinateSystemWidget(QWidget):
                         self.selection_manager.select_objects_in_rect(
                             selection_rect, self.scene.get_objects(), add_to_selection
                         )
+                    
+                    # Останавливаем таймер, так как это было выделение, а не клик
+                    if self.right_button_click_timer:
+                        self.right_button_click_timer.stop()
+                    self.right_button_click_count = 0
                 
+                # Всегда очищаем выделение рамкой при отпускании
                 self.is_selecting = False
                 self.selection_start = None
                 self.selection_end = None
-                self.right_button_press_pos = None
-                self.right_button_press_time = None
-                if self.right_button_click_timer:
-                    self.right_button_click_timer.stop()
-                self.right_button_click_count = 0
-                self.update()
+            else:
+                # Не было выделения - проверяем, был ли это клик
+                if delta <= 3:
+                    # Это был клик без движения - отменяем рисование сразу
+                    if self.scene.is_drawing():
+                        self.scene.cancel_drawing()
+                        # Останавливаем таймер, так как уже обработали
+                        if self.right_button_click_timer:
+                            self.right_button_click_timer.stop()
+                        self.right_button_click_count = 0
+                    # Если таймер еще работает, пусть он тоже сработает (на случай, если рисование не было активно)
+                else:
+                    # Было движение, но выделение не началось - останавливаем таймер
+                    if self.right_button_click_timer:
+                        self.right_button_click_timer.stop()
+                    self.right_button_click_count = 0
+            
+            # Очищаем позицию нажатия
+            self.right_button_press_pos = None
+            self.right_button_press_time = None
+            self.update()
         
         if event.button() in (Qt.LeftButton, Qt.MiddleButton):
             self.last_mouse_pos = None
@@ -730,6 +827,12 @@ class CoordinateSystemWidget(QWidget):
     def set_rectangle_creation_method(self, method: str):
         """Устанавливает метод создания прямоугольника"""
         self.rectangle_creation_method = method
+    
+    def set_ellipse_creation_method(self, method: str):
+        """Устанавливает метод создания эллипса"""
+        # Метод сохраняется для будущего использования
+        # В данный момент эллипс создается через три точки в сцене
+        pass
     
     # Свойства для обратной совместимости
     @property
