@@ -218,23 +218,26 @@ class CoordinateSystemWidget(QWidget):
                 world_pos = self.viewport.screen_to_world(event.position())
                 
                 # Проверяем, кликнули ли по существующему объекту (для выделения)
-                # Но только если мы не собираемся начать рисование нового объекта
+                # Но только если мы не рисуем новый объект
                 if not self.scene.is_drawing():
                     clicked_obj = self.selection_manager.find_object_at_point(
                         world_pos, self.scene.get_objects()
                     )
                     if clicked_obj:
+                        # Клик по объекту - выделяем его
                         # Если зажат Ctrl, добавляем к выделению, иначе просто выделяем
-                        # Но не прерываем выполнение - пользователь может начать новый объект
                         add_to_selection = bool(event.modifiers() & Qt.ControlModifier)
                         self.selection_manager.select_object(clicked_obj, add_to_selection)
                         self.update()
-                        # НЕ делаем return - позволяем начать новый объект
+                        # Прерываем выполнение - не начинаем рисование нового объекта
+                        return
                     else:
                         # Клик не по объекту - снимаем выделение (если не Ctrl)
                         if not (event.modifiers() & Qt.ControlModifier):
                             self.selection_manager.clear_selection()
+                            self.update()
                 
+                # Начинаем рисование нового объекта только если не кликнули по существующему
                 if not self.scene.is_drawing():
                     # Снимаем выделение при начале рисования нового объекта
                     self.selection_manager.clear_selection()

@@ -21,14 +21,13 @@ class SelectionManager(QObject):
     def select_object(self, obj: GeometricObject, add_to_selection: bool = False):
         """Выделяет объект"""
         if not add_to_selection:
+            # Если не добавляем к выделению, очищаем текущее выделение
             self.clear_selection()
         
-        if obj in self._selected_objects:
-            self._selected_objects.remove(obj)
-        else:
+        # Добавляем объект к выделению (если его там еще нет)
+        if obj not in self._selected_objects:
             self._selected_objects.add(obj)
-        
-        self._notify_selection_changed()
+            self._notify_selection_changed()
     
     def select_objects_in_rect(self, rect: QRectF, objects: List[GeometricObject], 
                               add_to_selection: bool = False):
