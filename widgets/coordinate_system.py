@@ -11,6 +11,7 @@ from core.viewport import Viewport
 from core.scene import Scene
 from core.selection import SelectionManager
 from core.renderer import SceneRenderer
+from core.snapping import SnapManager, SnapPoint
 from widgets.line_segment import LineSegment
 from widgets.line_style import LineStyleManager
 
@@ -32,9 +33,13 @@ class CoordinateSystemWidget(QWidget):
         self.scene = Scene()
         self.selection_manager = SelectionManager()
         self.renderer = SceneRenderer(self.viewport, self.scene, self.selection_manager)
+        self.snap_manager = SnapManager(tolerance=10.0)
         
         # Менеджер стилей
         self.style_manager = style_manager
+        
+        # Текущая точка привязки для визуализации
+        self.current_snap_point = None
         
         # Параметры навигации
         self.pan_mode = False
@@ -98,6 +103,10 @@ class CoordinateSystemWidget(QWidget):
         if self.input_points:
             self._draw_input_points(painter)
         
+        # Рисуем точку привязки (поверх всего)
+        if self.current_snap_point:
+            self._draw_snap_point(painter)
+        
         # В конце рисуем рамку выделения (в экранных координатах)
         if self.is_selecting and self.selection_start and self.selection_end:
             self._draw_selection_rect(painter)
@@ -130,6 +139,37 @@ class CoordinateSystemWidget(QWidget):
         painter.drawRect(screen_rect)
         
         painter.restore()  # Восстанавливаем состояние
+    
+    def _apply_snapping(self, point: QPointF) -> QPointF:
+        """
+        Применяет привязку к точке
+        Args:
+            point: Исходная точка
+        Returns:
+            Привязанная точка (или исходная, если привязка не найдена)
+        """
+        if not self.snap_manager.enabled:
+            self.current_snap_point = None
+            return point
+        
+        # Получаем все объекты, исключая текущий рисуемый
+        objects = self.scene.get_objects()
+        current_obj = self.scene.get_current_object()
+        
+        # Получаем точки привязки
+        snap_points = self.snap_manager.get_snap_points(objects, exclude_object=current_obj)
+        
+        # Находим ближайшую точку привязки
+        scale_factor = self.viewport.get_scale()
+        result = self.snap_manager.find_nearest_snap(point, snap_points, scale_factor)
+        
+        if result:
+            snapped_point, snap_point = result
+            self.current_snap_point = snap_point
+            return snapped_point
+        else:
+            self.current_snap_point = None
+            return point
     
     def _draw_input_points(self, painter):
         """Рисует точки ввода для визуализации"""
@@ -168,6 +208,63 @@ class CoordinateSystemWidget(QWidget):
                 point_size * 2
             )
             painter.drawEllipse(rect)
+        
+        painter.restore()
+    
+    def _draw_snap_point(self, painter):
+        """Рисует текущую точку привязки"""
+        if not self.current_snap_point:
+            return
+        
+        painter.save()
+        painter.setRenderHint(QPainter.Antialiasing)
+        
+        # Применяем трансформацию viewport
+        transform = self.viewport.get_total_transform()
+        painter.setTransform(transform)
+        
+        # Цвет и стиль точки привязки
+        from core.snapping import SnapType
+        if self.current_snap_point.snap_type == SnapType.END:
+            snap_color = QColor(255, 0, 0)  # Красный для конца
+        elif self.current_snap_point.snap_type == SnapType.MIDDLE:
+            snap_color = QColor(0, 255, 0)  # Зеленый для середины
+        elif self.current_snap_point.snap_type == SnapType.CENTER:
+            snap_color = QColor(0, 0, 255)  # Синий для центра
+        elif self.current_snap_point.snap_type == SnapType.VERTEX:
+            snap_color = QColor(255, 165, 0)  # Оранжевый для вершины
+        else:
+            snap_color = QColor(128, 128, 128)  # Серый по умолчанию
+        
+        # Рисуем крестик для точки привязки
+        scale_factor = self.viewport.get_scale()
+        snap_size = max(8.0 / scale_factor, 1.0)  # Размер крестика
+        
+        snap_pen = QPen(snap_color, 2.0 / scale_factor)
+        painter.setPen(snap_pen)
+        
+        point = self.current_snap_point.point
+        painter.drawLine(
+            point.x() - snap_size, point.y(),
+            point.x() + snap_size, point.y()
+        )
+        painter.drawLine(
+            point.x(), point.y() - snap_size,
+            point.x(), point.y() + snap_size
+        )
+        
+        # Рисуем круг вокруг точки
+        painter.setBrush(Qt.NoBrush)
+        circle_pen = QPen(snap_color, 1.0 / scale_factor, Qt.DashLine)
+        painter.setPen(circle_pen)
+        from PySide6.QtCore import QRectF
+        circle_rect = QRectF(
+            point.x() - snap_size * 1.5,
+            point.y() - snap_size * 1.5,
+            snap_size * 3,
+            snap_size * 3
+        )
+        painter.drawEllipse(circle_rect)
         
         painter.restore()
     
@@ -217,9 +314,16 @@ class CoordinateSystemWidget(QWidget):
             else:
                 world_pos = self.viewport.screen_to_world(event.position())
                 
+                # Применяем привязку
+                world_pos = self._apply_snapping(world_pos)
+                
+                # Проверяем, есть ли активная точка привязки
+                # Если есть - начинаем рисование из этой точки, не проверяя клик по объекту
+                has_active_snap = self.current_snap_point is not None
+                
                 # Проверяем, кликнули ли по существующему объекту (для выделения)
-                # Но только если мы не рисуем новый объект
-                if not self.scene.is_drawing():
+                # Но только если мы не рисуем новый объект И нет активной точки привязки
+                if not self.scene.is_drawing() and not has_active_snap:
                     clicked_obj = self.selection_manager.find_object_at_point(
                         world_pos, self.scene.get_objects()
                     )
@@ -235,9 +339,11 @@ class CoordinateSystemWidget(QWidget):
                         # Клик не по объекту - снимаем выделение (если не Ctrl)
                         if not (event.modifiers() & Qt.ControlModifier):
                             self.selection_manager.clear_selection()
-                            self.update()
+                        self.update()
                 
-                # Начинаем рисование нового объекта только если не кликнули по существующему
+                # Начинаем рисование нового объекта
+                # Если есть активная точка привязки, начинаем из неё
+                # Если нет - начинаем из текущей позиции мыши
                 if not self.scene.is_drawing():
                     # Снимаем выделение при начале рисования нового объекта
                     self.selection_manager.clear_selection()
@@ -405,8 +511,21 @@ class CoordinateSystemWidget(QWidget):
     
     def mouseMoveEvent(self, event):
         """Обработчик движения мыши"""
-        self.cursor_world_coords = self.viewport.screen_to_world(event.position())
+        world_pos = self.viewport.screen_to_world(event.position())
+        self.cursor_world_coords = world_pos
         self.view_changed.emit()
+        
+        # Применяем привязку при наведении мыши (даже если не рисуем)
+        # Это нужно для визуализации точек привязки
+        if not (event.buttons() & Qt.RightButton) and not self.pan_mode and not (event.buttons() & Qt.MiddleButton):
+            # Сохраняем предыдущее состояние привязки
+            had_snap_point = self.current_snap_point is not None
+            # Применяем привязку для визуализации, но не изменяем world_pos если не рисуем
+            self._apply_snapping(world_pos)
+            # Обновляем виджет если состояние привязки изменилось
+            has_snap_point = self.current_snap_point is not None
+            if had_snap_point != has_snap_point:
+                self.update()
         
         # Проверяем, началось ли перетаскивание правой кнопкой
         if (event.buttons() & Qt.RightButton and self.right_button_press_pos):
@@ -451,6 +570,9 @@ class CoordinateSystemWidget(QWidget):
         elif self.scene.is_drawing():
             # Обновляем объект при движении мыши во время рисования
             world_pos = self.viewport.screen_to_world(event.position())
+            
+            # Применяем привязку
+            world_pos = self._apply_snapping(world_pos)
             
             # Для дуги и эллипса во время второго этапа показываем предпросмотр конечной точки
             if self.primitive_type == 'arc':

@@ -288,6 +288,13 @@ class Scene:
                                 self._current_object.start_angle = start_angle
                                 self._current_object.end_angle = end_angle
                                 self._current_object.rotation_angle = rotation_angle
+                                # Сохраняем исходные две точки для привязки (начало и конец)
+                                self._current_object._start_point = self._arc_start_point
+                                self._current_object._end_point = self._arc_end_point
+                                # Сохраняем исходную третью точку для определения правильной стороны дуги
+                                self._current_object._original_vertex_point = QPointF(point)
+                                # Вычисляем и сохраняем реальную вершину дуги (точку на дуге в середине углового диапазона)
+                                self._current_object._vertex_point = self._current_object.get_vertex_point()
                             else:
                                 # Если радиусы невалидны, используем минимальные значения
                                 self._current_object.center = center
@@ -297,6 +304,13 @@ class Scene:
                                 self._current_object.start_angle = start_angle
                                 self._current_object.end_angle = end_angle
                                 self._current_object.rotation_angle = rotation_angle
+                                # Сохраняем исходные две точки для привязки (начало и конец)
+                                self._current_object._start_point = self._arc_start_point
+                                self._current_object._end_point = self._arc_end_point
+                                # Сохраняем исходную третью точку для определения правильной стороны дуги
+                                self._current_object._original_vertex_point = QPointF(point)
+                                # Вычисляем и сохраняем реальную вершину дуги (точку на дуге в середине углового диапазона)
+                                self._current_object._vertex_point = self._current_object.get_vertex_point()
                 elif method == 'center_angles':
                     # Центр и углы - второй клик определяет радиус
                     if self._arc_radius == 0.0:
@@ -655,11 +669,11 @@ class Scene:
         x3 = p3_projected.x()  # Всегда 0
         y3 = p3_projected.y()
         
-        # Если высота слишком мала, используем минимальное значение
+        # If height is too small, use minimum value
         if abs(height) < 1e-6:
-            # Используем минимальную высоту вместо возврата None
+            # Use minimum height instead of returning None
             height = 1.0 if height >= 0 else -1.0
-            # Обновляем y3 с учетом минимальной высоты
+            # Update y3 with minimum height
             y3 = height
         
         # Находим эллипс в локальной системе координат
@@ -705,11 +719,16 @@ class Scene:
         t2 = 0.0
         if abs(y3) < 1e-6:
             # Если высота близка к нулю, используем угол близкий к pi/2
-            t3 = math.pi / 2 if y3 >= 0 else -math.pi / 2
+            # В параметрических координатах: 90° = низ, 270° = верх
+            # Но в локальной системе y3 > 0 означает выше хорды, что соответствует 270° (верх)
+            t3 = -math.pi / 2 if y3 >= 0 else math.pi / 2
         else:
             # Третья точка спроецирована на перпендикуляр (x=0)
             # Для эллипса: x = a*cos(t) = 0, значит cos(t) = 0, t = ±pi/2
-            t3 = math.pi / 2 if y3 > 0 else -math.pi / 2
+            # В параметрических координатах: 90° (pi/2) = низ, 270° (-pi/2 или 3*pi/2) = верх
+            # В локальной системе y3 > 0 означает выше хорды, что соответствует 270° (верх)
+            # Используем -pi/2 (270°) для точки выше хорды
+            t3 = -math.pi / 2 if y3 > 0 else math.pi / 2
         
         # Определяем направление дуги через третью точку
         # Если y3 > 0 (третья точка выше хорды), дуга идет вверх (против часовой стрелки)
@@ -727,39 +746,27 @@ class Scene:
             start_angle = 180
             end_angle = 360
         else:
-            # Третья точка ниже хорды - дуга идет вниз (по часовой стрелке)
-            # От p1 (180°) до p2 (0°) через нижнюю часть эллипса
-            # Это означает, что дуга идет от 180° до 0° по часовой стрелке
-            # Оставляем start_angle = 180, end_angle = 0
-            # В renderer span будет отрицательным (0 - 180 = -180), что означает по часовой стрелке
+            # Third point below chord - arc goes down (clockwise)
+            # From p1 (180°) to p2 (0°) through bottom part of ellipse
+            # This means arc goes from 180° to 0° clockwise
+            # Keep start_angle = 180, end_angle = 0
+            # In renderer span will be negative (0 - 180 = -180), meaning clockwise
             start_angle = 180
             end_angle = 0
         
         # Радиусы эллипса
-        # a - горизонтальный радиус (вдоль хорды)
-        # b - вертикальный радиус (перпендикулярно хорде)
-        # Но нужно учесть поворот эллипса
+        # a - горизонтальный радиус (вдоль хорды) в локальной системе
+        # b - вертикальный радиус (перпендикулярно хорде) в локальной системе
+        # В параметрических координатах эллипса:
+        # x = a * cos(t), y = b * sin(t)
+        # где t - параметрический угол (0° = право, 90° = низ, 180° = лево, 270° = верх)
+        # После поворота на угол chord_angle эти координаты преобразуются в мировые
         
-        # В локальной системе: a - по X, b - по Y
-        # После поворота на угол chord_angle:
-        # radius_x = max(a, b) если эллипс не повернут
-        # Но так как мы используем локальную систему, где хорда горизонтальна,
-        # нам нужно правильно определить радиусы в мировых координатах
-        
-        # Для простоты: если a > b, то radius_x = a, radius_y = b
-        # Иначе radius_x = b, radius_y = a
-        # Но нужно учесть, что эллипс повернут на угол chord_angle
-        
-        # Более правильный подход: радиусы в локальной системе
-        # После поворота они остаются теми же, но оси меняются
-        # Используем a и b как есть, но нужно правильно определить их ориентацию
-        
-        radius_x = max(a, b)
-        radius_y = min(a, b)
-        
-        # Но это не совсем правильно, так как эллипс может быть повернут
-        # Для корректной работы нужно использовать a и b напрямую
-        # и учитывать поворот при отрисовке
+        # Используем a и b напрямую - они уже правильно определены в локальной системе
+        # radius_x соответствует полуоси a (вдоль хорды)
+        # radius_y соответствует полуоси b (перпендикулярно хорде)
+        radius_x = a  # Полуось вдоль хорды
+        radius_y = b  # Полуось перпендикулярно хорде
         
         # Угол поворота эллипса - это угол хорды
         rotation_angle = chord_angle
