@@ -212,10 +212,12 @@ class Arc(GeometricObject, Drawable):
 class Rectangle(GeometricObject, Drawable):
     """Класс для представления прямоугольника"""
     
-    def __init__(self, top_left: QPointF, bottom_right: QPointF, style=None, color=None, width=None):
+    def __init__(self, top_left: QPointF, bottom_right: QPointF, style=None, color=None, width=None, 
+                 fillet_radius: float = 0.0):
         super().__init__()
         self.top_left = QPointF(top_left) if not isinstance(top_left, QPointF) else top_left
         self.bottom_right = QPointF(bottom_right) if not isinstance(bottom_right, QPointF) else bottom_right
+        self.fillet_radius = fillet_radius  # Радиус скругления углов (0 = без скругления)
         self._style = None
         self._style_name = None
         

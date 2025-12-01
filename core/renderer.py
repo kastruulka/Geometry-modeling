@@ -453,7 +453,27 @@ class PrimitiveRenderer:
                 painter.setPen(pen)
                 painter.setBrush(Qt.NoBrush)
                 rect = rectangle.get_bounding_box()
-                painter.drawRect(rect)
+                # Проверяем, есть ли скругление углов
+                fillet_radius = getattr(rectangle, 'fillet_radius', 0.0)
+                if fillet_radius > 0:
+                    # Рисуем прямоугольник со скругленными углами
+                    path = QPainterPath()
+                    w = rect.width()
+                    h = rect.height()
+                    r = min(fillet_radius, w / 2, h / 2)  # Ограничиваем радиус
+                    path.moveTo(rect.x() + r, rect.y())
+                    path.lineTo(rect.x() + w - r, rect.y())
+                    path.arcTo(rect.x() + w - 2*r, rect.y(), 2*r, 2*r, 90, -90)
+                    path.lineTo(rect.x() + w, rect.y() + h - r)
+                    path.arcTo(rect.x() + w - 2*r, rect.y() + h - 2*r, 2*r, 2*r, 0, -90)
+                    path.lineTo(rect.x() + r, rect.y() + h)
+                    path.arcTo(rect.x(), rect.y() + h - 2*r, 2*r, 2*r, 270, -90)
+                    path.lineTo(rect.x(), rect.y() + r)
+                    path.arcTo(rect.x(), rect.y(), 2*r, 2*r, 180, -90)
+                    path.closeSubpath()
+                    painter.drawPath(path)
+                else:
+                    painter.drawRect(rect)
         else:
             pen = QPen(rectangle.color, rectangle.width)
             if is_selected:
@@ -461,7 +481,27 @@ class PrimitiveRenderer:
             painter.setPen(pen)
             painter.setBrush(Qt.NoBrush)
             rect = rectangle.get_bounding_box()
-            painter.drawRect(rect)
+            # Проверяем, есть ли скругление углов
+            fillet_radius = getattr(rectangle, 'fillet_radius', 0.0)
+            if fillet_radius > 0:
+                # Рисуем прямоугольник со скругленными углами
+                path = QPainterPath()
+                w = rect.width()
+                h = rect.height()
+                r = min(fillet_radius, w / 2, h / 2)  # Ограничиваем радиус
+                path.moveTo(rect.x() + r, rect.y())
+                path.lineTo(rect.x() + w - r, rect.y())
+                path.arcTo(rect.x() + w - 2*r, rect.y(), 2*r, 2*r, 90, -90)
+                path.lineTo(rect.x() + w, rect.y() + h - r)
+                path.arcTo(rect.x() + w - 2*r, rect.y() + h - 2*r, 2*r, 2*r, 0, -90)
+                path.lineTo(rect.x() + r, rect.y() + h)
+                path.arcTo(rect.x(), rect.y() + h - 2*r, 2*r, 2*r, 270, -90)
+                path.lineTo(rect.x(), rect.y() + r)
+                path.arcTo(rect.x(), rect.y(), 2*r, 2*r, 180, -90)
+                path.closeSubpath()
+                painter.drawPath(path)
+            else:
+                painter.drawRect(rect)
     
     @staticmethod
     def draw_ellipse(painter: QPainter, ellipse, scale_factor: float = 1.0, is_selected: bool = False):
@@ -759,6 +799,12 @@ class PrimitiveRenderer:
     @staticmethod
     def _draw_wavy_rectangle(painter: QPainter, rectangle, pen: QPen):
         """Отрисовывает волнистый прямоугольник"""
+        fillet_radius = getattr(rectangle, 'fillet_radius', 0.0)
+        if fillet_radius > 0:
+            # Для скругленных углов используем обычную отрисовку со скруглениями
+            PrimitiveRenderer.draw_rectangle(painter, rectangle, 1.0, False)
+            return
+        
         bbox = rectangle.get_bounding_box()
         corners = [
             QPointF(bbox.left(), bbox.top()),
@@ -776,6 +822,12 @@ class PrimitiveRenderer:
     @staticmethod
     def _draw_broken_rectangle(painter: QPainter, rectangle, pen: QPen):
         """Отрисовывает прямоугольник с изломами"""
+        fillet_radius = getattr(rectangle, 'fillet_radius', 0.0)
+        if fillet_radius > 0:
+            # Для скругленных углов используем обычную отрисовку со скруглениями
+            PrimitiveRenderer.draw_rectangle(painter, rectangle, 1.0, False)
+            return
+        
         bbox = rectangle.get_bounding_box()
         corners = [
             QPointF(bbox.left(), bbox.top()),
@@ -793,6 +845,12 @@ class PrimitiveRenderer:
     @staticmethod
     def _draw_dashed_rectangle(painter: QPainter, rectangle, pen: QPen, style):
         """Отрисовывает штриховой прямоугольник"""
+        fillet_radius = getattr(rectangle, 'fillet_radius', 0.0)
+        if fillet_radius > 0:
+            # Для скругленных углов используем обычную отрисовку со скруглениями
+            PrimitiveRenderer.draw_rectangle(painter, rectangle, 1.0, False)
+            return
+        
         bbox = rectangle.get_bounding_box()
         corners = [
             QPointF(bbox.left(), bbox.top()),
@@ -810,6 +868,12 @@ class PrimitiveRenderer:
     @staticmethod
     def _draw_dash_dot_rectangle(painter: QPainter, rectangle, pen: QPen, style):
         """Отрисовывает штрихпунктирный прямоугольник"""
+        fillet_radius = getattr(rectangle, 'fillet_radius', 0.0)
+        if fillet_radius > 0:
+            # Для скругленных углов используем обычную отрисовку со скруглениями
+            PrimitiveRenderer.draw_rectangle(painter, rectangle, 1.0, False)
+            return
+        
         bbox = rectangle.get_bounding_box()
         corners = [
             QPointF(bbox.left(), bbox.top()),

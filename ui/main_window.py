@@ -77,6 +77,55 @@ class MainWindow(QMainWindow):
         self.primitive_combo.currentTextChanged.connect(self.change_primitive_type)
         primitive_layout.addWidget(self.primitive_combo)
         tools_layout.addLayout(primitive_layout)
+        
+        # Выбор метода создания окружности (скрыто по умолчанию)
+        circle_method_layout = QHBoxLayout()
+        circle_method_layout.addWidget(QLabel("Способ создания:"))
+        self.circle_method_combo = QComboBox()
+        self.circle_method_combo.addItems([
+            "Центр и радиус",
+            "Центр и диаметр",
+            "Две точки",
+            "Три точки на окружности"
+        ])
+        self.circle_method_combo.currentTextChanged.connect(self.change_circle_method)
+        circle_method_layout.addWidget(self.circle_method_combo)
+        self.circle_method_widget = QWidget()
+        self.circle_method_widget.setLayout(circle_method_layout)
+        self.circle_method_widget.hide()
+        tools_layout.addWidget(self.circle_method_widget)
+        
+        # Выбор метода создания дуги (скрыто по умолчанию)
+        arc_method_layout = QHBoxLayout()
+        arc_method_layout.addWidget(QLabel("Способ создания:"))
+        self.arc_method_combo = QComboBox()
+        self.arc_method_combo.addItems([
+            "Три точки (начало, вторая точка, конец)",
+            "Центр, начальный угол, конечный угол"
+        ])
+        self.arc_method_combo.currentTextChanged.connect(self.change_arc_method)
+        arc_method_layout.addWidget(self.arc_method_combo)
+        self.arc_method_widget = QWidget()
+        self.arc_method_widget.setLayout(arc_method_layout)
+        self.arc_method_widget.hide()
+        tools_layout.addWidget(self.arc_method_widget)
+        
+        # Выбор метода создания прямоугольника (скрыто по умолчанию)
+        rectangle_method_layout = QHBoxLayout()
+        rectangle_method_layout.addWidget(QLabel("Способ создания:"))
+        self.rectangle_method_combo = QComboBox()
+        self.rectangle_method_combo.addItems([
+            "Две противоположные точки",
+            "Одна точка, ширина и высота",
+            "Центр, ширина и высота",
+            "С фасками/скруглениями при создании"
+        ])
+        self.rectangle_method_combo.currentTextChanged.connect(self.change_rectangle_method)
+        rectangle_method_layout.addWidget(self.rectangle_method_combo)
+        self.rectangle_method_widget = QWidget()
+        self.rectangle_method_widget.setLayout(rectangle_method_layout)
+        self.rectangle_method_widget.hide()
+        tools_layout.addWidget(self.rectangle_method_widget)
 
         self.delete_last_btn = QPushButton("Удалить последний")
         self.delete_last_btn.clicked.connect(self.delete_last_line)
@@ -94,7 +143,8 @@ class MainWindow(QMainWindow):
         input_layout = QGridLayout()
         
         # начальная точка (всегда в декартовых координатах)
-        input_layout.addWidget(QLabel("Начальная точка (x, y):"), 0, 0)
+        self.start_point_label_widget = QLabel("Начальная точка (x, y):")
+        input_layout.addWidget(self.start_point_label_widget, 0, 0)
         self.start_x_spin = QDoubleSpinBox()
         self.start_x_spin.setRange(-1000, 1000)
         self.start_x_spin.setDecimals(2)
@@ -161,13 +211,263 @@ class MainWindow(QMainWindow):
         self.polar_group.setLayout(polar_layout)
         self.polar_group.hide()
         
+        # Группы для окружности
+        # Центр и радиус
+        self.circle_center_radius_group = QWidget()
+        circle_cr_layout = QHBoxLayout()
+        circle_cr_layout.addWidget(QLabel("Радиус:"))
+        self.circle_radius_spin = QDoubleSpinBox()
+        self.circle_radius_spin.setRange(0, 1000)
+        self.circle_radius_spin.setDecimals(2)
+        self.circle_radius_spin.setSingleStep(10)
+        self.circle_radius_spin.setValue(50)
+        self.circle_radius_spin.valueChanged.connect(self.on_circle_coordinates_changed)
+        circle_cr_layout.addWidget(self.circle_radius_spin)
+        self.circle_center_radius_group.setLayout(circle_cr_layout)
+        self.circle_center_radius_group.hide()
+        
+        # Центр и диаметр
+        self.circle_center_diameter_group = QWidget()
+        circle_cd_layout = QHBoxLayout()
+        circle_cd_layout.addWidget(QLabel("Диаметр:"))
+        self.circle_diameter_spin = QDoubleSpinBox()
+        self.circle_diameter_spin.setRange(0, 1000)
+        self.circle_diameter_spin.setDecimals(2)
+        self.circle_diameter_spin.setSingleStep(10)
+        self.circle_diameter_spin.setValue(100)
+        self.circle_diameter_spin.valueChanged.connect(self.on_circle_coordinates_changed)
+        circle_cd_layout.addWidget(self.circle_diameter_spin)
+        self.circle_center_diameter_group.setLayout(circle_cd_layout)
+        self.circle_center_diameter_group.hide()
+        
+        # Две точки
+        self.circle_two_points_group = QWidget()
+        circle_2p_layout = QGridLayout()
+        circle_2p_layout.addWidget(QLabel("Вторая точка:"), 0, 0)
+        self.circle_point2_x_spin = QDoubleSpinBox()
+        self.circle_point2_x_spin.setRange(-1000, 1000)
+        self.circle_point2_x_spin.setDecimals(2)
+        self.circle_point2_x_spin.setSingleStep(10)
+        self.circle_point2_x_spin.valueChanged.connect(self.on_circle_coordinates_changed)
+        self.circle_point2_y_spin = QDoubleSpinBox()
+        self.circle_point2_y_spin.setRange(-1000, 1000)
+        self.circle_point2_y_spin.setDecimals(2)
+        self.circle_point2_y_spin.setSingleStep(10)
+        self.circle_point2_y_spin.valueChanged.connect(self.on_circle_coordinates_changed)
+        circle_2p_layout.addWidget(QLabel("x:"), 0, 1)
+        circle_2p_layout.addWidget(self.circle_point2_x_spin, 0, 2)
+        circle_2p_layout.addWidget(QLabel("y:"), 0, 3)
+        circle_2p_layout.addWidget(self.circle_point2_y_spin, 0, 4)
+        self.circle_two_points_group.setLayout(circle_2p_layout)
+        self.circle_two_points_group.hide()
+        
+        # Три точки
+        self.circle_three_points_group = QWidget()
+        circle_3p_layout = QGridLayout()
+        circle_3p_layout.addWidget(QLabel("Вторая точка:"), 0, 0)
+        self.circle_point2_x_spin_3p = QDoubleSpinBox()
+        self.circle_point2_x_spin_3p.setRange(-1000, 1000)
+        self.circle_point2_x_spin_3p.setDecimals(2)
+        self.circle_point2_x_spin_3p.setSingleStep(10)
+        self.circle_point2_x_spin_3p.valueChanged.connect(self.on_circle_coordinates_changed)
+        self.circle_point2_y_spin_3p = QDoubleSpinBox()
+        self.circle_point2_y_spin_3p.setRange(-1000, 1000)
+        self.circle_point2_y_spin_3p.setDecimals(2)
+        self.circle_point2_y_spin_3p.setSingleStep(10)
+        self.circle_point2_y_spin_3p.valueChanged.connect(self.on_circle_coordinates_changed)
+        circle_3p_layout.addWidget(QLabel("x:"), 0, 1)
+        circle_3p_layout.addWidget(self.circle_point2_x_spin_3p, 0, 2)
+        circle_3p_layout.addWidget(QLabel("y:"), 0, 3)
+        circle_3p_layout.addWidget(self.circle_point2_y_spin_3p, 0, 4)
+        
+        circle_3p_layout.addWidget(QLabel("Третья точка:"), 1, 0)
+        self.circle_point3_x_spin = QDoubleSpinBox()
+        self.circle_point3_x_spin.setRange(-1000, 1000)
+        self.circle_point3_x_spin.setDecimals(2)
+        self.circle_point3_x_spin.setSingleStep(10)
+        self.circle_point3_x_spin.valueChanged.connect(self.on_circle_coordinates_changed)
+        self.circle_point3_y_spin = QDoubleSpinBox()
+        self.circle_point3_y_spin.setRange(-1000, 1000)
+        self.circle_point3_y_spin.setDecimals(2)
+        self.circle_point3_y_spin.setSingleStep(10)
+        self.circle_point3_y_spin.valueChanged.connect(self.on_circle_coordinates_changed)
+        circle_3p_layout.addWidget(QLabel("x:"), 1, 1)
+        circle_3p_layout.addWidget(self.circle_point3_x_spin, 1, 2)
+        circle_3p_layout.addWidget(QLabel("y:"), 1, 3)
+        circle_3p_layout.addWidget(self.circle_point3_y_spin, 1, 4)
+        self.circle_three_points_group.setLayout(circle_3p_layout)
+        self.circle_three_points_group.hide()
+        
+        # Группы для дуги
+        # Три точки
+        self.arc_three_points_group = QWidget()
+        arc_3p_layout = QGridLayout()
+        arc_3p_layout.addWidget(QLabel("Вторая точка:"), 0, 0)
+        self.arc_point2_x_spin = QDoubleSpinBox()
+        self.arc_point2_x_spin.setRange(-1000, 1000)
+        self.arc_point2_x_spin.setDecimals(2)
+        self.arc_point2_x_spin.setSingleStep(10)
+        self.arc_point2_x_spin.valueChanged.connect(self.on_arc_coordinates_changed)
+        self.arc_point2_y_spin = QDoubleSpinBox()
+        self.arc_point2_y_spin.setRange(-1000, 1000)
+        self.arc_point2_y_spin.setDecimals(2)
+        self.arc_point2_y_spin.setSingleStep(10)
+        self.arc_point2_y_spin.valueChanged.connect(self.on_arc_coordinates_changed)
+        arc_3p_layout.addWidget(QLabel("x:"), 0, 1)
+        arc_3p_layout.addWidget(self.arc_point2_x_spin, 0, 2)
+        arc_3p_layout.addWidget(QLabel("y:"), 0, 3)
+        arc_3p_layout.addWidget(self.arc_point2_y_spin, 0, 4)
+        
+        arc_3p_layout.addWidget(QLabel("Третья точка:"), 1, 0)
+        self.arc_point3_x_spin = QDoubleSpinBox()
+        self.arc_point3_x_spin.setRange(-1000, 1000)
+        self.arc_point3_x_spin.setDecimals(2)
+        self.arc_point3_x_spin.setSingleStep(10)
+        self.arc_point3_x_spin.valueChanged.connect(self.on_arc_coordinates_changed)
+        self.arc_point3_y_spin = QDoubleSpinBox()
+        self.arc_point3_y_spin.setRange(-1000, 1000)
+        self.arc_point3_y_spin.setDecimals(2)
+        self.arc_point3_y_spin.setSingleStep(10)
+        self.arc_point3_y_spin.valueChanged.connect(self.on_arc_coordinates_changed)
+        arc_3p_layout.addWidget(QLabel("x:"), 1, 1)
+        arc_3p_layout.addWidget(self.arc_point3_x_spin, 1, 2)
+        arc_3p_layout.addWidget(QLabel("y:"), 1, 3)
+        arc_3p_layout.addWidget(self.arc_point3_y_spin, 1, 4)
+        self.arc_three_points_group.setLayout(arc_3p_layout)
+        self.arc_three_points_group.hide()
+        
+        # Центр, начальный угол, конечный угол
+        self.arc_center_angles_group = QWidget()
+        arc_ca_layout = QGridLayout()
+        arc_ca_layout.addWidget(QLabel("Радиус:"), 0, 0)
+        self.arc_radius_spin = QDoubleSpinBox()
+        self.arc_radius_spin.setRange(0, 1000)
+        self.arc_radius_spin.setDecimals(2)
+        self.arc_radius_spin.setSingleStep(10)
+        self.arc_radius_spin.setValue(50)
+        self.arc_radius_spin.valueChanged.connect(self.on_arc_coordinates_changed)
+        arc_ca_layout.addWidget(self.arc_radius_spin, 0, 1, 1, 4)
+        
+        arc_ca_layout.addWidget(QLabel("Начальный угол:"), 1, 0)
+        self.arc_start_angle_spin = QDoubleSpinBox()
+        self.arc_start_angle_spin.setRange(-360, 360)
+        self.arc_start_angle_spin.setDecimals(2)
+        self.arc_start_angle_spin.setSingleStep(15)
+        self.arc_start_angle_spin.setValue(0)
+        self.arc_start_angle_spin.valueChanged.connect(self.on_arc_coordinates_changed)
+        arc_ca_layout.addWidget(self.arc_start_angle_spin, 1, 1, 1, 2)
+        arc_ca_layout.addWidget(QLabel("°"), 1, 3)
+        
+        arc_ca_layout.addWidget(QLabel("Конечный угол:"), 2, 0)
+        self.arc_end_angle_spin = QDoubleSpinBox()
+        self.arc_end_angle_spin.setRange(-360, 360)
+        self.arc_end_angle_spin.setDecimals(2)
+        self.arc_end_angle_spin.setSingleStep(15)
+        self.arc_end_angle_spin.setValue(90)
+        self.arc_end_angle_spin.valueChanged.connect(self.on_arc_coordinates_changed)
+        arc_ca_layout.addWidget(self.arc_end_angle_spin, 2, 1, 1, 2)
+        arc_ca_layout.addWidget(QLabel("°"), 2, 3)
+        self.arc_center_angles_group.setLayout(arc_ca_layout)
+        self.arc_center_angles_group.hide()
+        
         input_layout.addWidget(self.cartesian_group, 1, 1, 1, 4)
         input_layout.addWidget(self.polar_group, 1, 1, 1, 4)
+        input_layout.addWidget(self.circle_center_radius_group, 1, 1, 1, 4)
+        input_layout.addWidget(self.circle_center_diameter_group, 1, 1, 1, 4)
+        input_layout.addWidget(self.circle_two_points_group, 1, 1, 1, 4)
+        input_layout.addWidget(self.circle_three_points_group, 1, 1, 2, 4)
+        input_layout.addWidget(self.arc_three_points_group, 1, 1, 2, 4)
+        input_layout.addWidget(self.arc_center_angles_group, 1, 1, 3, 4)
+        
+        # Группы для прямоугольника
+        # Две противоположные точки (используем существующие поля end_x_spin и end_y_spin)
+        # Одна точка, ширина и высота
+        self.rectangle_point_size_group = QWidget()
+        rect_ps_layout = QGridLayout()
+        rect_ps_layout.addWidget(QLabel("Ширина:"), 0, 0)
+        self.rectangle_width_spin = QDoubleSpinBox()
+        self.rectangle_width_spin.setRange(0, 1000)
+        self.rectangle_width_spin.setDecimals(2)
+        self.rectangle_width_spin.setSingleStep(10)
+        self.rectangle_width_spin.setValue(100)
+        self.rectangle_width_spin.valueChanged.connect(self.on_rectangle_coordinates_changed)
+        rect_ps_layout.addWidget(self.rectangle_width_spin, 0, 1, 1, 4)
+        
+        rect_ps_layout.addWidget(QLabel("Высота:"), 1, 0)
+        self.rectangle_height_spin = QDoubleSpinBox()
+        self.rectangle_height_spin.setRange(0, 1000)
+        self.rectangle_height_spin.setDecimals(2)
+        self.rectangle_height_spin.setSingleStep(10)
+        self.rectangle_height_spin.setValue(100)
+        self.rectangle_height_spin.valueChanged.connect(self.on_rectangle_coordinates_changed)
+        rect_ps_layout.addWidget(self.rectangle_height_spin, 1, 1, 1, 4)
+        self.rectangle_point_size_group.setLayout(rect_ps_layout)
+        self.rectangle_point_size_group.hide()
+        
+        # Центр, ширина и высота
+        self.rectangle_center_size_group = QWidget()
+        rect_cs_layout = QGridLayout()
+        rect_cs_layout.addWidget(QLabel("Ширина:"), 0, 0)
+        self.rectangle_center_width_spin = QDoubleSpinBox()
+        self.rectangle_center_width_spin.setRange(0, 1000)
+        self.rectangle_center_width_spin.setDecimals(2)
+        self.rectangle_center_width_spin.setSingleStep(10)
+        self.rectangle_center_width_spin.setValue(100)
+        self.rectangle_center_width_spin.valueChanged.connect(self.on_rectangle_coordinates_changed)
+        rect_cs_layout.addWidget(self.rectangle_center_width_spin, 0, 1, 1, 4)
+        
+        rect_cs_layout.addWidget(QLabel("Высота:"), 1, 0)
+        self.rectangle_center_height_spin = QDoubleSpinBox()
+        self.rectangle_center_height_spin.setRange(0, 1000)
+        self.rectangle_center_height_spin.setDecimals(2)
+        self.rectangle_center_height_spin.setSingleStep(10)
+        self.rectangle_center_height_spin.setValue(100)
+        self.rectangle_center_height_spin.valueChanged.connect(self.on_rectangle_coordinates_changed)
+        rect_cs_layout.addWidget(self.rectangle_center_height_spin, 1, 1, 1, 4)
+        self.rectangle_center_size_group.setLayout(rect_cs_layout)
+        self.rectangle_center_size_group.hide()
+        
+        # С фасками/скруглениями
+        self.rectangle_fillets_group = QWidget()
+        rect_fill_layout = QGridLayout()
+        rect_fill_layout.addWidget(QLabel("Вторая точка:"), 0, 0)
+        self.rectangle_fillet_point2_x_spin = QDoubleSpinBox()
+        self.rectangle_fillet_point2_x_spin.setRange(-1000, 1000)
+        self.rectangle_fillet_point2_x_spin.setDecimals(2)
+        self.rectangle_fillet_point2_x_spin.setSingleStep(10)
+        self.rectangle_fillet_point2_x_spin.valueChanged.connect(self.on_rectangle_coordinates_changed)
+        self.rectangle_fillet_point2_y_spin = QDoubleSpinBox()
+        self.rectangle_fillet_point2_y_spin.setRange(-1000, 1000)
+        self.rectangle_fillet_point2_y_spin.setDecimals(2)
+        self.rectangle_fillet_point2_y_spin.setSingleStep(10)
+        self.rectangle_fillet_point2_y_spin.valueChanged.connect(self.on_rectangle_coordinates_changed)
+        rect_fill_layout.addWidget(QLabel("x:"), 0, 1)
+        rect_fill_layout.addWidget(self.rectangle_fillet_point2_x_spin, 0, 2)
+        rect_fill_layout.addWidget(QLabel("y:"), 0, 3)
+        rect_fill_layout.addWidget(self.rectangle_fillet_point2_y_spin, 0, 4)
+        
+        rect_fill_layout.addWidget(QLabel("Радиус скругления:"), 1, 0)
+        self.rectangle_fillet_radius_spin = QDoubleSpinBox()
+        self.rectangle_fillet_radius_spin.setRange(0, 1000)
+        self.rectangle_fillet_radius_spin.setDecimals(2)
+        self.rectangle_fillet_radius_spin.setSingleStep(5)
+        self.rectangle_fillet_radius_spin.setValue(10)
+        self.rectangle_fillet_radius_spin.valueChanged.connect(self.on_rectangle_coordinates_changed)
+        rect_fill_layout.addWidget(self.rectangle_fillet_radius_spin, 1, 1, 1, 4)
+        self.rectangle_fillets_group.setLayout(rect_fill_layout)
+        self.rectangle_fillets_group.hide()
+        
+        input_layout.addWidget(self.circle_three_points_group, 1, 1, 2, 4)
+        input_layout.addWidget(self.arc_three_points_group, 1, 1, 2, 4)
+        input_layout.addWidget(self.arc_center_angles_group, 1, 1, 3, 4)
+        input_layout.addWidget(self.rectangle_point_size_group, 1, 1, 2, 4)
+        input_layout.addWidget(self.rectangle_center_size_group, 1, 1, 2, 4)
+        input_layout.addWidget(self.rectangle_fillets_group, 1, 1, 2, 4)
         
         # кнопка применения координат
         self.apply_coords_btn = QPushButton("Применить координаты")
         self.apply_coords_btn.clicked.connect(self.apply_coordinates)
-        input_layout.addWidget(self.apply_coords_btn, 2, 0, 1, 5)
+        input_layout.addWidget(self.apply_coords_btn, 4, 0, 1, 5)
         
         input_group.setLayout(input_layout)
         left_panel.addWidget(input_group)
@@ -311,6 +611,8 @@ class MainWindow(QMainWindow):
         self.canvas.view_changed.connect(self.update_statusbar)
         # подключаем сигнал завершения рисования отрезка для обновления информации
         self.canvas.line_finished.connect(self.update_info)
+        # подключаем сигнал начала рисования прямоугольника для установки размеров
+        self.canvas.rectangle_drawing_started.connect(self.update_rectangle_on_drawing_start)
         self.update_statusbar()
     
     def create_context_menu(self, position):
@@ -626,9 +928,21 @@ class MainWindow(QMainWindow):
         self.update_info()
     
     def apply_coordinates(self):
-        # координаты из полей ввода и фикс отрезка
+        # координаты из полей ввода и фикс объекта
         start_point = QPointF(self.start_x_spin.value(), self.start_y_spin.value())
         
+        # Проверяем, создаем ли мы окружность, дугу или прямоугольник
+        if self.canvas.primitive_type == 'circle':
+            self.apply_circle_coordinates(start_point)
+            return
+        elif self.canvas.primitive_type == 'arc':
+            self.apply_arc_coordinates(start_point)
+            return
+        elif self.canvas.primitive_type == 'rectangle':
+            self.apply_rectangle_coordinates(start_point)
+            return
+        
+        # Для остальных примитивов (отрезок и т.д.)
         if self.coordinate_system == "cartesian":
             end_point = QPointF(self.end_x_spin.value(), self.end_y_spin.value())
         else:
@@ -652,35 +966,317 @@ class MainWindow(QMainWindow):
         
         # фиксируем отрезок (apply=True)
         self.canvas.set_points_from_input(start_point, end_point, apply=True)
+    
+    def apply_circle_coordinates(self, center_point):
+        """Применяет координаты для создания окружности"""
+        from widgets.primitives import Circle
         
-        # очищаем текущий отрезок после фиксации
-        self.canvas.current_line = None
-        self.canvas.is_drawing = False
+        # Отменяем текущее рисование, если оно есть
+        if self.canvas.scene.is_drawing():
+            self.canvas.scene.cancel_drawing()
         
-        # АВТОМАТИЧЕСКИ ПОКАЗЫВАЕМ ВСЕ ОТРЕЗКИ С СОХРАНЕНИЕМ ПОВОРОТА
+        method_name = self.circle_method_combo.currentText()
+        style = None
+        if self.style_manager:
+            style = self.style_manager.get_current_style()
+        
+        if method_name == "Центр и радиус":
+            radius = self.circle_radius_spin.value()
+            circle = Circle(center_point, radius, style=style, 
+                          color=self.canvas.line_color, width=self.canvas.line_width)
+            self.canvas.scene.add_object(circle)
+        elif method_name == "Центр и диаметр":
+            diameter = self.circle_diameter_spin.value()
+            radius = diameter / 2.0
+            circle = Circle(center_point, radius, style=style,
+                          color=self.canvas.line_color, width=self.canvas.line_width)
+            self.canvas.scene.add_object(circle)
+        elif method_name == "Две точки":
+            point2 = QPointF(self.circle_point2_x_spin.value(), self.circle_point2_y_spin.value())
+            import math
+            dx = point2.x() - center_point.x()
+            dy = point2.y() - center_point.y()
+            radius = math.sqrt(dx*dx + dy*dy) / 2.0
+            center_x = (center_point.x() + point2.x()) / 2.0
+            center_y = (center_point.y() + point2.y()) / 2.0
+            center = QPointF(center_x, center_y)
+            circle = Circle(center, radius, style=style,
+                          color=self.canvas.line_color, width=self.canvas.line_width)
+            self.canvas.scene.add_object(circle)
+        elif method_name == "Три точки на окружности":
+            point2 = QPointF(self.circle_point2_x_spin_3p.value(), self.circle_point2_y_spin_3p.value())
+            point3 = QPointF(self.circle_point3_x_spin.value(), self.circle_point3_y_spin.value())
+            # Используем метод из Scene для вычисления окружности по трем точкам
+            import math
+            # Вычисляем центр и радиус окружности по трем точкам
+            x1, y1 = center_point.x(), center_point.y()
+            x2, y2 = point2.x(), point2.y()
+            x3, y3 = point3.x(), point3.y()
+            
+            A = x1 * (y2 - y3) - y1 * (x2 - x3) + (x2 * y3 - x3 * y2)
+            
+            if abs(A) < 1e-10:
+                # Точки коллинеарны
+                return
+            
+            B = (x1*x1 + y1*y1) * (y3 - y2) + (x2*x2 + y2*y2) * (y1 - y3) + (x3*x3 + y3*y3) * (y2 - y1)
+            C = (x1*x1 + y1*y1) * (x2 - x3) + (x2*x2 + y2*y2) * (x3 - x1) + (x3*x3 + y3*y3) * (x1 - x2)
+            
+            center_x = -B / (2 * A)
+            center_y = -C / (2 * A)
+            center = QPointF(center_x, center_y)
+            
+            dx = x1 - center_x
+            dy = y1 - center_y
+            radius = math.sqrt(dx*dx + dy*dy)
+            if center and radius > 0:
+                circle = Circle(center, radius, style=style,
+                              color=self.canvas.line_color, width=self.canvas.line_width)
+                self.canvas.scene.add_object(circle)
+        
+        self.canvas.update()
+        # Автоматически показываем все объекты с сохранением поворота
         self.canvas.show_all_preserve_rotation()
         
-        # сбрасываем значения для следующего отрезка
+        # Убеждаемся, что нет активного рисования
+        if self.canvas.scene.is_drawing():
+            self.canvas.scene.cancel_drawing()
+        
+        # Сбрасываем значения для следующей окружности
         self.start_x_spin.blockSignals(True)
         self.start_y_spin.blockSignals(True)
-        self.end_x_spin.blockSignals(True)
-        self.end_y_spin.blockSignals(True)
-        self.radius_spin.blockSignals(True)
-        self.angle_spin.blockSignals(True)
-        
         self.start_x_spin.setValue(0)
         self.start_y_spin.setValue(0)
-        self.end_x_spin.setValue(100)
-        self.end_y_spin.setValue(100)
-        self.radius_spin.setValue(100)
-        self.angle_spin.setValue(45)
-        
         self.start_x_spin.blockSignals(False)
         self.start_y_spin.blockSignals(False)
-        self.end_x_spin.blockSignals(False)
-        self.end_y_spin.blockSignals(False)
-        self.radius_spin.blockSignals(False)
-        self.angle_spin.blockSignals(False)
+        
+        # Сбрасываем значения в зависимости от метода
+        method_name = self.circle_method_combo.currentText()
+        if method_name == "Центр и радиус":
+            self.circle_radius_spin.blockSignals(True)
+            self.circle_radius_spin.setValue(50)
+            self.circle_radius_spin.blockSignals(False)
+        elif method_name == "Центр и диаметр":
+            self.circle_diameter_spin.blockSignals(True)
+            self.circle_diameter_spin.setValue(100)
+            self.circle_diameter_spin.blockSignals(False)
+        elif method_name == "Две точки":
+            self.circle_point2_x_spin.blockSignals(True)
+            self.circle_point2_y_spin.blockSignals(True)
+            self.circle_point2_x_spin.setValue(100)
+            self.circle_point2_y_spin.setValue(0)
+            self.circle_point2_x_spin.blockSignals(False)
+            self.circle_point2_y_spin.blockSignals(False)
+        elif method_name == "Три точки на окружности":
+            self.circle_point2_x_spin_3p.blockSignals(True)
+            self.circle_point2_y_spin_3p.blockSignals(True)
+            self.circle_point3_x_spin.blockSignals(True)
+            self.circle_point3_y_spin.blockSignals(True)
+            self.circle_point2_x_spin_3p.setValue(100)
+            self.circle_point2_y_spin_3p.setValue(0)
+            self.circle_point3_x_spin.setValue(0)
+            self.circle_point3_y_spin.setValue(100)
+            self.circle_point2_x_spin_3p.blockSignals(False)
+            self.circle_point2_y_spin_3p.blockSignals(False)
+            self.circle_point3_x_spin.blockSignals(False)
+            self.circle_point3_y_spin.blockSignals(False)
+        
+        self.update_info()
+    
+    def apply_arc_coordinates(self, start_point):
+        """Применяет координаты для создания дуги"""
+        from widgets.primitives import Arc
+        
+        # Отменяем текущее рисование, если оно есть
+        if self.canvas.scene.is_drawing():
+            self.canvas.scene.cancel_drawing()
+        
+        method_name = self.arc_method_combo.currentText()
+        style = None
+        if self.style_manager:
+            style = self.style_manager.get_current_style()
+        
+        if method_name == "Три точки (начало, вторая точка, конец)":
+            point2 = QPointF(self.arc_point2_x_spin.value(), self.arc_point2_y_spin.value())
+            point3 = QPointF(self.arc_point3_x_spin.value(), self.arc_point3_y_spin.value())
+            # Вычисляем параметры дуги по трем точкам
+            result = self.canvas.scene._calculate_ellipse_arc_from_three_points(
+                start_point, point2, point3
+            )
+            if len(result) == 6 and result[0] is not None:
+                center, radius_x, radius_y, start_angle, end_angle, rotation_angle = result
+                if radius_x > 0 and radius_y > 0:
+                    arc = Arc(center, radius_x, radius_y, start_angle, end_angle, style=style,
+                            color=self.canvas.line_color, width=self.canvas.line_width, rotation_angle=rotation_angle)
+                    self.canvas.scene.add_object(arc)
+        elif method_name == "Центр, начальный угол, конечный угол":
+            radius = self.arc_radius_spin.value()
+            start_angle = self.arc_start_angle_spin.value()
+            end_angle = self.arc_end_angle_spin.value()
+            arc = Arc(start_point, radius, radius, start_angle, end_angle, style=style,
+                     color=self.canvas.line_color, width=self.canvas.line_width, rotation_angle=0.0)
+            self.canvas.scene.add_object(arc)
+        
+        self.canvas.update()
+        # Автоматически показываем все объекты с сохранением поворота
+        self.canvas.show_all_preserve_rotation()
+        
+        # Убеждаемся, что нет активного рисования
+        if self.canvas.scene.is_drawing():
+            self.canvas.scene.cancel_drawing()
+        
+        # Сбрасываем значения для следующей дуги
+        self.start_x_spin.blockSignals(True)
+        self.start_y_spin.blockSignals(True)
+        self.start_x_spin.setValue(0)
+        self.start_y_spin.setValue(0)
+        self.start_x_spin.blockSignals(False)
+        self.start_y_spin.blockSignals(False)
+        
+        # Сбрасываем значения в зависимости от метода
+        if method_name == "Три точки (начало, вторая точка, конец)":
+            self.arc_point2_x_spin.blockSignals(True)
+            self.arc_point2_y_spin.blockSignals(True)
+            self.arc_point3_x_spin.blockSignals(True)
+            self.arc_point3_y_spin.blockSignals(True)
+            self.arc_point2_x_spin.setValue(100)
+            self.arc_point2_y_spin.setValue(0)
+            self.arc_point3_x_spin.setValue(0)
+            self.arc_point3_y_spin.setValue(100)
+            self.arc_point2_x_spin.blockSignals(False)
+            self.arc_point2_y_spin.blockSignals(False)
+            self.arc_point3_x_spin.blockSignals(False)
+            self.arc_point3_y_spin.blockSignals(False)
+        elif method_name == "Центр, начальный угол, конечный угол":
+            self.arc_radius_spin.blockSignals(True)
+            self.arc_start_angle_spin.blockSignals(True)
+            self.arc_end_angle_spin.blockSignals(True)
+            self.arc_radius_spin.setValue(50)
+            self.arc_start_angle_spin.setValue(0)
+            self.arc_end_angle_spin.setValue(90)
+            self.arc_radius_spin.blockSignals(False)
+            self.arc_start_angle_spin.blockSignals(False)
+            self.arc_end_angle_spin.blockSignals(False)
+        
+        self.update_info()
+    
+    def apply_rectangle_coordinates(self, start_point):
+        """Применяет координаты для создания прямоугольника"""
+        from widgets.primitives import Rectangle
+        
+        # Отменяем текущее рисование, если оно есть
+        if self.canvas.scene.is_drawing():
+            self.canvas.scene.cancel_drawing()
+        
+        method_name = self.rectangle_method_combo.currentText()
+        style = None
+        if self.style_manager:
+            style = self.style_manager.get_current_style()
+        
+        if method_name == "Две противоположные точки":
+            # Используем обычные поля для конечной точки
+            if self.coordinate_system == "cartesian":
+                end_point = QPointF(self.end_x_spin.value(), self.end_y_spin.value())
+            else:
+                # Преобразуем полярные координаты в декартовы
+                radius = self.radius_spin.value()
+                angle = self.angle_spin.value()
+                if self.angle_units == "degrees":
+                    angle_rad = math.radians(angle)
+                else:
+                    angle_rad = angle
+                delta_x = radius * math.cos(angle_rad)
+                delta_y = radius * math.sin(angle_rad)
+                end_point = QPointF(start_point.x() + delta_x, start_point.y() + delta_y)
+            rectangle = Rectangle(start_point, end_point, style=style,
+                                 color=self.canvas.line_color, width=self.canvas.line_width)
+            self.canvas.scene.add_object(rectangle)
+        elif method_name == "Одна точка, ширина и высота":
+            width = self.rectangle_width_spin.value()
+            height = self.rectangle_height_spin.value()
+            end_point = QPointF(start_point.x() + width, start_point.y() + height)
+            rectangle = Rectangle(start_point, end_point, style=style,
+                                color=self.canvas.line_color, width=self.canvas.line_width)
+            self.canvas.scene.add_object(rectangle)
+        elif method_name == "Центр, ширина и высота":
+            width = self.rectangle_center_width_spin.value()
+            height = self.rectangle_center_height_spin.value()
+            half_width = width / 2.0
+            half_height = height / 2.0
+            top_left = QPointF(start_point.x() - half_width, start_point.y() - half_height)
+            bottom_right = QPointF(start_point.x() + half_width, start_point.y() + half_height)
+            rectangle = Rectangle(top_left, bottom_right, style=style,
+                                color=self.canvas.line_color, width=self.canvas.line_width)
+            self.canvas.scene.add_object(rectangle)
+        elif method_name == "С фасками/скруглениями при создании":
+            # Используем обычные поля для конечной точки
+            if self.coordinate_system == "cartesian":
+                end_point = QPointF(self.end_x_spin.value(), self.end_y_spin.value())
+            else:
+                # Преобразуем полярные координаты в декартовы
+                radius = self.radius_spin.value()
+                angle = self.angle_spin.value()
+                if self.angle_units == "degrees":
+                    angle_rad = math.radians(angle)
+                else:
+                    angle_rad = angle
+                delta_x = radius * math.cos(angle_rad)
+                delta_y = radius * math.sin(angle_rad)
+                end_point = QPointF(start_point.x() + delta_x, start_point.y() + delta_y)
+            fillet_radius = self.rectangle_fillet_radius_spin.value()
+            rectangle = Rectangle(start_point, end_point, style=style,
+                                color=self.canvas.line_color, width=self.canvas.line_width,
+                                fillet_radius=fillet_radius)
+            self.canvas.scene.add_object(rectangle)
+        
+        self.canvas.update()
+        # Автоматически показываем все объекты с сохранением поворота
+        self.canvas.show_all_preserve_rotation()
+        
+        # Убеждаемся, что нет активного рисования
+        if self.canvas.scene.is_drawing():
+            self.canvas.scene.cancel_drawing()
+        
+        # Сбрасываем значения для следующего прямоугольника
+        self.start_x_spin.blockSignals(True)
+        self.start_y_spin.blockSignals(True)
+        self.start_x_spin.setValue(0)
+        self.start_y_spin.setValue(0)
+        self.start_x_spin.blockSignals(False)
+        self.start_y_spin.blockSignals(False)
+        
+        # Сбрасываем значения в зависимости от метода
+        if method_name == "Две противоположные точки":
+            self.end_x_spin.blockSignals(True)
+            self.end_y_spin.blockSignals(True)
+            self.end_x_spin.setValue(100)
+            self.end_y_spin.setValue(100)
+            self.end_x_spin.blockSignals(False)
+            self.end_y_spin.blockSignals(False)
+        elif method_name == "Одна точка, ширина и высота":
+            self.rectangle_width_spin.blockSignals(True)
+            self.rectangle_height_spin.blockSignals(True)
+            self.rectangle_width_spin.setValue(100)
+            self.rectangle_height_spin.setValue(100)
+            self.rectangle_width_spin.blockSignals(False)
+            self.rectangle_height_spin.blockSignals(False)
+        elif method_name == "Центр, ширина и высота":
+            self.rectangle_center_width_spin.blockSignals(True)
+            self.rectangle_center_height_spin.blockSignals(True)
+            self.rectangle_center_width_spin.setValue(100)
+            self.rectangle_center_height_spin.setValue(100)
+            self.rectangle_center_width_spin.blockSignals(False)
+            self.rectangle_center_height_spin.blockSignals(False)
+        elif method_name == "С фасками/скруглениями при создании":
+            self.end_x_spin.blockSignals(True)
+            self.end_y_spin.blockSignals(True)
+            self.rectangle_fillet_radius_spin.blockSignals(True)
+            self.end_x_spin.setValue(100)
+            self.end_y_spin.setValue(100)
+            self.rectangle_fillet_radius_spin.setValue(10)
+            self.end_x_spin.blockSignals(False)
+            self.end_y_spin.blockSignals(False)
+            self.rectangle_fillet_radius_spin.blockSignals(False)
         
         self.update_info()
     
@@ -700,6 +1296,223 @@ class MainWindow(QMainWindow):
         }
         primitive_type = primitive_map.get(primitive_name, "line")
         self.canvas.set_primitive_type(primitive_type)
+        
+        # Показываем/скрываем выбор метода создания окружности или дуги
+        if primitive_type == "circle":
+            self.circle_method_widget.show()
+            self.arc_method_widget.hide()
+            self.update_circle_input_fields()
+        elif primitive_type == "arc":
+            self.circle_method_widget.hide()
+            self.arc_method_widget.show()
+            self.rectangle_method_widget.hide()
+            # Убеждаемся, что комбобокс имеет правильное значение
+            if self.arc_method_combo.currentIndex() < 0:
+                self.arc_method_combo.setCurrentIndex(0)
+            # Явно вызываем обновление полей ввода
+            self.change_arc_method(self.arc_method_combo.currentText())
+        elif primitive_type == "rectangle":
+            self.circle_method_widget.hide()
+            self.arc_method_widget.hide()
+            self.rectangle_method_widget.show()
+            # Убеждаемся, что комбобокс имеет правильное значение
+            if self.rectangle_method_combo.currentIndex() < 0:
+                self.rectangle_method_combo.setCurrentIndex(0)
+            # Явно вызываем обновление полей ввода
+            self.change_rectangle_method(self.rectangle_method_combo.currentText())
+        else:
+            self.circle_method_widget.hide()
+            self.arc_method_widget.hide()
+            self.rectangle_method_widget.hide()
+            # Восстанавливаем метку для не-окружности/дуги/прямоугольника
+            self.start_point_label_widget.setText("Начальная точка (x, y):")
+            # Скрываем все группы окружности
+            self.circle_center_radius_group.hide()
+            self.circle_center_diameter_group.hide()
+            self.circle_two_points_group.hide()
+            self.circle_three_points_group.hide()
+            # Скрываем все группы дуги
+            self.arc_three_points_group.hide()
+            self.arc_center_angles_group.hide()
+            # Скрываем все группы прямоугольника
+            self.rectangle_point_size_group.hide()
+            self.rectangle_center_size_group.hide()
+            self.rectangle_fillets_group.hide()
+            # Показываем обычные поля ввода
+            if self.coordinate_system == "cartesian":
+                self.cartesian_group.show()
+                self.polar_group.hide()
+            else:
+                self.cartesian_group.hide()
+                self.polar_group.show()
+    
+    def change_circle_method(self, method_name):
+        """Изменяет метод создания окружности"""
+        method_map = {
+            "Центр и радиус": "center_radius",
+            "Центр и диаметр": "center_diameter",
+            "Две точки": "two_points",
+            "Три точки на окружности": "three_points"
+        }
+        method = method_map.get(method_name, "center_radius")
+        self.canvas.set_circle_creation_method(method)
+        self.update_circle_input_fields()
+    
+    def change_arc_method(self, method_name):
+        """Изменяет метод создания дуги"""
+        method_map = {
+            "Три точки (начало, вторая точка, конец)": "three_points",
+            "Центр, начальный угол, конечный угол": "center_angles"
+        }
+        method = method_map.get(method_name, "three_points")
+        self.canvas.set_arc_creation_method(method)
+        self.update_arc_input_fields()
+    
+    def update_arc_input_fields(self):
+        """Обновляет отображение полей ввода в зависимости от метода создания дуги"""
+        # Обновляем метку для дуги
+        self.start_point_label_widget.setText("Начальная точка (x, y):")
+        
+        # Скрываем все группы
+        self.cartesian_group.hide()
+        self.polar_group.hide()
+        self.arc_three_points_group.hide()
+        self.arc_center_angles_group.hide()
+        
+        # Показываем нужную группу
+        method_name = self.arc_method_combo.currentText()
+        if method_name == "Три точки (начало, вторая точка, конец)":
+            self.arc_three_points_group.show()
+        elif method_name == "Центр, начальный угол, конечный угол":
+            self.start_point_label_widget.setText("Центр (x, y):")
+            self.arc_center_angles_group.show()
+    
+    def on_arc_coordinates_changed(self):
+        """Обработчик изменения координат дуги"""
+        # Предпросмотр дуги при изменении параметров
+        pass
+    
+    def change_rectangle_method(self, method_name):
+        """Изменяет метод создания прямоугольника"""
+        method_map = {
+            "Две противоположные точки": "two_points",
+            "Одна точка, ширина и высота": "point_size",
+            "Центр, ширина и высота": "center_size",
+            "С фасками/скруглениями при создании": "with_fillets"
+        }
+        method = method_map.get(method_name, "two_points")
+        self.canvas.set_rectangle_creation_method(method)
+        self.update_rectangle_input_fields()
+    
+    def update_rectangle_input_fields(self):
+        """Обновляет отображение полей ввода в зависимости от метода создания прямоугольника"""
+        # Обновляем метку для прямоугольника
+        self.start_point_label_widget.setText("Начальная точка (x, y):")
+        
+        # Скрываем все группы
+        self.cartesian_group.hide()
+        self.polar_group.hide()
+        self.rectangle_point_size_group.hide()
+        self.rectangle_center_size_group.hide()
+        self.rectangle_fillets_group.hide()
+        
+        # Показываем нужную группу
+        method_name = self.rectangle_method_combo.currentText()
+        if method_name == "Две противоположные точки":
+            # Используем обычные поля для конечной точки
+            if self.coordinate_system == "cartesian":
+                self.cartesian_group.show()
+                self.polar_group.hide()
+            else:
+                self.cartesian_group.hide()
+                self.polar_group.show()
+        elif method_name == "Одна точка, ширина и высота":
+            self.rectangle_point_size_group.show()
+        elif method_name == "Центр, ширина и высота":
+            self.start_point_label_widget.setText("Центр (x, y):")
+            self.rectangle_center_size_group.show()
+        elif method_name == "С фасками/скруглениями при создании":
+            # Используем обычные поля для конечной точки + радиус скругления
+            if self.coordinate_system == "cartesian":
+                self.cartesian_group.show()
+                self.polar_group.hide()
+            else:
+                self.cartesian_group.hide()
+                self.polar_group.show()
+            self.rectangle_fillets_group.show()
+    
+    def on_rectangle_coordinates_changed(self):
+        """Обработчик изменения координат прямоугольника"""
+        # Обновляем размеры прямоугольника в сцене, если идет рисование
+        if self.canvas.scene.is_drawing() and self.canvas.scene._drawing_type == 'rectangle':
+            method_name = self.rectangle_method_combo.currentText()
+            if method_name == "Одна точка, ширина и высота":
+                width = self.rectangle_width_spin.value()
+                height = self.rectangle_height_spin.value()
+                if width > 0 and height > 0:
+                    self.canvas.scene.set_rectangle_size(width, height)
+                    self.canvas.update()
+            elif method_name == "Центр, ширина и высота":
+                width = self.rectangle_center_width_spin.value()
+                height = self.rectangle_center_height_spin.value()
+                if width > 0 and height > 0:
+                    self.canvas.scene.set_rectangle_size(width, height)
+                    self.canvas.update()
+            elif method_name == "С фасками/скруглениями при создании":
+                radius = self.rectangle_fillet_radius_spin.value()
+                if radius > 0:
+                    self.canvas.scene.set_rectangle_fillet_radius(radius)
+                    self.canvas.update()
+    
+    def update_rectangle_on_drawing_start(self, method: str):
+        """Обновляет параметры прямоугольника при начале рисования"""
+        if self.canvas.scene.is_drawing() and self.canvas.scene._drawing_type == 'rectangle':
+            if method == 'point_size':
+                width = self.rectangle_width_spin.value()
+                height = self.rectangle_height_spin.value()
+                if width > 0 and height > 0:
+                    self.canvas.scene.set_rectangle_size(width, height)
+                    self.canvas.update()
+            elif method == 'center_size':
+                width = self.rectangle_center_width_spin.value()
+                height = self.rectangle_center_height_spin.value()
+                if width > 0 and height > 0:
+                    self.canvas.scene.set_rectangle_size(width, height)
+                    self.canvas.update()
+            elif method == 'with_fillets':
+                radius = self.rectangle_fillet_radius_spin.value()
+                if radius > 0:
+                    self.canvas.scene.set_rectangle_fillet_radius(radius)
+                    self.canvas.update()
+    
+    def update_circle_input_fields(self):
+        """Обновляет отображение полей ввода в зависимости от метода создания окружности"""
+        # Обновляем метку для окружности
+        self.start_point_label_widget.setText("Центр (x, y):")
+        
+        # Скрываем все группы
+        self.cartesian_group.hide()
+        self.polar_group.hide()
+        self.circle_center_radius_group.hide()
+        self.circle_center_diameter_group.hide()
+        self.circle_two_points_group.hide()
+        self.circle_three_points_group.hide()
+        
+        # Показываем нужную группу
+        method_name = self.circle_method_combo.currentText()
+        if method_name == "Центр и радиус":
+            self.circle_center_radius_group.show()
+        elif method_name == "Центр и диаметр":
+            self.circle_center_diameter_group.show()
+        elif method_name == "Две точки":
+            self.circle_two_points_group.show()
+        elif method_name == "Три точки на окружности":
+            self.circle_three_points_group.show()
+    
+    def on_circle_coordinates_changed(self):
+        """Обработчик изменения координат окружности"""
+        # Предпросмотр окружности при изменении параметров
+        pass
     
     def change_angle_units(self, units):
         self.angle_units = "radians" if units == "Радианы" else "degrees"
@@ -782,16 +1595,26 @@ class MainWindow(QMainWindow):
     
     def on_coordinates_changed(self):
         # обработчик изменения декартовых координат только предпросмотр
+        # Показываем предпросмотр только для отрезков
+        if self.canvas.primitive_type != 'line':
+            return
         if self.coordinate_system == "cartesian":
             self.preview_coordinates()
 
     def on_polar_changed(self):
         # обработчик изменения полярных координат только предпросмотр
+        # Показываем предпросмотр только для отрезков
+        if self.canvas.primitive_type != 'line':
+            return
         if self.coordinate_system == "polar":
             self.preview_coordinates()
 
     def preview_coordinates(self):
         # предпросмотр отрезка без сохранения
+        # Показываем предпросмотр только для отрезков
+        if self.canvas.primitive_type != 'line':
+            return
+        
         start_point = QPointF(self.start_x_spin.value(), self.start_y_spin.value())
         
         if self.coordinate_system == "cartesian":

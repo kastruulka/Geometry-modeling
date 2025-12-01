@@ -22,6 +22,7 @@ class CoordinateSystemWidget(QWidget):
     context_menu_requested = Signal(QPoint)  # сигнал для запроса контекстного меню
     selection_changed = Signal(list)  # сигнал при изменении выделения
     line_finished = Signal()  # сигнал при завершении рисования отрезка
+    rectangle_drawing_started = Signal(str)  # сигнал при начале рисования прямоугольника (передает метод)
     
     def __init__(self, style_manager=None):
         super().__init__()
@@ -57,6 +58,12 @@ class CoordinateSystemWidget(QWidget):
         
         # Тип создаваемого примитива
         self.primitive_type = 'line'  # 'line', 'circle', 'arc', 'rectangle', 'ellipse'
+        # Метод создания окружности
+        self.circle_creation_method = 'center_radius'  # 'center_radius', 'center_diameter', 'two_points', 'three_points'
+        # Метод создания дуги
+        self.arc_creation_method = 'three_points'  # 'three_points', 'center_angles'
+        # Метод создания прямоугольника
+        self.rectangle_creation_method = 'two_points'  # 'two_points', 'point_size', 'center_size', 'with_fillets'
         
         # Подключаем сигналы
         self.selection_manager.selection_changed.connect(self._on_selection_changed)
@@ -151,21 +158,22 @@ class CoordinateSystemWidget(QWidget):
                 world_pos = self.viewport.screen_to_world(event.position())
                 
                 # Проверяем, кликнули ли по существующему объекту (для выделения)
+                # Но только если мы не собираемся начать рисование нового объекта
                 if not self.scene.is_drawing():
                     clicked_obj = self.selection_manager.find_object_at_point(
                         world_pos, self.scene.get_objects()
                     )
                     if clicked_obj:
-                        # Выделение объекта
+                        # Если зажат Ctrl, добавляем к выделению, иначе просто выделяем
+                        # Но не прерываем выполнение - пользователь может начать новый объект
                         add_to_selection = bool(event.modifiers() & Qt.ControlModifier)
                         self.selection_manager.select_object(clicked_obj, add_to_selection)
                         self.update()
-                        return
+                        # НЕ делаем return - позволяем начать новый объект
                     else:
-                        # Клик не по линии - снимаем выделение (если не Ctrl)
+                        # Клик не по объекту - снимаем выделение (если не Ctrl)
                         if not (event.modifiers() & Qt.ControlModifier):
                             self.selection_manager.clear_selection()
-                        # Продолжаем выполнение для начала рисования линии
                 
                 if not self.scene.is_drawing():
                     # Снимаем выделение при начале рисования нового объекта
@@ -174,8 +182,19 @@ class CoordinateSystemWidget(QWidget):
                     style = None
                     if self.style_manager:
                         style = self.style_manager.get_current_style()
+                    # Передаем метод создания окружности, дуги или прямоугольника
+                    kwargs = {}
+                    if self.primitive_type == 'circle':
+                        kwargs['circle_method'] = self.circle_creation_method
+                    elif self.primitive_type == 'arc':
+                        kwargs['arc_method'] = self.arc_creation_method
+                    elif self.primitive_type == 'rectangle':
+                        kwargs['rectangle_method'] = self.rectangle_creation_method
                     self.scene.start_drawing(world_pos, drawing_type=self.primitive_type,
-                                            style=style, color=self.line_color, width=self.line_width)
+                                            style=style, color=self.line_color, width=self.line_width, **kwargs)
+                    # Эмитируем сигнал о начале рисования прямоугольника (после start_drawing)
+                    if self.primitive_type == 'rectangle':
+                        self.rectangle_drawing_started.emit(self.rectangle_creation_method)
                     # Обновляем объект для предпросмотра
                     self.scene.update_current_object(world_pos)
                     current_obj = self.scene.get_current_object()
@@ -184,18 +203,59 @@ class CoordinateSystemWidget(QWidget):
                 else:
                     # Для дуги и эллипса нужны три клика, для остальных - два
                     if self.primitive_type == 'arc':
-                        # Проверяем этап создания дуги
-                        if hasattr(self.scene, '_arc_end_point') and self.scene._arc_end_point is None:
-                            # Второй клик - фиксируем конечную точку
-                            self.scene._arc_end_point = world_pos
-                            # Очищаем временную точку
-                            if hasattr(self.scene, '_temp_arc_end_point'):
-                                self.scene._temp_arc_end_point = None
-                            # Обновляем объект для предпросмотра
-                            self.scene.update_current_object(world_pos)
+                        # Проверяем метод создания дуги
+                        method = self.arc_creation_method
+                        if method == 'three_points':
+                            # Для трех точек нужно три клика
+                            if self.scene._arc_end_point is None:
+                                # Второй клик - фиксируем конечную точку
+                                self.scene._arc_end_point = world_pos
+                                # Очищаем временную точку
+                                if hasattr(self.scene, '_temp_arc_end_point'):
+                                    self.scene._temp_arc_end_point = None
+                                # Обновляем объект для предпросмотра
+                                self.scene.update_current_object(world_pos)
+                            else:
+                                # Третий клик - точка высоты, завершаем
+                                self.scene.update_current_object(world_pos)
+                                obj = self.scene.finish_drawing()
+                                if obj:
+                                    self.line_finished.emit()
+                        elif method == 'center_angles':
+                            # Для центра и углов - второй клик определяет радиус
+                            if self.scene._arc_radius == 0.0:
+                                # Второй клик - фиксируем радиус
+                                import math
+                                dx = world_pos.x() - self.scene._arc_center.x()
+                                dy = world_pos.y() - self.scene._arc_center.y()
+                                self.scene._arc_radius = math.sqrt(dx*dx + dy*dy)
+                                self.scene.update_current_object(world_pos)
+                            else:
+                                # Радиус уже установлен, завершаем (углы задаются через UI)
+                                obj = self.scene.finish_drawing()
+                                if obj:
+                                    self.line_finished.emit()
+                    elif self.primitive_type == 'circle':
+                        # Проверяем метод создания окружности
+                        method = self.circle_creation_method
+                        if method == 'three_points':
+                            # Для трех точек нужно три клика
+                            if self.scene._circle_point2 is None:
+                                # Второй клик - фиксируем вторую точку
+                                self.scene._circle_point2 = world_pos
+                                self.scene.update_current_object(world_pos)
+                            else:
+                                # Третий клик - завершаем
+                                self.scene._circle_point3 = world_pos
+                                self.scene.update_current_object(world_pos)
+                                obj = self.scene.finish_drawing()
+                                if obj:
+                                    self.line_finished.emit()
                         else:
-                            # Третий клик - точка высоты, завершаем
-                            self.scene.update_current_object(world_pos)
+                            # Для остальных методов - завершаем при втором клике
+                            current_obj = self.scene.get_current_object()
+                            if current_obj:
+                                self.scene.update_current_object(world_pos)
                             obj = self.scene.finish_drawing()
                             if obj:
                                 self.line_finished.emit()
@@ -212,6 +272,34 @@ class CoordinateSystemWidget(QWidget):
                         else:
                             # Третий клик - точка высоты, завершаем
                             self.scene.update_current_object(world_pos)
+                            obj = self.scene.finish_drawing()
+                            if obj:
+                                self.line_finished.emit()
+                    elif self.primitive_type == 'rectangle':
+                        # Проверяем метод создания прямоугольника
+                        method = self.rectangle_creation_method
+                        if method == 'point_size' or method == 'center_size':
+                            # Для этих методов первый клик устанавливает точку/центр
+                            # Размеры должны быть установлены из UI (через сигнал rectangle_drawing_started)
+                            # Проверяем размеры после небольшой задержки, чтобы дать время сигналу обработаться
+                            from PySide6.QtCore import QTimer
+                            def check_and_finish():
+                                if (self.scene.is_drawing() and 
+                                    self.scene._drawing_type == 'rectangle' and
+                                    self.scene._rectangle_width > 0.0 and 
+                                    self.scene._rectangle_height > 0.0):
+                                    obj = self.scene.finish_drawing()
+                                    if obj:
+                                        self.line_finished.emit()
+                                    self.update()
+                            QTimer.singleShot(10, check_and_finish)
+                            # Обновляем предпросмотр
+                            self.scene.update_current_object(world_pos)
+                        else:
+                            # Для остальных методов (two_points, with_fillets) - завершаем при втором клике
+                            current_obj = self.scene.get_current_object()
+                            if current_obj:
+                                self.scene.update_current_object(world_pos)
                             obj = self.scene.finish_drawing()
                             if obj:
                                 self.line_finished.emit()
@@ -303,15 +391,34 @@ class CoordinateSystemWidget(QWidget):
             
             # Для дуги и эллипса во время второго этапа показываем предпросмотр конечной точки
             if self.primitive_type == 'arc':
-                # Обновляем конечную точку для предпросмотра (временно, только для отображения)
-                if hasattr(self.scene, '_arc_end_point') and self.scene._arc_end_point is None:
-                    # Второй этап - обновляем предпросмотр конечной точки (точка еще не зафиксирована)
-                    # Сохраняем временно для отображения
-                    self.scene._temp_arc_end_point = world_pos
-                    # Обновляем предпросмотр линии
-                    self.scene.update_current_object(world_pos)
-                elif hasattr(self.scene, '_arc_end_point') and self.scene._arc_end_point is not None:
-                    # Третий этап - обновляем высоту (крайние точки уже зафиксированы)
+                method = self.arc_creation_method
+                if method == 'three_points':
+                    # Обновляем конечную точку для предпросмотра (временно, только для отображения)
+                    if self.scene._arc_end_point is None:
+                        # Второй этап - обновляем предпросмотр конечной точки (точка еще не зафиксирована)
+                        # Сохраняем временно для отображения
+                        self.scene._temp_arc_end_point = world_pos
+                        # Обновляем предпросмотр линии
+                        self.scene.update_current_object(world_pos)
+                    elif self.scene._arc_end_point is not None:
+                        # Третий этап - обновляем высоту (крайние точки уже зафиксированы)
+                        self.scene.update_current_object(world_pos)
+                elif method == 'center_angles':
+                    # Для метода центр+углы обновляем радиус при движении мыши
+                    if self.scene._arc_radius == 0.0:
+                        self.scene.update_current_object(world_pos)
+            elif self.primitive_type == 'circle':
+                # Обновляем окружность при движении мыши
+                method = self.circle_creation_method
+                if method == 'three_points':
+                    if self.scene._circle_point2 is None:
+                        # Второй этап - предпросмотр второй точки
+                        self.scene.update_current_object(world_pos)
+                    elif self.scene._circle_point2 is not None:
+                        # Третий этап - предпросмотр третьей точки
+                        self.scene.update_current_object(world_pos)
+                else:
+                    # Для остальных методов - обычное обновление
                     self.scene.update_current_object(world_pos)
             elif self.primitive_type == 'ellipse':
                 # Обновляем конечную точку для предпросмотра (временно, только для отображения)
@@ -573,12 +680,15 @@ class CoordinateSystemWidget(QWidget):
     
     def set_points_from_input(self, start_point, end_point, apply=False):
         """Устанавливает точки из ввода (для обратной совместимости с отрезками)"""
+        # Создаем предпросмотр/объект только для отрезков
+        if self.primitive_type != 'line':
+            return
+        
         style = None
         if self.style_manager:
             style = self.style_manager.get_current_style()
         
         if apply:
-            from widgets.line_segment import LineSegment
             new_line = LineSegment(start_point, end_point, style=style, 
                                   color=self.line_color, width=self.line_width)
             if hasattr(new_line, '_legacy_color'):
@@ -608,6 +718,18 @@ class CoordinateSystemWidget(QWidget):
     def set_primitive_type(self, primitive_type: str):
         """Устанавливает тип создаваемого примитива"""
         self.primitive_type = primitive_type
+    
+    def set_circle_creation_method(self, method: str):
+        """Устанавливает метод создания окружности"""
+        self.circle_creation_method = method
+    
+    def set_arc_creation_method(self, method: str):
+        """Устанавливает метод создания дуги"""
+        self.arc_creation_method = method
+    
+    def set_rectangle_creation_method(self, method: str):
+        """Устанавливает метод создания прямоугольника"""
+        self.rectangle_creation_method = method
     
     # Свойства для обратной совместимости
     @property
