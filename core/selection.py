@@ -74,7 +74,7 @@ class SelectionManager(QObject):
         
         for obj in objects:
             if obj.contains_point(point, tolerance):
-                # Для линий вычисляем расстояние
+                # Для линий вычисляем точное расстояние
                 if isinstance(obj, LineSegment):
                     distance = self._point_to_line_distance(
                         point, obj.start_point, obj.end_point
@@ -83,8 +83,16 @@ class SelectionManager(QObject):
                         min_distance = distance
                         closest_obj = obj
                 else:
-                    closest_obj = obj
-                    break
+                    # Для других объектов используем расстояние до центра bounding box
+                    bbox = obj.get_bounding_box()
+                    center = QPointF(bbox.center().x(), bbox.center().y())
+                    import math
+                    dx = point.x() - center.x()
+                    dy = point.y() - center.y()
+                    distance = math.sqrt(dx*dx + dy*dy)
+                    if distance < min_distance:
+                        min_distance = distance
+                        closest_obj = obj
         
         return closest_obj
     

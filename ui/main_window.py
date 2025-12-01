@@ -68,6 +68,15 @@ class MainWindow(QMainWindow):
         # панель инструментов
         tools_group = QGroupBox("Инструменты")
         tools_layout = QVBoxLayout()
+        
+        # Выбор типа примитива
+        primitive_layout = QHBoxLayout()
+        primitive_layout.addWidget(QLabel("Тип примитива:"))
+        self.primitive_combo = QComboBox()
+        self.primitive_combo.addItems(["Отрезок", "Окружность", "Дуга", "Прямоугольник", "Эллипс"])
+        self.primitive_combo.currentTextChanged.connect(self.change_primitive_type)
+        primitive_layout.addWidget(self.primitive_combo)
+        tools_layout.addLayout(primitive_layout)
 
         self.delete_last_btn = QPushButton("Удалить последний")
         self.delete_last_btn.clicked.connect(self.delete_last_line)
@@ -679,6 +688,18 @@ class MainWindow(QMainWindow):
         self.coordinate_system = "polar" if system == "Полярная" else "cartesian"
         self.update_input_fields()
         self.update_info()
+    
+    def change_primitive_type(self, primitive_name):
+        """Изменяет тип создаваемого примитива"""
+        primitive_map = {
+            "Отрезок": "line",
+            "Окружность": "circle",
+            "Дуга": "arc",
+            "Прямоугольник": "rectangle",
+            "Эллипс": "ellipse"
+        }
+        primitive_type = primitive_map.get(primitive_name, "line")
+        self.canvas.set_primitive_type(primitive_type)
     
     def change_angle_units(self, units):
         self.angle_units = "radians" if units == "Радианы" else "degrees"

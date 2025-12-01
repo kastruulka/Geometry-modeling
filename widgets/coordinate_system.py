@@ -55,6 +55,9 @@ class CoordinateSystemWidget(QWidget):
         self.line_color = QColor(0, 0, 0)
         self.line_width = 2
         
+        # Тип создаваемого примитива
+        self.primitive_type = 'line'  # 'line', 'circle', 'arc', 'rectangle', 'ellipse'
+        
         # Подключаем сигналы
         self.selection_manager.selection_changed.connect(self._on_selection_changed)
         
@@ -147,15 +150,15 @@ class CoordinateSystemWidget(QWidget):
             else:
                 world_pos = self.viewport.screen_to_world(event.position())
                 
-                # Проверяем, кликнули ли по существующей линии (для выделения)
+                # Проверяем, кликнули ли по существующему объекту (для выделения)
                 if not self.scene.is_drawing():
-                    clicked_line = self.selection_manager.find_object_at_point(
-                        world_pos, self.scene.get_lines()
+                    clicked_obj = self.selection_manager.find_object_at_point(
+                        world_pos, self.scene.get_objects()
                     )
-                    if clicked_line:
-                        # Выделение линии
+                    if clicked_obj:
+                        # Выделение объекта
                         add_to_selection = bool(event.modifiers() & Qt.ControlModifier)
-                        self.selection_manager.select_object(clicked_line, add_to_selection)
+                        self.selection_manager.select_object(clicked_obj, add_to_selection)
                         self.update()
                         return
                     else:
@@ -165,29 +168,62 @@ class CoordinateSystemWidget(QWidget):
                         # Продолжаем выполнение для начала рисования линии
                 
                 if not self.scene.is_drawing():
-                    # Снимаем выделение при начале рисования новой линии
+                    # Снимаем выделение при начале рисования нового объекта
                     self.selection_manager.clear_selection()
                     # Используем стиль из менеджера, если доступен
                     style = None
                     if self.style_manager:
                         style = self.style_manager.get_current_style()
-                    self.scene.start_drawing(world_pos, style=style, 
-                                            color=self.line_color, width=self.line_width)
-                    # Устанавливаем начальную точку как текущую
-                    current_line = self.scene.get_current_line()
-                    if current_line:
-                        current_line.end_point = world_pos
-                        if hasattr(current_line, '_legacy_color'):
-                            current_line._legacy_color = self.line_color
+                    self.scene.start_drawing(world_pos, drawing_type=self.primitive_type,
+                                            style=style, color=self.line_color, width=self.line_width)
+                    # Обновляем объект для предпросмотра
+                    self.scene.update_current_object(world_pos)
+                    current_obj = self.scene.get_current_object()
+                    if current_obj and hasattr(current_obj, '_legacy_color'):
+                        current_obj._legacy_color = self.line_color
                 else:
-                    # Завершаем рисование при втором клике
-                    current_line = self.scene.get_current_line()
-                    if current_line:
-                        # Обновляем конечную точку перед завершением
-                        current_line.end_point = world_pos
-                    line = self.scene.finish_drawing()
-                    if line:
-                        self.line_finished.emit()
+                    # Для дуги и эллипса нужны три клика, для остальных - два
+                    if self.primitive_type == 'arc':
+                        # Проверяем этап создания дуги
+                        if hasattr(self.scene, '_arc_end_point') and self.scene._arc_end_point is None:
+                            # Второй клик - фиксируем конечную точку
+                            self.scene._arc_end_point = world_pos
+                            # Очищаем временную точку
+                            if hasattr(self.scene, '_temp_arc_end_point'):
+                                self.scene._temp_arc_end_point = None
+                            # Обновляем объект для предпросмотра
+                            self.scene.update_current_object(world_pos)
+                        else:
+                            # Третий клик - точка высоты, завершаем
+                            self.scene.update_current_object(world_pos)
+                            obj = self.scene.finish_drawing()
+                            if obj:
+                                self.line_finished.emit()
+                    elif self.primitive_type == 'ellipse':
+                        # Проверяем этап создания эллипса
+                        if hasattr(self.scene, '_ellipse_end_point') and self.scene._ellipse_end_point is None:
+                            # Второй клик - фиксируем конечную точку
+                            self.scene._ellipse_end_point = world_pos
+                            # Очищаем временную точку
+                            if hasattr(self.scene, '_temp_ellipse_end_point'):
+                                self.scene._temp_ellipse_end_point = None
+                            # Не обновляем объект здесь, так как третья точка еще не установлена
+                            # Обновление произойдет при движении мыши
+                        else:
+                            # Третий клик - точка высоты, завершаем
+                            self.scene.update_current_object(world_pos)
+                            obj = self.scene.finish_drawing()
+                            if obj:
+                                self.line_finished.emit()
+                    else:
+                        # Для остальных примитивов - завершаем при втором клике
+                        current_obj = self.scene.get_current_object()
+                        if current_obj:
+                            # Обновляем объект перед завершением
+                            self.scene.update_current_object(world_pos)
+                        obj = self.scene.finish_drawing()
+                        if obj:
+                            self.line_finished.emit()
                 
                 self.update()
         
@@ -262,9 +298,35 @@ class CoordinateSystemWidget(QWidget):
                 self.view_changed.emit()
                 self.update()
         elif self.scene.is_drawing():
-            # Обновляем конечную точку при движении мыши во время рисования
+            # Обновляем объект при движении мыши во время рисования
             world_pos = self.viewport.screen_to_world(event.position())
-            self.scene.update_current_line(world_pos)
+            
+            # Для дуги и эллипса во время второго этапа показываем предпросмотр конечной точки
+            if self.primitive_type == 'arc':
+                # Обновляем конечную точку для предпросмотра (временно, только для отображения)
+                if hasattr(self.scene, '_arc_end_point') and self.scene._arc_end_point is None:
+                    # Второй этап - обновляем предпросмотр конечной точки (точка еще не зафиксирована)
+                    # Сохраняем временно для отображения
+                    self.scene._temp_arc_end_point = world_pos
+                    # Обновляем предпросмотр линии
+                    self.scene.update_current_object(world_pos)
+                elif hasattr(self.scene, '_arc_end_point') and self.scene._arc_end_point is not None:
+                    # Третий этап - обновляем высоту (крайние точки уже зафиксированы)
+                    self.scene.update_current_object(world_pos)
+            elif self.primitive_type == 'ellipse':
+                # Обновляем конечную точку для предпросмотра (временно, только для отображения)
+                if hasattr(self.scene, '_ellipse_end_point') and self.scene._ellipse_end_point is None:
+                    # Второй этап - обновляем предпросмотр конечной точки (точка еще не зафиксирована)
+                    # Сохраняем временно для отображения
+                    self.scene._temp_ellipse_end_point = world_pos
+                    # Обновляем предпросмотр эллипса
+                    self.scene.update_current_object(world_pos)
+                elif hasattr(self.scene, '_ellipse_end_point') and self.scene._ellipse_end_point is not None:
+                    # Третий этап - обновляем высоту (крайние точки уже зафиксированы)
+                    self.scene.update_current_object(world_pos)
+            else:
+                self.scene.update_current_object(world_pos)
+            
             self.update()
     
     def _handle_single_right_click(self):
@@ -510,12 +572,13 @@ class CoordinateSystemWidget(QWidget):
         return QPointF(0, 0), QPointF(0, 0)
     
     def set_points_from_input(self, start_point, end_point, apply=False):
-        """Устанавливает точки из ввода"""
+        """Устанавливает точки из ввода (для обратной совместимости с отрезками)"""
         style = None
         if self.style_manager:
             style = self.style_manager.get_current_style()
         
         if apply:
+            from widgets.line_segment import LineSegment
             new_line = LineSegment(start_point, end_point, style=style, 
                                   color=self.line_color, width=self.line_width)
             if hasattr(new_line, '_legacy_color'):
@@ -524,20 +587,27 @@ class CoordinateSystemWidget(QWidget):
             self.update()
         else:
             if not self.scene.is_drawing():
-                self.scene.start_drawing(start_point, style=style,
+                self.scene.start_drawing(start_point, drawing_type='line', style=style,
                                        color=self.line_color, width=self.line_width)
-                current_line = self.scene.get_current_line()
-                if current_line:
-                    current_line._legacy_color = self.line_color
+                current_obj = self.scene.get_current_object()
+                if current_obj:
+                    self.scene.update_current_object(end_point)
+                    if hasattr(current_obj, '_legacy_color'):
+                        current_obj._legacy_color = self.line_color
             else:
-                current_line = self.scene.get_current_line()
-                if current_line:
-                    current_line.start_point = start_point
-                    current_line.end_point = end_point
-                    if style and not current_line.style:
-                        current_line.style = style
-                    current_line._legacy_color = self.line_color
+                current_obj = self.scene.get_current_object()
+                if current_obj and isinstance(current_obj, LineSegment):
+                    current_obj.start_point = start_point
+                    current_obj.end_point = end_point
+                    if style and not current_obj.style:
+                        current_obj.style = style
+                    if hasattr(current_obj, '_legacy_color'):
+                        current_obj._legacy_color = self.line_color
             self.update()
+    
+    def set_primitive_type(self, primitive_type: str):
+        """Устанавливает тип создаваемого примитива"""
+        self.primitive_type = primitive_type
     
     # Свойства для обратной совместимости
     @property
