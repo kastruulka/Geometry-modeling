@@ -592,8 +592,8 @@ class MainWindow(QMainWindow):
         settings_group.setLayout(settings_layout)
         left_panel.addWidget(settings_group)
         
-        # информация о количестве отрезков
-        self.lines_count_label = QLabel("Отрезков на экране: 0")
+        # информация о количестве объектов
+        self.lines_count_label = QLabel("Объектов на экране: 0")
         left_panel.addWidget(self.lines_count_label)
         
         # Добавляем панели стилей
@@ -622,24 +622,29 @@ class MainWindow(QMainWindow):
         right_panel.addWidget(self.canvas)
         
         # информационная панель
-        info_group = QGroupBox("Информация о текущем отрезке")
+        info_group = QGroupBox("Информация об объекте")
         info_layout = QGridLayout()
         
-        info_layout.addWidget(QLabel("Начальная точка:"), 0, 0)
-        self.start_point_label = QLabel("(0.00, 0.00)")
-        info_layout.addWidget(self.start_point_label, 0, 1)
+        # Метки для информации (будут обновляться в зависимости от типа объекта)
+        self.info_label1 = QLabel("")
+        self.info_value1 = QLabel("")
+        info_layout.addWidget(self.info_label1, 0, 0)
+        info_layout.addWidget(self.info_value1, 0, 1)
         
-        info_layout.addWidget(QLabel("Конечная точка:"), 1, 0)
-        self.end_point_label = QLabel("(0.00, 0.00)")
-        info_layout.addWidget(self.end_point_label, 1, 1)
+        self.info_label2 = QLabel("")
+        self.info_value2 = QLabel("")
+        info_layout.addWidget(self.info_label2, 1, 0)
+        info_layout.addWidget(self.info_value2, 1, 1)
         
-        info_layout.addWidget(QLabel("Длина отрезка:"), 2, 0)
-        self.length_label = QLabel("0.00")
-        info_layout.addWidget(self.length_label, 2, 1)
+        self.info_label3 = QLabel("")
+        self.info_value3 = QLabel("")
+        info_layout.addWidget(self.info_label3, 2, 0)
+        info_layout.addWidget(self.info_value3, 2, 1)
         
-        info_layout.addWidget(QLabel("Угол наклона:"), 3, 0)
-        self.angle_info_label = QLabel("0.00°")
-        info_layout.addWidget(self.angle_info_label, 3, 1)
+        self.info_label4 = QLabel("")
+        self.info_value4 = QLabel("")
+        info_layout.addWidget(self.info_label4, 3, 0)
+        info_layout.addWidget(self.info_value4, 3, 1)
         
         info_group.setLayout(info_layout)
         right_panel.addWidget(info_group)
@@ -2016,50 +2021,162 @@ class MainWindow(QMainWindow):
         self.update_info()
     
     def update_info(self):
-        # обновляет информационную панель
-        start_point, end_point = self.canvas.get_current_points()
-        start_x, start_y = start_point.x(), start_point.y()
-        end_x, end_y = end_point.x(), end_point.y()
+        """Обновляет информационную панель в зависимости от типа последнего объекта"""
+        # Получаем все объекты из сцены
+        objects = self.canvas.scene.get_objects()
         
-        # обновляем счетчик отрезков
-        total_lines = len(self.canvas.lines)
-        if self.canvas.current_line:
-            total_lines += 1
-        self.lines_count_label.setText(f"Отрезков на экране: {total_lines}")
+        # Обновляем счетчик объектов
+        total_objects = len(objects)
+        self.lines_count_label.setText(f"Объектов на экране: {total_objects}")
         
-        # отображаем координаты в информационной панели
-        if self.coordinate_system == "cartesian":
-            self.start_point_label.setText(f"({start_x:.2f}, {start_y:.2f})")
-            self.end_point_label.setText(f"({end_x:.2f}, {end_y:.2f})")
+        # Получаем последний объект
+        if not objects:
+            # Нет объектов - показываем пустую информацию
+            self._clear_info_panel()
+            return
+        
+        last_obj = objects[-1]
+        
+        # Определяем тип объекта и показываем соответствующую информацию
+        from widgets.line_segment import LineSegment
+        from widgets.primitives import Circle, Arc, Rectangle, Ellipse
+        
+        if isinstance(last_obj, LineSegment):
+            self._update_line_info(last_obj)
+        elif isinstance(last_obj, Circle):
+            self._update_circle_info(last_obj)
+        elif isinstance(last_obj, Arc):
+            self._update_arc_info(last_obj)
+        elif isinstance(last_obj, Rectangle):
+            self._update_rectangle_info(last_obj)
+        elif isinstance(last_obj, Ellipse):
+            self._update_ellipse_info(last_obj)
         else:
-            # преобразуем в полярные координаты ОТНОСИТЕЛЬНО НАЧАЛЬНОЙ ТОЧКИ
-            delta_x = end_x - start_x
-            delta_y = end_y - start_y
-            
-            r = math.sqrt(delta_x**2 + delta_y**2)
-            theta = math.atan2(delta_y, delta_x)
-            
-            if self.angle_units == "degrees":
-                theta = math.degrees(theta)
-                self.start_point_label.setText(f"({start_x:.2f}, {start_y:.2f})")
-                self.end_point_label.setText(f"(Δr={r:.2f}, Δθ={theta:.2f}°)")
-            else:
-                self.start_point_label.setText(f"({start_x:.2f}, {start_y:.2f})")
-                self.end_point_label.setText(f"(Δr={r:.2f}, Δθ={theta:.2f} rad)")
+            self._clear_info_panel()
+    
+    def _clear_info_panel(self):
+        """Очищает информационную панель"""
+        self.info_label1.setText("")
+        self.info_value1.setText("")
+        self.info_label2.setText("")
+        self.info_value2.setText("")
+        self.info_label3.setText("")
+        self.info_value3.setText("")
+        self.info_label4.setText("")
+        self.info_value4.setText("")
+    
+    def _update_line_info(self, line):
+        """Обновляет информацию об отрезке"""
+        start_x, start_y = line.start_point.x(), line.start_point.y()
+        end_x, end_y = line.end_point.x(), line.end_point.y()
         
-        # вычисляем длину отрезка
         dx = end_x - start_x
         dy = end_y - start_y
         length = math.sqrt(dx**2 + dy**2)
-        self.length_label.setText(f"{length:.2f}")
         
-        # вычисляем угол наклона
         if dx != 0 or dy != 0:
             angle_rad = math.atan2(dy, dx)
             if self.angle_units == "degrees":
                 angle = math.degrees(angle_rad)
-                self.angle_info_label.setText(f"{angle:.2f}°")
+                angle_str = f"{angle:.2f}°"
             else:
-                self.angle_info_label.setText(f"{angle_rad:.2f} rad")
+                angle_str = f"{angle_rad:.2f} rad"
         else:
-            self.angle_info_label.setText("0.00°" if self.angle_units == "degrees" else "0.00 rad")
+            angle_str = "0.00°" if self.angle_units == "degrees" else "0.00 rad"
+        
+        self.info_label1.setText("Начальная точка:")
+        self.info_value1.setText(f"({start_x:.2f}, {start_y:.2f})")
+        self.info_label2.setText("Конечная точка:")
+        self.info_value2.setText(f"({end_x:.2f}, {end_y:.2f})")
+        self.info_label3.setText("Длина:")
+        self.info_value3.setText(f"{length:.2f}")
+        self.info_label4.setText("Угол наклона:")
+        self.info_value4.setText(angle_str)
+    
+    def _update_circle_info(self, circle):
+        """Обновляет информацию об окружности"""
+        center_x, center_y = circle.center.x(), circle.center.y()
+        radius = circle.radius
+        
+        # Периметр окружности
+        perimeter = 2 * math.pi * radius
+        # Площадь окружности
+        area = math.pi * radius * radius
+        
+        self.info_label1.setText("Центр:")
+        self.info_value1.setText(f"({center_x:.2f}, {center_y:.2f})")
+        self.info_label2.setText("Радиус:")
+        self.info_value2.setText(f"{radius:.2f}")
+        self.info_label3.setText("Периметр:")
+        self.info_value3.setText(f"{perimeter:.2f}")
+        self.info_label4.setText("Площадь:")
+        self.info_value4.setText(f"{area:.2f}")
+    
+    def _update_arc_info(self, arc):
+        """Обновляет информацию о дуге"""
+        center_x, center_y = arc.center.x(), arc.center.y()
+        radius_x = arc.radius_x
+        radius_y = arc.radius_y
+        start_angle = arc.start_angle
+        end_angle = arc.end_angle
+        
+        # Длина дуги (приблизительно)
+        angle_span = abs(end_angle - start_angle)
+        if angle_span > 180:
+            angle_span = 360 - angle_span
+        avg_radius = (radius_x + radius_y) / 2
+        arc_length = (angle_span * math.pi / 180) * avg_radius
+        
+        self.info_label1.setText("Центр:")
+        self.info_value1.setText(f"({center_x:.2f}, {center_y:.2f})")
+        self.info_label2.setText("Радиусы:")
+        self.info_value2.setText(f"X: {radius_x:.2f}, Y: {radius_y:.2f}")
+        self.info_label3.setText("Углы:")
+        self.info_value3.setText(f"Начало: {start_angle:.2f}°, Конец: {end_angle:.2f}°")
+        self.info_label4.setText("Длина дуги:")
+        self.info_value4.setText(f"{arc_length:.2f}")
+    
+    def _update_rectangle_info(self, rectangle):
+        """Обновляет информацию о прямоугольнике"""
+        bbox = rectangle.get_bounding_box()
+        width = bbox.width()
+        height = bbox.height()
+        top_left_x = bbox.left()
+        top_left_y = bbox.top()
+        bottom_right_x = bbox.right()
+        bottom_right_y = bbox.bottom()
+        
+        # Периметр
+        perimeter = 2 * (width + height)
+        # Площадь
+        area = width * height
+        
+        self.info_label1.setText("Верхний левый угол:")
+        self.info_value1.setText(f"({top_left_x:.2f}, {top_left_y:.2f})")
+        self.info_label2.setText("Нижний правый угол:")
+        self.info_value2.setText(f"({bottom_right_x:.2f}, {bottom_right_y:.2f})")
+        self.info_label3.setText("Размеры:")
+        self.info_value3.setText(f"Ширина: {width:.2f}, Высота: {height:.2f}")
+        self.info_label4.setText("Площадь:")
+        self.info_value4.setText(f"{area:.2f}")
+    
+    def _update_ellipse_info(self, ellipse):
+        """Обновляет информацию об эллипсе"""
+        center_x, center_y = ellipse.center.x(), ellipse.center.y()
+        radius_x = ellipse.radius_x
+        radius_y = ellipse.radius_y
+        
+        # Периметр эллипса (приблизительно по формуле Рамануджана)
+        h = ((radius_x - radius_y) / (radius_x + radius_y)) ** 2
+        perimeter = math.pi * (radius_x + radius_y) * (1 + (3 * h) / (10 + math.sqrt(4 - 3 * h)))
+        # Площадь эллипса
+        area = math.pi * radius_x * radius_y
+        
+        self.info_label1.setText("Центр:")
+        self.info_value1.setText(f"({center_x:.2f}, {center_y:.2f})")
+        self.info_label2.setText("Радиусы:")
+        self.info_value2.setText(f"X: {radius_x:.2f}, Y: {radius_y:.2f}")
+        self.info_label3.setText("Периметр:")
+        self.info_value3.setText(f"{perimeter:.2f}")
+        self.info_label4.setText("Площадь:")
+        self.info_value4.setText(f"{area:.2f}")

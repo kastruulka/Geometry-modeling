@@ -342,7 +342,6 @@ class CoordinateSystemWidget(QWidget):
                             # Для этих методов первый клик устанавливает точку/центр
                             # Размеры должны быть установлены из UI (через сигнал rectangle_drawing_started)
                             # Проверяем размеры после небольшой задержки, чтобы дать время сигналу обработаться
-                            from PySide6.QtCore import QTimer
                             def check_and_finish():
                                 if (self.scene.is_drawing() and 
                                     self.scene._drawing_type == 'rectangle' and

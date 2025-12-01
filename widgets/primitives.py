@@ -148,24 +148,101 @@ class Arc(GeometricObject, Drawable):
     def get_bounding_box(self) -> QRectF:
         """Возвращает ограничивающий прямоугольник дуги"""
         import math
-        # Вычисляем точки на дуге для определения границ
-        angles = [self.start_angle, self.end_angle]
-        # Добавляем промежуточные углы для более точного bounding box
-        angle_span = abs(self.end_angle - self.start_angle)
-        if angle_span > 90:
-            num_points = int(angle_span / 45) + 1
-            for i in range(1, num_points):
-                angles.append(self.start_angle + (self.end_angle - self.start_angle) * i / num_points)
+        
+        # Нормализуем углы в диапазон [0, 360)
+        start_angle = self.start_angle % 360
+        end_angle = self.end_angle % 360
+        
+        # Вычисляем реальный угол дуги
+        if start_angle <= end_angle:
+            angle_span = end_angle - start_angle
+        else:
+            # Дуга пересекает 0°
+            angle_span = (360 - start_angle) + end_angle
+        
+        # Используем больше точек для точного вычисления bounding box
+        # Минимум 128 точек на полный круг (360°), пропорционально для дуги
+        # Это гарантирует, что мы не пропустим точки экстремумов даже для малых дуг
+        # Для малых дуг используем минимум 32 точки независимо от угла
+        if angle_span < 10:
+            num_points = 32
+        else:
+            num_points = max(128, int(angle_span * 128 / 360) + 1)
+        
+        def get_point_at_angle(angle_deg):
+            """Вычисляет точку на дуге для заданного угла в градусах"""
+            rad = math.radians(angle_deg)
+            local_x = self.radius_x * math.cos(rad)
+            local_y = self.radius_y * math.sin(rad)
+            
+            # Применяем поворот, если он есть
+            if abs(self.rotation_angle) > 1e-6:
+                cos_r = math.cos(self.rotation_angle)
+                sin_r = math.sin(self.rotation_angle)
+                rotated_x = local_x * cos_r - local_y * sin_r
+                rotated_y = local_x * sin_r + local_y * cos_r
+            else:
+                rotated_x = local_x
+                rotated_y = local_y
+            
+            # Переводим в мировые координаты
+            x = self.center.x() + rotated_x
+            y = self.center.y() + rotated_y
+            return QPointF(x, y)
         
         points = []
-        for angle in angles:
-            rad = math.radians(angle)
-            x = self.center.x() + self.radius_x * math.cos(rad)
-            y = self.center.y() + self.radius_y * math.sin(rad)
-            points.append(QPointF(x, y))
         
-        # Добавляем центр
+        # Добавляем начальную и конечную точки
+        points.append(get_point_at_angle(start_angle))
+        points.append(get_point_at_angle(end_angle))
+        
+        # Добавляем равномерно распределенные точки по дуге
+        for i in range(1, num_points):
+            # Вычисляем угол для текущей точки
+            if start_angle <= end_angle:
+                # Обычная дуга (не пересекает 0°)
+                angle = start_angle + angle_span * i / num_points
+            else:
+                # Дуга пересекает 0° (например, от 350° до 10°)
+                # Первая часть: от start_angle до 360°
+                first_part_span = 360 - start_angle
+                # Вторая часть: от 0° до end_angle
+                second_part_span = end_angle
+                
+                # Определяем, в какой части дуги мы находимся
+                progress = i / num_points
+                if progress * angle_span <= first_part_span:
+                    # Первая часть: от start_angle до 360°
+                    local_progress = (progress * angle_span) / first_part_span
+                    angle = start_angle + first_part_span * local_progress
+                else:
+                    # Вторая часть: от 0° до end_angle
+                    remaining_span = progress * angle_span - first_part_span
+                    local_progress = remaining_span / second_part_span
+                    angle = local_progress * end_angle
+            
+            points.append(get_point_at_angle(angle))
+        
+        # Добавляем критические углы (0°, 90°, 180°, 270°), если они попадают в диапазон дуги
+        # Эти углы соответствуют точкам экстремумов для эллипса без поворота
+        # и важны для точного вычисления bounding box
+        critical_angles = [0, 90, 180, 270]
+        for crit_angle in critical_angles:
+            # Проверяем, попадает ли критический угол в диапазон дуги
+            in_range = False
+            if start_angle <= end_angle:
+                in_range = start_angle <= crit_angle <= end_angle
+            else:
+                in_range = crit_angle >= start_angle or crit_angle <= end_angle
+            
+            if in_range:
+                points.append(get_point_at_angle(crit_angle))
+        
+        # Добавляем центр (может быть внутри или снаружи дуги)
         points.append(self.center)
+        
+        if not points:
+            return QRectF()
         
         min_x = min(p.x() for p in points)
         max_x = max(p.x() for p in points)

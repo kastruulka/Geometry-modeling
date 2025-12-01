@@ -917,11 +917,17 @@ class Scene:
         points = []
         for obj in self._objects:
             bbox = obj.get_bounding_box()
+            # Используем все 4 угла bounding box для более точного вычисления
             points.append(QPointF(bbox.left(), bbox.top()))
+            points.append(QPointF(bbox.right(), bbox.top()))
             points.append(QPointF(bbox.right(), bbox.bottom()))
+            points.append(QPointF(bbox.left(), bbox.bottom()))
         if self._current_object:
             bbox = self._current_object.get_bounding_box()
+            # Используем все 4 угла bounding box
             points.append(QPointF(bbox.left(), bbox.top()))
+            points.append(QPointF(bbox.right(), bbox.top()))
             points.append(QPointF(bbox.right(), bbox.bottom()))
+            points.append(QPointF(bbox.left(), bbox.bottom()))
         return points
 
