@@ -536,6 +536,59 @@ class PrimitiveRenderer:
                 pen.setWidthF(pen.widthF() * 1.5)
             PrimitiveRenderer._draw_ellipse_with_rotation(painter, ellipse, pen)
     
+    @staticmethod
+    def draw_polygon(painter: QPainter, polygon, scale_factor: float = 1.0, is_selected: bool = False):
+        """Отрисовывает многоугольник с поддержкой всех типов линий"""
+        from PySide6.QtGui import QPainterPath
+        
+        vertices = polygon.get_vertices()
+        if len(vertices) < 3:
+            return
+        
+        if polygon.style:
+            pen = polygon.style.get_pen(scale_factor=scale_factor)
+            if hasattr(polygon, '_legacy_color') and polygon._legacy_color != polygon.style.color:
+                pen.setColor(polygon._legacy_color)
+            if is_selected:
+                pen.setWidthF(pen.widthF() * 1.5)
+                color = pen.color()
+                color.setAlpha(255)
+                pen.setColor(color)
+            
+            line_type = polygon.style.line_type
+            
+            # Для специальных типов линий используем специальную отрисовку
+            if line_type == LineType.SOLID_WAVY:
+                PrimitiveRenderer._draw_wavy_polygon(painter, polygon, pen)
+            elif line_type == LineType.SOLID_THIN_BROKEN:
+                PrimitiveRenderer._draw_broken_polygon(painter, polygon, pen)
+            elif line_type == LineType.DASHED:
+                PrimitiveRenderer._draw_dashed_polygon(painter, polygon, pen, polygon.style)
+            elif line_type in [LineType.DASH_DOT_THICK, LineType.DASH_DOT_THIN, LineType.DASH_DOT_TWO_DOTS]:
+                PrimitiveRenderer._draw_dash_dot_polygon(painter, polygon, pen, polygon.style)
+            else:
+                # Обычные сплошные линии
+                path = QPainterPath()
+                path.moveTo(vertices[0])
+                for i in range(1, len(vertices)):
+                    path.lineTo(vertices[i])
+                path.closeSubpath()
+                painter.setPen(pen)
+                painter.setBrush(Qt.NoBrush)
+                painter.drawPath(path)
+        else:
+            pen = QPen(polygon.color, polygon.width)
+            if is_selected:
+                pen.setWidthF(pen.widthF() * 1.5)
+            path = QPainterPath()
+            path.moveTo(vertices[0])
+            for i in range(1, len(vertices)):
+                path.lineTo(vertices[i])
+            path.closeSubpath()
+            painter.setPen(pen)
+            painter.setBrush(Qt.NoBrush)
+            painter.drawPath(path)
+    
     # Методы специальной отрисовки для окружностей
     @staticmethod
     def _draw_wavy_circle(painter: QPainter, circle, pen: QPen):
@@ -1764,7 +1817,60 @@ class PrimitiveRenderer:
             iteration += 1
         
         painter.restore()
-
+    
+    # Методы специальной отрисовки для многоугольников
+    @staticmethod
+    def _draw_wavy_polygon(painter: QPainter, polygon, pen: QPen):
+        """Отрисовывает волнистый многоугольник"""
+        vertices = polygon.get_vertices()
+        if len(vertices) < 3:
+            return
+        
+        # Рисуем каждую сторону как волнистую линию
+        for i in range(len(vertices)):
+            start = vertices[i]
+            end = vertices[(i + 1) % len(vertices)]
+            LineRenderer._draw_wavy_line(painter, start, end, pen)
+    
+    @staticmethod
+    def _draw_broken_polygon(painter: QPainter, polygon, pen: QPen):
+        """Отрисовывает многоугольник с изломами"""
+        vertices = polygon.get_vertices()
+        if len(vertices) < 3:
+            return
+        
+        # Рисуем каждую сторону как линию с изломами
+        for i in range(len(vertices)):
+            start = vertices[i]
+            end = vertices[(i + 1) % len(vertices)]
+            LineRenderer._draw_broken_line(painter, start, end, pen)
+    
+    @staticmethod
+    def _draw_dashed_polygon(painter: QPainter, polygon, pen: QPen, style):
+        """Отрисовывает штриховой многоугольник"""
+        vertices = polygon.get_vertices()
+        if len(vertices) < 3:
+            return
+        
+        # Рисуем каждую сторону как штриховую линию
+        for i in range(len(vertices)):
+            start = vertices[i]
+            end = vertices[(i + 1) % len(vertices)]
+            LineRenderer._draw_dashed_line(painter, start, end, pen, style)
+    
+    @staticmethod
+    def _draw_dash_dot_polygon(painter: QPainter, polygon, pen: QPen, style):
+        """Отрисовывает штрихпунктирный многоугольник"""
+        vertices = polygon.get_vertices()
+        if len(vertices) < 3:
+            return
+        
+        # Рисуем каждую сторону как штрихпунктирную линию
+        for i in range(len(vertices)):
+            start = vertices[i]
+            end = vertices[(i + 1) % len(vertices)]
+            LineRenderer._draw_dash_dot_line(painter, start, end, pen, style)
+    
 
 class SceneRenderer:
     """Класс для отрисовки всей сцены"""

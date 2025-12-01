@@ -810,3 +810,126 @@ class Ellipse(GeometricObject, Drawable):
         from core.renderer import PrimitiveRenderer
         PrimitiveRenderer.draw_ellipse(painter, self, scale_factor, self.selected)
 
+
+class Polygon(GeometricObject, Drawable):
+    """Класс для представления многоугольника"""
+    
+    def __init__(self, center: QPointF, radius: float, num_vertices: int, style=None, color=None, width=None):
+        super().__init__()
+        self.center = QPointF(center) if not isinstance(center, QPointF) else center
+        self.radius = radius
+        self.num_vertices = num_vertices
+        self._style = None
+        self._style_name = None
+        
+        if style:
+            self.style = style
+        
+        if color is not None:
+            self._legacy_color = color
+        else:
+            self._legacy_color = QColor(0, 0, 0)
+        
+        if width is not None:
+            self._legacy_width = width
+        else:
+            self._legacy_width = 2
+    
+    @property
+    def style(self):
+        return self._style
+    
+    @style.setter
+    def style(self, value):
+        if self._style:
+            self._style.unregister_object(self)
+        self._style = value
+        self._style_name = value.name if value else None
+        if value:
+            value.register_object(self)
+    
+    @property
+    def color(self):
+        if self._style:
+            return self._style.color
+        return self._legacy_color
+    
+    @property
+    def width(self):
+        if self._style:
+            return (self._style.thickness_mm * 96) / 25.4
+        return self._legacy_width
+    
+    def get_vertices(self):
+        """Возвращает список вершин многоугольника"""
+        import math
+        vertices = []
+        angle_step = 2 * math.pi / self.num_vertices
+        for i in range(self.num_vertices):
+            angle = i * angle_step - math.pi / 2  # Начинаем с верхней точки
+            x = self.center.x() + self.radius * math.cos(angle)
+            y = self.center.y() + self.radius * math.sin(angle)
+            vertices.append(QPointF(x, y))
+        return vertices
+    
+    def get_bounding_box(self) -> QRectF:
+        """Возвращает ограничивающий прямоугольник многоугольника"""
+        vertices = self.get_vertices()
+        if not vertices:
+            return QRectF()
+        min_x = min(v.x() for v in vertices)
+        max_x = max(v.x() for v in vertices)
+        min_y = min(v.y() for v in vertices)
+        max_y = max(v.y() for v in vertices)
+        return QRectF(min_x, min_y, max_x - min_x, max_y - min_y)
+    
+    def contains_point(self, point: QPointF, tolerance: float = 5.0) -> bool:
+        """Проверяет, содержит ли многоугольник точку (проверка на границе)"""
+        import math
+        vertices = self.get_vertices()
+        if len(vertices) < 3:
+            return False
+        
+        # Проверяем расстояние до каждой стороны многоугольника
+        for i in range(len(vertices)):
+            p1 = vertices[i]
+            p2 = vertices[(i + 1) % len(vertices)]
+            
+            # Вектор стороны
+            dx = p2.x() - p1.x()
+            dy = p2.y() - p1.y()
+            length = math.sqrt(dx*dx + dy*dy)
+            
+            if length < 1e-6:
+                continue
+            
+            # Вектор от p1 до точки
+            to_point_x = point.x() - p1.x()
+            to_point_y = point.y() - p1.y()
+            
+            # Проекция на сторону
+            t = (to_point_x * dx + to_point_y * dy) / (length * length)
+            t = max(0, min(1, t))
+            
+            # Ближайшая точка на стороне
+            closest_x = p1.x() + t * dx
+            closest_y = p1.y() + t * dy
+            
+            # Расстояние до стороны
+            dist = math.sqrt((point.x() - closest_x)**2 + (point.y() - closest_y)**2)
+            
+            if dist <= tolerance:
+                return True
+        
+        return False
+    
+    def intersects_rect(self, rect: QRectF) -> bool:
+        """Проверяет, пересекается ли многоугольник с прямоугольником"""
+        bbox = self.get_bounding_box()
+        return rect.intersects(bbox)
+    
+    def draw(self, painter, scale_factor: float = 1.0):
+        """Отрисовывает многоугольник"""
+        from core.renderer import PrimitiveRenderer
+        PrimitiveRenderer.draw_polygon(painter, self, scale_factor, self.selected)
+

@@ -15,7 +15,7 @@ class Scene:
         self._objects: List[GeometricObject] = []
         self._current_object: Optional[GeometricObject] = None
         self._is_drawing = False
-        self._drawing_type: Optional[str] = None  # 'line', 'circle', 'arc', 'rectangle', 'ellipse'
+        self._drawing_type: Optional[str] = None  # 'line', 'circle', 'arc', 'rectangle', 'ellipse', 'polygon'
         # Для дуги: отслеживание этапов создания
         self._arc_creation_method: Optional[str] = None  # 'three_points', 'center_angles'
         self._arc_start_point: Optional[QPointF] = None
@@ -38,6 +38,11 @@ class Scene:
         self._rectangle_width: float = 0.0
         self._rectangle_height: float = 0.0
         self._rectangle_fillet_radius: float = 0.0  # Радиус скругления/фаски
+        # Для многоугольника: отслеживание этапов создания
+        self._polygon_creation_method: Optional[str] = None  # 'center_radius_vertices'
+        self._polygon_center: Optional[QPointF] = None
+        self._polygon_radius: float = 0.0
+        self._polygon_num_vertices: int = 3
     
     def add_object(self, obj: GeometricObject):
         """Добавляет объект на сцену"""
@@ -102,6 +107,28 @@ class Scene:
             if isinstance(self._current_object, Rectangle):
                 if hasattr(self._current_object, 'fillet_radius'):
                     self._current_object.fillet_radius = radius
+    
+    def set_polygon_radius(self, radius: float):
+        """Устанавливает радиус многоугольника"""
+        if radius <= 0:
+            return
+        self._polygon_radius = radius
+        # Обновляем текущий объект, если он существует
+        if self._current_object and self._drawing_type == 'polygon':
+            from widgets.primitives import Polygon
+            if isinstance(self._current_object, Polygon):
+                self._current_object.radius = radius
+    
+    def set_polygon_num_vertices(self, num_vertices: int):
+        """Устанавливает количество вершин многоугольника"""
+        if num_vertices < 3:
+            return
+        self._polygon_num_vertices = num_vertices
+        # Обновляем текущий объект, если он существует
+        if self._current_object and self._drawing_type == 'polygon':
+            from widgets.primitives import Polygon
+            if isinstance(self._current_object, Polygon):
+                self._current_object.num_vertices = num_vertices
     
     def get_objects(self) -> List[GeometricObject]:
         """Возвращает все объекты на сцене"""
@@ -200,6 +227,18 @@ class Scene:
             # Создаем временный объект для предпросмотра
             from widgets.primitives import Ellipse
             self._current_object = Ellipse(start_point, 0, 0, style=style, color=color, width=width, rotation_angle=0.0)
+        elif drawing_type == 'polygon':
+            from widgets.primitives import Polygon
+            # Получаем метод создания из kwargs или используем по умолчанию
+            creation_method = kwargs.get('polygon_method', 'center_radius_vertices')
+            self._polygon_creation_method = creation_method
+            
+            if creation_method == 'center_radius_vertices':
+                # Центр и радиус окружности и количество углов - центр уже задан
+                self._polygon_center = start_point
+                self._polygon_radius = 0.0
+                self._polygon_num_vertices = kwargs.get('num_vertices', 3)
+                self._current_object = Polygon(start_point, 0, self._polygon_num_vertices, style=style, color=color, width=width)
         
         self._is_drawing = True
     
@@ -427,6 +466,19 @@ class Scene:
                             self._current_object.radius_x = max(radius_x, 1.0)
                             self._current_object.radius_y = max(radius_y, 1.0)
                             self._current_object.rotation_angle = rotation_angle
+        elif self._drawing_type == 'polygon':
+            from widgets.primitives import Polygon
+            if isinstance(self._current_object, Polygon):
+                import math
+                method = self._polygon_creation_method or 'center_radius_vertices'
+                
+                if method == 'center_radius_vertices':
+                    # Центр уже задан, точка определяет радиус
+                    dx = point.x() - self._current_object.center.x()
+                    dy = point.y() - self._current_object.center.y()
+                    radius = math.sqrt(dx*dx + dy*dy)
+                    self._current_object.radius = radius
+                    self._polygon_radius = radius
     
     def finish_drawing(self) -> Optional[GeometricObject]:
         """Завершает рисование и возвращает созданный объект"""
@@ -509,6 +561,38 @@ class Scene:
             self._circle_point1 = None
             self._circle_point2 = None
             self._circle_point3 = None
+            
+            # Для многоугольника проверяем метод создания
+            if drawing_type == 'polygon':
+                method = self._polygon_creation_method or 'center_radius_vertices'
+                from widgets.primitives import Polygon
+                if isinstance(obj, Polygon):
+                    if method == 'center_radius_vertices':
+                        # Проверяем, что радиус и количество вершин установлены
+                        if self._polygon_radius <= 0.0:
+                            # Восстанавливаем состояние, если проверка не прошла
+                            self._current_object = obj
+                            self._is_drawing = True
+                            self._drawing_type = drawing_type
+                            # Удаляем объект из списка, так как мы его вернули
+                            if obj in self._objects:
+                                self._objects.remove(obj)
+                            return None
+                        if self._polygon_num_vertices < 3:
+                            # Восстанавливаем состояние, если проверка не прошла
+                            self._current_object = obj
+                            self._is_drawing = True
+                            self._drawing_type = drawing_type
+                            # Удаляем объект из списка, так как мы его вернули
+                            if obj in self._objects:
+                                self._objects.remove(obj)
+                            return None
+                
+                # Сбрасываем все переменные многоугольника
+                self._polygon_creation_method = None
+                self._polygon_center = None
+                self._polygon_radius = 0.0
+                self._polygon_num_vertices = 3
             
             return obj
         
@@ -595,24 +679,10 @@ class Scene:
         self._rectangle_width = 0.0
         self._rectangle_height = 0.0
         self._rectangle_fillet_radius = 0.0
-        self._circle_creation_method = None
-        self._circle_point1 = None
-        self._circle_point2 = None
-        self._circle_point3 = None
-        self._rectangle_creation_method = None
-        self._rectangle_point1 = None
-        self._rectangle_width = 0.0
-        self._rectangle_height = 0.0
-        self._rectangle_fillet_radius = 0.0
-        self._circle_creation_method = None
-        self._circle_point1 = None
-        self._circle_point2 = None
-        self._circle_point3 = None
-        self._rectangle_creation_method = None
-        self._rectangle_point1 = None
-        self._rectangle_width = 0.0
-        self._rectangle_height = 0.0
-        self._rectangle_fillet_radius = 0.0
+        self._polygon_creation_method = None
+        self._polygon_center = None
+        self._polygon_radius = 0.0
+        self._polygon_num_vertices = 3
     
     def _calculate_ellipse_arc_from_three_points(self, p1: QPointF, p2: QPointF, p3: QPointF):
         """Вычисляет параметры дуги эллипса по трем точкам (начало, конец, вершина)

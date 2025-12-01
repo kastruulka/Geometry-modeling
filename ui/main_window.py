@@ -73,7 +73,7 @@ class MainWindow(QMainWindow):
         primitive_layout = QHBoxLayout()
         primitive_layout.addWidget(QLabel("Тип примитива:"))
         self.primitive_combo = QComboBox()
-        self.primitive_combo.addItems(["Отрезок", "Окружность", "Дуга", "Прямоугольник", "Эллипс"])
+        self.primitive_combo.addItems(["Отрезок", "Окружность", "Дуга", "Прямоугольник", "Эллипс", "Многоугольник"])
         self.primitive_combo.currentTextChanged.connect(self.change_primitive_type)
         primitive_layout.addWidget(self.primitive_combo)
         tools_layout.addLayout(primitive_layout)
@@ -528,6 +528,30 @@ class MainWindow(QMainWindow):
         
         input_layout.addWidget(self.ellipse_center_radii_group, 1, 1, 2, 4)
         input_layout.addWidget(self.ellipse_three_points_group, 1, 1, 2, 4)
+        
+        # Группы для многоугольника
+        # Центр, радиус и количество углов
+        self.polygon_center_radius_vertices_group = QWidget()
+        polygon_crv_layout = QGridLayout()
+        polygon_crv_layout.addWidget(QLabel("Радиус:"), 0, 0)
+        self.polygon_radius_spin = QDoubleSpinBox()
+        self.polygon_radius_spin.setRange(0, 1000)
+        self.polygon_radius_spin.setDecimals(2)
+        self.polygon_radius_spin.setSingleStep(10)
+        self.polygon_radius_spin.setValue(50)
+        self.polygon_radius_spin.valueChanged.connect(self.on_polygon_coordinates_changed)
+        polygon_crv_layout.addWidget(self.polygon_radius_spin, 0, 1, 1, 4)
+        
+        polygon_crv_layout.addWidget(QLabel("Количество углов:"), 1, 0)
+        self.polygon_num_vertices_spin = QSpinBox()
+        self.polygon_num_vertices_spin.setRange(3, 100)
+        self.polygon_num_vertices_spin.setValue(3)
+        self.polygon_num_vertices_spin.valueChanged.connect(self.on_polygon_coordinates_changed)
+        polygon_crv_layout.addWidget(self.polygon_num_vertices_spin, 1, 1, 1, 4)
+        self.polygon_center_radius_vertices_group.setLayout(polygon_crv_layout)
+        self.polygon_center_radius_vertices_group.hide()
+        
+        input_layout.addWidget(self.polygon_center_radius_vertices_group, 1, 1, 2, 4)
         
         # кнопка применения координат
         # Размещаем кнопку после всех возможных виджетов (строка 4 или больше)
@@ -1016,6 +1040,9 @@ class MainWindow(QMainWindow):
         elif self.canvas.primitive_type == 'ellipse':
             self.apply_ellipse_coordinates(start_point)
             return
+        elif self.canvas.primitive_type == 'polygon':
+            self.apply_polygon_coordinates(start_point)
+            return
         
         # Для остальных примитивов (отрезок и т.д.)
         if self.coordinate_system == "cartesian":
@@ -1441,6 +1468,55 @@ class MainWindow(QMainWindow):
         
         self.update_info()
     
+    def apply_polygon_coordinates(self, center_point):
+        """Применяет координаты для создания многоугольника"""
+        from widgets.primitives import Polygon
+        
+        # Отменяем текущее рисование, если оно есть
+        if self.canvas.scene.is_drawing():
+            self.canvas.scene.cancel_drawing()
+        
+        # Получаем параметры многоугольника
+        radius = self.polygon_radius_spin.value()
+        num_vertices = self.polygon_num_vertices_spin.value()
+        
+        if radius > 0 and num_vertices >= 3:
+            style = None
+            if self.style_manager:
+                style = self.style_manager.get_current_style()
+            
+            polygon = Polygon(center_point, radius, num_vertices, style=style,
+                             color=self.canvas.line_color, width=self.canvas.line_width)
+            self.canvas.scene.add_object(polygon)
+        
+        self.canvas.update()
+        # Автоматически показываем все объекты с сохранением поворота
+        self.canvas.show_all_preserve_rotation()
+        
+        # Очищаем точки ввода после применения
+        self.canvas.clear_input_points()
+        
+        # Убеждаемся, что нет активного рисования
+        if self.canvas.scene.is_drawing():
+            self.canvas.scene.cancel_drawing()
+        
+        # Сбрасываем значения для следующего многоугольника
+        self.start_x_spin.blockSignals(True)
+        self.start_y_spin.blockSignals(True)
+        self.start_x_spin.setValue(0)
+        self.start_y_spin.setValue(0)
+        self.start_y_spin.blockSignals(False)
+        self.start_x_spin.blockSignals(False)
+        
+        self.polygon_radius_spin.blockSignals(True)
+        self.polygon_num_vertices_spin.blockSignals(True)
+        self.polygon_radius_spin.setValue(50)
+        self.polygon_num_vertices_spin.setValue(3)
+        self.polygon_radius_spin.blockSignals(False)
+        self.polygon_num_vertices_spin.blockSignals(False)
+        
+        self.update_info()
+    
     def change_coordinate_system(self, system):
         self.coordinate_system = "polar" if system == "Полярная" else "cartesian"
         self.update_input_fields()
@@ -1453,7 +1529,8 @@ class MainWindow(QMainWindow):
             "Окружность": "circle",
             "Дуга": "arc",
             "Прямоугольник": "rectangle",
-            "Эллипс": "ellipse"
+            "Эллипс": "ellipse",
+            "Многоугольник": "polygon"
         }
         primitive_type = primitive_map.get(primitive_name, "line")
         self.canvas.set_primitive_type(primitive_type)
@@ -1494,6 +1571,12 @@ class MainWindow(QMainWindow):
                 self.ellipse_method_combo.setCurrentIndex(0)
             # Явно вызываем обновление полей ввода
             self.change_ellipse_method(self.ellipse_method_combo.currentText())
+        elif primitive_type == "polygon":
+            self.circle_method_widget.hide()
+            self.arc_method_widget.hide()
+            self.rectangle_method_widget.hide()
+            self.ellipse_method_widget.hide()
+            self.update_polygon_input_fields()
         else:
             self.circle_method_widget.hide()
             self.arc_method_widget.hide()
@@ -1515,6 +1598,8 @@ class MainWindow(QMainWindow):
             # Скрываем все группы эллипса
             self.ellipse_center_radii_group.hide()
             self.ellipse_three_points_group.hide()
+            # Скрываем все группы многоугольника
+            self.polygon_center_radius_vertices_group.hide()
             # Показываем метку "Конечная точка" для отрезка
             self.end_point_label_widget.show()
             # Показываем обычные поля ввода
@@ -1791,6 +1876,62 @@ class MainWindow(QMainWindow):
         
         # Не обновляем точки ввода автоматически - только при изменении значений в полях
     
+    def update_polygon_input_fields(self):
+        """Обновляет отображение полей ввода для многоугольника"""
+        # Обновляем метку для многоугольника
+        self.start_point_label_widget.setText("Центр (x, y):")
+        
+        # Скрываем метку "Конечная точка" для многоугольника
+        self.end_point_label_widget.hide()
+        
+        # Скрываем ВСЕ группы
+        self.cartesian_group.hide()
+        self.polar_group.hide()
+        self.circle_center_radius_group.hide()
+        self.circle_center_diameter_group.hide()
+        self.circle_two_points_group.hide()
+        self.circle_three_points_group.hide()
+        self.arc_three_points_group.hide()
+        self.arc_center_angles_group.hide()
+        self.rectangle_point_size_group.hide()
+        self.rectangle_center_size_group.hide()
+        self.rectangle_fillets_group.hide()
+        self.ellipse_center_radii_group.hide()
+        self.ellipse_three_points_group.hide()
+        
+        # Показываем группу многоугольника
+        self.polygon_center_radius_vertices_group.show()
+    
+    def on_polygon_coordinates_changed(self):
+        """Обработчик изменения координат многоугольника"""
+        # Получаем центр
+        center_point = QPointF(self.start_x_spin.value(), self.start_y_spin.value())
+        input_points = [center_point]
+        
+        # Получаем радиус и количество вершин
+        radius = self.polygon_radius_spin.value()
+        num_vertices = self.polygon_num_vertices_spin.value()
+        
+        # Устанавливаем параметры в canvas
+        self.canvas.set_polygon_num_vertices(num_vertices)
+        
+        # Если идет рисование, обновляем радиус
+        if self.canvas.scene.is_drawing() and self.canvas.scene._drawing_type == 'polygon':
+            if radius > 0:
+                self.canvas.scene.set_polygon_radius(radius)
+                self.canvas.update()
+        
+        # Вычисляем точку на окружности для визуализации
+        import math
+        if radius > 0:
+            angle = 0  # Начинаем с верхней точки
+            x = center_point.x() + radius * math.cos(angle - math.pi / 2)
+            y = center_point.y() + radius * math.sin(angle - math.pi / 2)
+            input_points.append(QPointF(x, y))
+        
+        # Устанавливаем точки для визуализации
+        self.canvas.set_input_points(input_points)
+    
     def on_circle_coordinates_changed(self):
         """Обработчик изменения координат окружности"""
         # Получаем точки ввода в зависимости от метода создания
@@ -1961,6 +2102,8 @@ class MainWindow(QMainWindow):
             self.on_rectangle_coordinates_changed()
         elif self.canvas.primitive_type == 'ellipse':
             self.on_ellipse_coordinates_changed()
+        elif self.canvas.primitive_type == 'polygon':
+            self.on_polygon_coordinates_changed()
         else:
             # Для отрезков используем обычный обработчик
             self.on_coordinates_changed()
@@ -2039,7 +2182,7 @@ class MainWindow(QMainWindow):
         
         # Определяем тип объекта и показываем соответствующую информацию
         from widgets.line_segment import LineSegment
-        from widgets.primitives import Circle, Arc, Rectangle, Ellipse
+        from widgets.primitives import Circle, Arc, Rectangle, Ellipse, Polygon
         
         if isinstance(last_obj, LineSegment):
             self._update_line_info(last_obj)
@@ -2051,6 +2194,8 @@ class MainWindow(QMainWindow):
             self._update_rectangle_info(last_obj)
         elif isinstance(last_obj, Ellipse):
             self._update_ellipse_info(last_obj)
+        elif isinstance(last_obj, Polygon):
+            self._update_polygon_info(last_obj)
         else:
             self._clear_info_panel()
     
@@ -2180,3 +2325,36 @@ class MainWindow(QMainWindow):
         self.info_value3.setText(f"{perimeter:.2f}")
         self.info_label4.setText("Площадь:")
         self.info_value4.setText(f"{area:.2f}")
+    
+    def _update_polygon_info(self, polygon):
+        """Обновляет информацию о многоугольнике"""
+        center_x, center_y = polygon.center.x(), polygon.center.y()
+        radius = polygon.radius
+        num_vertices = polygon.num_vertices
+        
+        # Периметр многоугольника (сумма длин всех сторон)
+        vertices = polygon.get_vertices()
+        perimeter = 0.0
+        for i in range(len(vertices)):
+            p1 = vertices[i]
+            p2 = vertices[(i + 1) % len(vertices)]
+            dx = p2.x() - p1.x()
+            dy = p2.y() - p1.y()
+            perimeter += math.sqrt(dx*dx + dy*dy)
+        
+        # Площадь многоугольника (формула площади через координаты вершин)
+        area = 0.0
+        for i in range(len(vertices)):
+            p1 = vertices[i]
+            p2 = vertices[(i + 1) % len(vertices)]
+            area += p1.x() * p2.y() - p2.x() * p1.y()
+        area = abs(area) / 2.0
+        
+        self.info_label1.setText("Центр:")
+        self.info_value1.setText(f"({center_x:.2f}, {center_y:.2f})")
+        self.info_label2.setText("Радиус:")
+        self.info_value2.setText(f"{radius:.2f}")
+        self.info_label3.setText("Количество углов:")
+        self.info_value3.setText(f"{num_vertices}")
+        self.info_label4.setText("Периметр:")
+        self.info_value4.setText(f"{perimeter:.2f}")

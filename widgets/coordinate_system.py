@@ -65,13 +65,16 @@ class CoordinateSystemWidget(QWidget):
         self.line_width = 2
         
         # Тип создаваемого примитива
-        self.primitive_type = 'line'  # 'line', 'circle', 'arc', 'rectangle', 'ellipse'
+        self.primitive_type = 'line'  # 'line', 'circle', 'arc', 'rectangle', 'ellipse', 'polygon'
         # Метод создания окружности
         self.circle_creation_method = 'center_radius'  # 'center_radius', 'center_diameter', 'two_points', 'three_points'
         # Метод создания дуги
         self.arc_creation_method = 'three_points'  # 'three_points', 'center_angles'
         # Метод создания прямоугольника
         self.rectangle_creation_method = 'two_points'  # 'two_points', 'point_size', 'center_size', 'with_fillets'
+        # Метод создания многоугольника
+        self.polygon_creation_method = 'center_radius_vertices'  # 'center_radius_vertices'
+        self.polygon_num_vertices = 3
         
         # Подключаем сигналы
         self.selection_manager.selection_changed.connect(self._on_selection_changed)
@@ -156,8 +159,26 @@ class CoordinateSystemWidget(QWidget):
         objects = self.scene.get_objects()
         current_obj = self.scene.get_current_object()
         
-        # Получаем точки привязки
+        # Получаем статические точки привязки
         snap_points = self.snap_manager.get_snap_points(objects, exclude_object=current_obj)
+        
+        # Получаем начальную точку для динамических привязок
+        start_point = None
+        if self.scene.is_drawing():
+            drawing_type = getattr(self.scene, '_drawing_type', None)
+            if drawing_type == 'line':
+                current_line = self.scene.get_current_line()
+                if current_line:
+                    start_point = current_line.start_point
+            elif drawing_type == 'arc':
+                start_point = getattr(self.scene, '_arc_start_point', None)
+        
+        # Добавляем динамические точки привязки
+        if start_point:
+            dynamic_points = self.snap_manager.get_dynamic_snap_points(
+                point, objects, exclude_object=current_obj, start_point=start_point
+            )
+            snap_points.extend(dynamic_points)
         
         # Находим ближайшую точку привязки
         scale_factor = self.viewport.get_scale()
@@ -359,6 +380,9 @@ class CoordinateSystemWidget(QWidget):
                         kwargs['arc_method'] = self.arc_creation_method
                     elif self.primitive_type == 'rectangle':
                         kwargs['rectangle_method'] = self.rectangle_creation_method
+                    elif self.primitive_type == 'polygon':
+                        kwargs['polygon_method'] = self.polygon_creation_method
+                        kwargs['num_vertices'] = self.polygon_num_vertices
                     self.scene.start_drawing(world_pos, drawing_type=self.primitive_type,
                                             style=style, color=self.line_color, width=self.line_width, **kwargs)
                     # Эмитируем сигнал о начале рисования прямоугольника (после start_drawing)
@@ -444,6 +468,12 @@ class CoordinateSystemWidget(QWidget):
                             obj = self.scene.finish_drawing()
                             if obj:
                                 self.line_finished.emit()
+                    elif self.primitive_type == 'polygon':
+                        # Для многоугольника второй клик завершает создание (радиус определяется)
+                        self.scene.update_current_object(world_pos)
+                        obj = self.scene.finish_drawing()
+                        if obj:
+                            self.line_finished.emit()
                     elif self.primitive_type == 'rectangle':
                         # Проверяем метод создания прямоугольника
                         method = self.rectangle_creation_method
@@ -957,6 +987,19 @@ class CoordinateSystemWidget(QWidget):
         # Метод сохраняется для будущего использования
         # В данный момент эллипс создается через три точки в сцене
         pass
+    
+    def set_polygon_creation_method(self, method: str):
+        """Устанавливает метод создания многоугольника"""
+        self.polygon_creation_method = method
+    
+    def set_polygon_num_vertices(self, num_vertices: int):
+        """Устанавливает количество вершин многоугольника"""
+        if num_vertices >= 3:
+            self.polygon_num_vertices = num_vertices
+            # Обновляем текущий объект, если он существует
+            if self.scene.is_drawing() and self.scene._drawing_type == 'polygon':
+                self.scene.set_polygon_num_vertices(num_vertices)
+                self.update()
     
     # Свойства для обратной совместимости
     @property
