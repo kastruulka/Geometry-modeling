@@ -5,7 +5,7 @@
 import math
 from PySide6.QtWidgets import QWidget, QMenu
 from PySide6.QtCore import Qt, QPointF, QPoint, Signal, QTimer
-from PySide6.QtGui import QPainter, QPen, QColor, QTransform
+from PySide6.QtGui import QPainter, QColor
 
 from core.viewport import Viewport
 from core.scene import Scene
@@ -87,29 +87,37 @@ class CoordinateSystemWidget(QWidget):
         if not self.selection_start or not self.selection_end:
             return
         
-        # Рисуем рамку в экранных координатах (без трансформации)
-        painter.save()  # Сохраняем текущее состояние
-        painter.resetTransform()  # Сбрасываем трансформацию для отрисовки в экранных координатах
+        # Преобразуем экранные координаты в мировые
+        start_world = self.viewport.screen_to_world(self.selection_start)
+        end_world = self.viewport.screen_to_world(self.selection_end)
         
+        # Создаем прямоугольник
         from PySide6.QtCore import QRectF
-        from PySide6.QtGui import QPen, QColor
-        from PySide6.QtCore import Qt
-        
-        # Создаем прямоугольник из экранных координат напрямую
-        screen_rect = QRectF(
-            min(self.selection_start.x(), self.selection_end.x()),
-            min(self.selection_start.y(), self.selection_end.y()),
-            abs(self.selection_end.x() - self.selection_start.x()),
-            abs(self.selection_end.y() - self.selection_start.y())
+        rect = QRectF(
+            min(start_world.x(), end_world.x()),
+            min(start_world.y(), end_world.y()),
+            abs(end_world.x() - start_world.x()),
+            abs(end_world.y() - start_world.y())
         )
         
-        # Рисуем рамку
+        # Рисуем рамку в экранных координатах
+        painter.resetTransform()
+        from PySide6.QtGui import QPen
         selection_pen = QPen(QColor(0, 100, 255), 1, Qt.DashLine)
         painter.setPen(selection_pen)
-        painter.setBrush(QColor(0, 100, 255, 30))  # Полупрозрачная заливка
-        painter.drawRect(screen_rect)
+        painter.setBrush(QColor(0, 100, 255, 30))
         
-        painter.restore()  # Восстанавливаем состояние
+        # Преобразуем обратно в экранные координаты для отрисовки
+        start_screen = self.viewport.world_to_screen(start_world)
+        end_screen = self.viewport.world_to_screen(end_world)
+        
+        screen_rect = QRectF(
+            min(start_screen.x(), end_screen.x()),
+            min(start_screen.y(), end_screen.y()),
+            abs(end_screen.x() - start_screen.x()),
+            abs(end_screen.y() - end_screen.y())
+        )
+        painter.drawRect(screen_rect)
     
     def show_context_menu(self, position):
         """Показывает контекстное меню"""
@@ -173,18 +181,8 @@ class CoordinateSystemWidget(QWidget):
                         style = self.style_manager.get_current_style()
                     self.scene.start_drawing(world_pos, style=style, 
                                             color=self.line_color, width=self.line_width)
-                    # Устанавливаем начальную точку как текущую
-                    current_line = self.scene.get_current_line()
-                    if current_line:
-                        current_line.end_point = world_pos
-                        if hasattr(current_line, '_legacy_color'):
-                            current_line._legacy_color = self.line_color
                 else:
-                    # Завершаем рисование при втором клике
-                    current_line = self.scene.get_current_line()
-                    if current_line:
-                        # Обновляем конечную точку перед завершением
-                        current_line.end_point = world_pos
+                    # Завершаем рисование
                     line = self.scene.finish_drawing()
                     if line:
                         self.line_finished.emit()
@@ -261,8 +259,7 @@ class CoordinateSystemWidget(QWidget):
                 self.last_mouse_pos = event.position()
                 self.view_changed.emit()
                 self.update()
-        elif self.scene.is_drawing():
-            # Обновляем конечную точку при движении мыши во время рисования
+        elif self.scene.is_drawing() and event.buttons() & Qt.LeftButton:
             world_pos = self.viewport.screen_to_world(event.position())
             self.scene.update_current_line(world_pos)
             self.update()
@@ -349,6 +346,7 @@ class CoordinateSystemWidget(QWidget):
             return
         
         from PySide6.QtCore import QRectF, QPointF
+        from PySide6.QtGui import QTransform
         
         min_x = min(p.x() for p in points)
         max_x = max(p.x() for p in points)
@@ -539,7 +537,6 @@ class CoordinateSystemWidget(QWidget):
                     current_line._legacy_color = self.line_color
             self.update()
     
-    # Свойства для обратной совместимости
     @property
     def lines(self):
         """Свойство для обратной совместимости"""
@@ -559,3 +556,4 @@ class CoordinateSystemWidget(QWidget):
     def selected_lines(self):
         """Свойство для обратной совместимости"""
         return self.selection_manager.get_selected_lines()
+
