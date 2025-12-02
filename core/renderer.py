@@ -1934,67 +1934,348 @@ class PrimitiveRenderer:
     # Методы специальной отрисовки для сплайнов
     @staticmethod
     def _draw_wavy_spline(painter: QPainter, spline, pen: QPen):
-        """Отрисовывает волнистый сплайн"""
+        """Отрисовывает волнистый сплайн вдоль кривой"""
+        import math
+        from PySide6.QtGui import QPainterPath
+        
         if len(spline.control_points) < 2:
             return
         
-        # Разбиваем сплайн на сегменты и рисуем каждый как волнистую линию
-        num_samples = max(100, len(spline.control_points) * 20)
+        # Сначала вычисляем точки на сплайне и накапливаем длину дуги
+        num_samples = max(200, len(spline.control_points) * 40)
+        points = []
+        arc_lengths = [0.0]
+        total_length = 0.0
+        
         prev_point = spline._get_point_on_spline(0)
+        points.append(prev_point)
         
         for i in range(1, num_samples + 1):
             t = i / num_samples if num_samples > 0 else 0
             curr_point = spline._get_point_on_spline(t)
-            LineRenderer._draw_wavy_line(painter, prev_point, curr_point, pen)
+            points.append(curr_point)
+            
+            dx = curr_point.x() - prev_point.x()
+            dy = curr_point.y() - prev_point.y()
+            segment_length = math.sqrt(dx*dx + dy*dy)
+            total_length += segment_length
+            arc_lengths.append(total_length)
             prev_point = curr_point
+        
+        if total_length < 1:
+            return
+        
+        # Параметры волны
+        main_thickness_mm = 0.8
+        line_thickness_mm = pen.widthF() * 25.4 / 96
+        amplitude_mm = (main_thickness_mm / 2.5) * (line_thickness_mm / 0.4)
+        amplitude_px = (amplitude_mm * 96) / 25.4
+        wave_length_px = amplitude_px * 5
+        num_waves = max(1, int(total_length / wave_length_px))
+        actual_wave_length = total_length / num_waves if num_waves > 0 else total_length
+        
+        # Строим волнистый путь вдоль сплайна
+        path = QPainterPath()
+        path.moveTo(points[0])
+        
+        for i in range(1, len(points)):
+            # Вычисляем направление перпендикуляра к кривой
+            if i < len(points) - 1:
+                # Используем направление между соседними точками
+                dx1 = points[i].x() - points[i-1].x()
+                dy1 = points[i].y() - points[i-1].y()
+                len1 = math.sqrt(dx1*dx1 + dy1*dy1)
+                if len1 > 0.001:
+                    cos_angle = dx1 / len1
+                    sin_angle = dy1 / len1
+                    perp_cos = -sin_angle
+                    perp_sin = cos_angle
+                else:
+                    perp_cos = 0
+                    perp_sin = 1
+            else:
+                # Для последней точки используем предыдущее направление
+                dx1 = points[i].x() - points[i-1].x()
+                dy1 = points[i].y() - points[i-1].y()
+                len1 = math.sqrt(dx1*dx1 + dy1*dy1)
+                if len1 > 0.001:
+                    cos_angle = dx1 / len1
+                    sin_angle = dy1 / len1
+                    perp_cos = -sin_angle
+                    perp_sin = cos_angle
+                else:
+                    perp_cos = 0
+                    perp_sin = 1
+            
+            # Вычисляем фазу волны на основе длины дуги
+            arc_pos = arc_lengths[i]
+            wave_phase = (arc_pos / actual_wave_length) * 2 * math.pi
+            wave_offset = amplitude_px * math.sin(wave_phase)
+            
+            # Применяем смещение перпендикулярно к кривой
+            wavy_point = QPointF(
+                points[i].x() + wave_offset * perp_cos,
+                points[i].y() + wave_offset * perp_sin
+            )
+            path.lineTo(wavy_point)
+        
+        painter.setPen(pen)
+        painter.setBrush(Qt.NoBrush)
+        painter.drawPath(path)
     
     @staticmethod
     def _draw_broken_spline(painter: QPainter, spline, pen: QPen):
-        """Отрисовывает сплайн с изломами"""
+        """Отрисовывает сплайн с изломами вдоль кривой"""
+        import math
+        from PySide6.QtGui import QPainterPath
+        
         if len(spline.control_points) < 2:
             return
         
-        # Разбиваем сплайн на сегменты и рисуем каждый как ломаную линию
-        num_samples = max(100, len(spline.control_points) * 20)
+        # Вычисляем точки на сплайне и длину дуги
+        num_samples = max(200, len(spline.control_points) * 40)
+        points = []
+        arc_lengths = [0.0]
+        total_length = 0.0
+        
         prev_point = spline._get_point_on_spline(0)
+        points.append(prev_point)
         
         for i in range(1, num_samples + 1):
             t = i / num_samples if num_samples > 0 else 0
             curr_point = spline._get_point_on_spline(t)
-            LineRenderer._draw_broken_line(painter, prev_point, curr_point, pen)
+            points.append(curr_point)
+            
+            dx = curr_point.x() - prev_point.x()
+            dy = curr_point.y() - prev_point.y()
+            segment_length = math.sqrt(dx*dx + dy*dy)
+            total_length += segment_length
+            arc_lengths.append(total_length)
             prev_point = curr_point
+        
+        if total_length < 1:
+            return
+        
+        # Параметры зигзага
+        zigzag_height_mm = 3.5
+        zigzag_width_mm = 4.0
+        dpi = 96
+        zigzag_height = (zigzag_height_mm * dpi) / 25.4
+        zigzag_length = (zigzag_width_mm * dpi) / 25.4
+        
+        if zigzag_length > total_length * 0.8:
+            zigzag_length = total_length * 0.8
+        
+        straight_length = (total_length - zigzag_length) / 2
+        
+        # Строим путь с зигзагом
+        path = QPainterPath()
+        path.moveTo(points[0])
+        
+        # Находим точки начала и конца зигзага
+        zigzag_start_idx = 0
+        zigzag_end_idx = len(points) - 1
+        
+        for i in range(len(arc_lengths)):
+            if arc_lengths[i] >= straight_length:
+                zigzag_start_idx = i
+                break
+        
+        for i in range(len(arc_lengths) - 1, -1, -1):
+            if arc_lengths[i] <= total_length - straight_length:
+                zigzag_end_idx = i
+                break
+        
+        # Рисуем до начала зигзага
+        for i in range(1, zigzag_start_idx + 1):
+            path.lineTo(points[i])
+        
+        # Рисуем зигзаг
+        if zigzag_start_idx < zigzag_end_idx:
+            zigzag_segment_length = arc_lengths[zigzag_end_idx] - arc_lengths[zigzag_start_idx]
+            if zigzag_segment_length > 0:
+                num_zigzag_segments = 3
+                segment_arc_length = zigzag_segment_length / num_zigzag_segments
+                
+                for seg in range(1, num_zigzag_segments + 1):
+                    target_arc = arc_lengths[zigzag_start_idx] + seg * segment_arc_length
+                    
+                    # Находим точку на кривой для этого значения дуги
+                    target_idx = zigzag_start_idx
+                    for i in range(zigzag_start_idx, min(zigzag_end_idx + 1, len(arc_lengths))):
+                        if arc_lengths[i] >= target_arc:
+                            target_idx = i
+                            break
+                    
+                    if target_idx < len(points):
+                        # Вычисляем перпендикулярное направление
+                        if target_idx > 0 and target_idx < len(points) - 1:
+                            dx1 = points[target_idx].x() - points[target_idx-1].x()
+                            dy1 = points[target_idx].y() - points[target_idx-1].y()
+                            len1 = math.sqrt(dx1*dx1 + dy1*dy1)
+                            if len1 > 0.001:
+                                perp_cos = -dy1 / len1
+                                perp_sin = dx1 / len1
+                            else:
+                                perp_cos = 0
+                                perp_sin = 1
+                        else:
+                            perp_cos = 0
+                            perp_sin = 1
+                        
+                        # Применяем смещение для зигзага
+                        offset = (zigzag_height / 2) if seg % 2 == 1 else (-zigzag_height / 2)
+                        zigzag_point = QPointF(
+                            points[target_idx].x() + offset * perp_cos,
+                            points[target_idx].y() + offset * perp_sin
+                        )
+                        path.lineTo(zigzag_point)
+        
+        # Рисуем от конца зигзага до конца
+        for i in range(zigzag_end_idx + 1, len(points)):
+            path.lineTo(points[i])
+        
+        painter.setPen(pen)
+        painter.setBrush(Qt.NoBrush)
+        painter.drawPath(path)
     
     @staticmethod
     def _draw_dashed_spline(painter: QPainter, spline, pen: QPen, style):
-        """Отрисовывает штриховой сплайн"""
+        """Отрисовывает штриховой сплайн вдоль кривой"""
+        import math
+        
         if len(spline.control_points) < 2:
             return
         
-        # Разбиваем сплайн на сегменты и рисуем каждый как штриховую линию
-        num_samples = max(100, len(spline.control_points) * 20)
+        # Вычисляем точки на сплайне и длину дуги
+        num_samples = max(200, len(spline.control_points) * 40)
+        points = []
+        arc_lengths = [0.0]
+        total_length = 0.0
+        
         prev_point = spline._get_point_on_spline(0)
+        points.append(prev_point)
         
         for i in range(1, num_samples + 1):
             t = i / num_samples if num_samples > 0 else 0
             curr_point = spline._get_point_on_spline(t)
-            LineRenderer._draw_dashed_line(painter, prev_point, curr_point, pen, style)
+            points.append(curr_point)
+            
+            dx = curr_point.x() - prev_point.x()
+            dy = curr_point.y() - prev_point.y()
+            segment_length = math.sqrt(dx*dx + dy*dy)
+            total_length += segment_length
+            arc_lengths.append(total_length)
             prev_point = curr_point
+        
+        if total_length < 0.1:
+            return
+        
+        dash_length = style.dash_length
+        dash_gap = style.dash_gap
+        
+        painter.setPen(pen)
+        
+        # Рисуем штрихи вдоль кривой
+        current_arc_pos = 0.0
+        drawing_dash = True
+        
+        while current_arc_pos < total_length:
+            if drawing_dash:
+                dash_end = min(current_arc_pos + dash_length, total_length)
+                # Находим точки на кривой для начала и конца штриха
+                start_point = PrimitiveRenderer._get_point_at_arc_length(points, arc_lengths, current_arc_pos)
+                end_point = PrimitiveRenderer._get_point_at_arc_length(points, arc_lengths, dash_end)
+                painter.drawLine(start_point, end_point)
+                current_arc_pos = dash_end
+                drawing_dash = False
+            else:
+                current_arc_pos += dash_gap
+                drawing_dash = True
     
     @staticmethod
     def _draw_dash_dot_spline(painter: QPainter, spline, pen: QPen, style):
-        """Отрисовывает штрихпунктирный сплайн"""
+        """Отрисовывает штрихпунктирный сплайн вдоль кривой"""
+        import math
+        
         if len(spline.control_points) < 2:
             return
         
-        # Разбиваем сплайн на сегменты и рисуем каждый как штрихпунктирную линию
-        num_samples = max(100, len(spline.control_points) * 20)
+        # Вычисляем точки на сплайне и длину дуги
+        num_samples = max(200, len(spline.control_points) * 40)
+        points = []
+        arc_lengths = [0.0]
+        total_length = 0.0
+        
         prev_point = spline._get_point_on_spline(0)
+        points.append(prev_point)
         
         for i in range(1, num_samples + 1):
             t = i / num_samples if num_samples > 0 else 0
             curr_point = spline._get_point_on_spline(t)
-            LineRenderer._draw_dash_dot_line(painter, prev_point, curr_point, pen, style)
+            points.append(curr_point)
+            
+            dx = curr_point.x() - prev_point.x()
+            dy = curr_point.y() - prev_point.y()
+            segment_length = math.sqrt(dx*dx + dy*dy)
+            total_length += segment_length
+            arc_lengths.append(total_length)
             prev_point = curr_point
+        
+        if total_length < 0.1:
+            return
+        
+        dash_length = style.dash_length
+        dash_gap = style.dash_gap
+        dot_length = style.thickness_mm * 0.5
+        
+        if style.line_type == LineType.DASH_DOT_TWO_DOTS:
+            pattern = [dash_length, dash_gap, dot_length, dash_gap, dot_length, dash_gap]
+        else:
+            pattern = [dash_length, dash_gap, dot_length, dash_gap]
+        
+        painter.setPen(pen)
+        
+        # Рисуем паттерн вдоль кривой
+        current_arc_pos = 0.0
+        pattern_index = 0
+        
+        while current_arc_pos < total_length:
+            segment_length = pattern[pattern_index % len(pattern)]
+            segment_end = min(current_arc_pos + segment_length, total_length)
+            
+            is_gap = (segment_length == dash_gap)
+            
+            if not is_gap:
+                start_point = PrimitiveRenderer._get_point_at_arc_length(points, arc_lengths, current_arc_pos)
+                end_point = PrimitiveRenderer._get_point_at_arc_length(points, arc_lengths, segment_end)
+                painter.drawLine(start_point, end_point)
+            
+            current_arc_pos += segment_length
+            pattern_index += 1
+    
+    @staticmethod
+    def _get_point_at_arc_length(points, arc_lengths, target_arc):
+        """Находит точку на кривой для заданной длины дуги"""
+        import math
+        from PySide6.QtCore import QPointF
+        
+        if target_arc <= 0:
+            return points[0]
+        if target_arc >= arc_lengths[-1]:
+            return points[-1]
+        
+        # Находим индекс, между которым находится target_arc
+        for i in range(len(arc_lengths) - 1):
+            if arc_lengths[i] <= target_arc <= arc_lengths[i + 1]:
+                # Интерполируем между точками
+                t = (target_arc - arc_lengths[i]) / (arc_lengths[i + 1] - arc_lengths[i]) if arc_lengths[i + 1] > arc_lengths[i] else 0
+                return QPointF(
+                    points[i].x() + t * (points[i + 1].x() - points[i].x()),
+                    points[i].y() + t * (points[i + 1].y() - points[i].y())
+                )
+        
+        return points[-1]
     
 
 class SceneRenderer:
