@@ -67,13 +67,13 @@ class SelectionManager(QObject):
     
     def find_object_at_point(self, point: QPointF, objects: List[GeometricObject], 
                             tolerance: float = 5.0) -> Optional[GeometricObject]:
-        """Находит объект в указанной точке"""
+        """Находит объект в указанной точке (проверяет только контур, не площадь)"""
         closest_obj = None
         min_distance = float('inf')
         
         for obj in objects:
             if obj.contains_point(point, tolerance):
-                # Для линий вычисляем точное расстояние
+                # Для линий вычисляем точное расстояние до контура
                 if isinstance(obj, LineSegment):
                     distance = self._point_to_line_distance(
                         point, obj.start_point, obj.end_point
@@ -83,6 +83,8 @@ class SelectionManager(QObject):
                         closest_obj = obj
                 else:
                     # Для других объектов используем расстояние до центра bounding box
+                    # как приближение для выбора ближайшего объекта
+                    # (основная проверка контура уже сделана в contains_point)
                     bbox = obj.get_bounding_box()
                     center = QPointF(bbox.center().x(), bbox.center().y())
                     import math

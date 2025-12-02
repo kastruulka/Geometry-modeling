@@ -259,28 +259,90 @@ class Arc(GeometricObject, Drawable):
         return QRectF(min_x, min_y, max_x - min_x, max_y - min_y)
     
     def contains_point(self, point: QPointF, tolerance: float = 5.0) -> bool:
-        """Проверяет, содержит ли дуга точку"""
+        """Проверяет, находится ли точка на контуре дуги (не внутри области)"""
         import math
-        dx = point.x() - self.center.x()
-        dy = point.y() - self.center.y()
-        distance = math.sqrt(dx*dx + dy*dy)
         
-        # Проверяем расстояние до окружности
-        if abs(distance - self.radius) > tolerance:
-            return False
+        # Получаем углы дуги
+        start_angle = self.start_angle
+        end_angle = self.end_angle
         
-        # Проверяем, находится ли угол точки в диапазоне дуги
-        angle = math.degrees(math.atan2(dy, dx))
-        # Нормализуем углы
-        start = self.start_angle % 360
-        end = self.end_angle % 360
-        angle_norm = angle % 360
-        
-        if start <= end:
-            return start <= angle_norm <= end
+        # Определяем диапазон углов для проверки
+        # Для дуги от 180° до 360° (дуга вверх)
+        if abs(end_angle - 360) < 0.1 or end_angle == 360:
+            # Дуга идет от start_angle до 360 включительно
+            if start_angle <= 360:
+                angle_span = 360 - start_angle
+                angles_to_check = []
+                # Генерируем углы от start_angle до 360
+                num_points = max(50, int(angle_span))
+                for i in range(num_points + 1):
+                    angle = start_angle + (angle_span * i / num_points)
+                    if angle > 360:
+                        angle = 360
+                    angles_to_check.append(angle)
+            else:
+                # Дуга пересекает 0°
+                angle_span = (360 - start_angle) + end_angle
+                angles_to_check = []
+                num_points = max(50, int(angle_span))
+                for i in range(num_points + 1):
+                    progress = i / num_points
+                    if progress * angle_span <= (360 - start_angle):
+                        angle = start_angle + progress * angle_span
+                    else:
+                        angle = (progress * angle_span - (360 - start_angle)) % 360
+                    angles_to_check.append(angle)
+        # Для дуги от 180° до 0° (дуга вниз)
+        elif start_angle > end_angle:
+            angle_span = (360 - start_angle) + end_angle
+            angles_to_check = []
+            num_points = max(50, int(angle_span))
+            for i in range(num_points + 1):
+                progress = i / num_points
+                if progress * angle_span <= (360 - start_angle):
+                    angle = start_angle + progress * angle_span
+                    if angle >= 360:
+                        angle = angle % 360
+                else:
+                    angle = (progress * angle_span - (360 - start_angle)) % 360
+                angles_to_check.append(angle)
+        # Обычная дуга (start <= end)
         else:
-            # Дуга пересекает 0 градусов
-            return angle_norm >= start or angle_norm <= end
+            angle_span = end_angle - start_angle
+            angles_to_check = []
+            num_points = max(50, int(angle_span))
+            for i in range(num_points + 1):
+                angle = start_angle + (angle_span * i / num_points)
+                angles_to_check.append(angle)
+        
+        # Проверяем расстояние до всех точек на дуге
+        min_distance = float('inf')
+        for angle in angles_to_check:
+            arc_point = self.get_point_at_angle(angle)
+            dx = point.x() - arc_point.x()
+            dy = point.y() - arc_point.y()
+            dist = math.sqrt(dx*dx + dy*dy)
+            if dist < min_distance:
+                min_distance = dist
+                # Если расстояние уже меньше tolerance, можно вернуть True
+                if min_distance <= tolerance:
+                    return True
+        
+        # Также проверяем начальную и конечную точки
+        start_point = self.get_point_at_angle(self.start_angle)
+        dx_start = point.x() - start_point.x()
+        dy_start = point.y() - start_point.y()
+        dist_start = math.sqrt(dx_start*dx_start + dy_start*dy_start)
+        
+        end_point = self.get_point_at_angle(self.end_angle)
+        dx_end = point.x() - end_point.x()
+        dy_end = point.y() - end_point.y()
+        dist_end = math.sqrt(dx_end*dx_end + dy_end*dy_end)
+        
+        min_distance = min(min_distance, dist_start, dist_end)
+        
+        # Проверяем, что расстояние до контура в пределах tolerance
+        return min_distance <= tolerance
     
     def get_point_at_angle(self, angle_deg: float) -> QPointF:
         """Вычисляет точку на дуге для заданного угла в градусах (параметрический угол)"""
@@ -711,16 +773,87 @@ class Rectangle(GeometricObject, Drawable):
         )
     
     def contains_point(self, point: QPointF, tolerance: float = 5.0) -> bool:
-        """Проверяет, содержит ли прямоугольник точку"""
+        """Проверяет, находится ли точка на контуре прямоугольника (не внутри)"""
+        import math
         rect = self.get_bounding_box()
-        # Расширяем прямоугольник на tolerance
-        expanded_rect = QRectF(
-            rect.x() - tolerance,
-            rect.y() - tolerance,
-            rect.width() + 2 * tolerance,
-            rect.height() + 2 * tolerance
-        )
-        return expanded_rect.contains(point)
+        x, y = point.x(), point.y()
+        rx, ry, w, h = rect.x(), rect.y(), rect.width(), rect.height()
+        
+        fillet_radius = getattr(self, 'fillet_radius', 0.0)
+        r = min(fillet_radius, w / 2, h / 2) if fillet_radius > 0 else 0
+        
+        # Если есть скругления, проверяем расстояние до контура со скруглениями
+        if r > 0:
+            # Проверяем расстояние до прямых сторон
+            # Верхняя сторона
+            if rx + r <= x <= rx + w - r and abs(y - ry) <= tolerance:
+                return True
+            # Правая сторона
+            if ry + r <= y <= ry + h - r and abs(x - (rx + w)) <= tolerance:
+                return True
+            # Нижняя сторона
+            if rx + r <= x <= rx + w - r and abs(y - (ry + h)) <= tolerance:
+                return True
+            # Левая сторона
+            if ry + r <= y <= ry + h - r and abs(x - rx) <= tolerance:
+                return True
+            
+            # Проверяем расстояние до дуг в углах
+            # Верхний правый угол
+            center_x, center_y = rx + w - r, ry + r
+            dx, dy = x - center_x, y - center_y
+            dist = math.sqrt(dx*dx + dy*dy)
+            if abs(dist - r) <= tolerance:
+                # Проверяем, что угол в диапазоне дуги (от -90 до 0 градусов)
+                angle = math.degrees(math.atan2(dy, dx))
+                if -90 <= angle <= 0:
+                    return True
+            
+            # Нижний правый угол
+            center_x, center_y = rx + w - r, ry + h - r
+            dx, dy = x - center_x, y - center_y
+            dist = math.sqrt(dx*dx + dy*dy)
+            if abs(dist - r) <= tolerance:
+                angle = math.degrees(math.atan2(dy, dx))
+                if 0 <= angle <= 90:
+                    return True
+            
+            # Нижний левый угол
+            center_x, center_y = rx + r, ry + h - r
+            dx, dy = x - center_x, y - center_y
+            dist = math.sqrt(dx*dx + dy*dy)
+            if abs(dist - r) <= tolerance:
+                angle = math.degrees(math.atan2(dy, dx))
+                if 90 <= angle <= 180:
+                    return True
+            
+            # Верхний левый угол
+            center_x, center_y = rx + r, ry + r
+            dx, dy = x - center_x, y - center_y
+            dist = math.sqrt(dx*dx + dy*dy)
+            if abs(dist - r) <= tolerance:
+                angle = math.degrees(math.atan2(dy, dx))
+                # atan2 возвращает угол в диапазоне [-180, 180]
+                if -180 <= angle <= -90:
+                    return True
+            
+            return False
+        else:
+            # Прямоугольник без скруглений - проверяем расстояние до сторон
+            # Верхняя сторона
+            if rx <= x <= rx + w and abs(y - ry) <= tolerance:
+                return True
+            # Правая сторона
+            if ry <= y <= ry + h and abs(x - (rx + w)) <= tolerance:
+                return True
+            # Нижняя сторона
+            if rx <= x <= rx + w and abs(y - (ry + h)) <= tolerance:
+                return True
+            # Левая сторона
+            if ry <= y <= ry + h and abs(x - rx) <= tolerance:
+                return True
+            
+            return False
     
     def intersects_rect(self, rect: QRectF) -> bool:
         """Проверяет, пересекается ли прямоугольник с другим прямоугольником"""
