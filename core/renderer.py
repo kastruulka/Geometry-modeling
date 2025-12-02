@@ -128,6 +128,46 @@ class LineRenderer:
         painter.drawPath(path)
     
     @staticmethod
+    def _draw_wavy_line_segment(painter: QPainter, start_point: QPointF, end_point: QPointF, 
+                                pen: QPen, start_arc_pos: float, actual_wave_length: float, amplitude_px: float):
+        """Отрисовывает волнистую линию с учетом накопленной длины дуги для непрерывной волны"""
+        dx = end_point.x() - start_point.x()
+        dy = end_point.y() - start_point.y()
+        length = math.sqrt(dx*dx + dy*dy)
+        angle = math.atan2(dy, dx)
+        
+        if length < 1:
+            return
+        
+        path = QPainterPath()
+        cos_angle = math.cos(angle)
+        sin_angle = math.sin(angle)
+        perp_cos = -sin_angle
+        perp_sin = cos_angle
+        
+        num_points = max(50, int(length / 2))
+        
+        for i in range(num_points + 1):
+            t = i / num_points
+            along_line = t * length
+            # Используем накопленную длину дуги для непрерывной волны
+            total_arc_pos = start_arc_pos + along_line
+            wave_phase = (total_arc_pos / actual_wave_length) * 2 * math.pi
+            wave_offset = amplitude_px * math.sin(wave_phase)
+            
+            x = start_point.x() + along_line * cos_angle + wave_offset * perp_cos
+            y = start_point.y() + along_line * sin_angle + wave_offset * perp_sin
+            
+            if i == 0:
+                path.moveTo(x, y)
+            else:
+                path.lineTo(x, y)
+        
+        painter.setPen(pen)
+        painter.setBrush(Qt.NoBrush)
+        painter.drawPath(path)
+    
+    @staticmethod
     def _draw_broken_line(painter: QPainter, start_point: QPointF, end_point: QPointF, pen: QPen):
         """Отрисовывает сплошную линию с изломами (острые углы, зигзаг)"""
         dx = end_point.x() - start_point.x()
@@ -852,74 +892,454 @@ class PrimitiveRenderer:
     # Методы специальной отрисовки для прямоугольников
     @staticmethod
     def _draw_wavy_rectangle(painter: QPainter, rectangle, pen: QPen):
-        """Отрисовывает волнистый прямоугольник"""
+        """Отрисовывает волнистый прямоугольник с непрерывной волной (как у сплайна)"""
+        from PySide6.QtGui import QPainterPath
         fillet_radius = getattr(rectangle, 'fillet_radius', 0.0)
         rect = rectangle.get_bounding_box()
         w = rect.width()
         h = rect.height()
         r = min(fillet_radius, w / 2, h / 2) if fillet_radius > 0 else 0.0
         
+        # Амплитуда волны согласно ГОСТ
+        main_thickness_mm = 0.8
+        line_thickness_mm = pen.widthF() * 25.4 / 96
+        amplitude_mm = (main_thickness_mm / 2.5) * (line_thickness_mm / 0.4)
+        amplitude_px = (amplitude_mm * 96) / 25.4
+        
+        # Сначала генерируем все точки вдоль периметра как единый контур (как у сплайна)
+        points = []
+        arc_lengths = []
+        total_length = 0.0
+        
+        def get_point_on_perimeter(t):
+            """Возвращает точку на периметре прямоугольника по параметру t [0, 1]"""
+            if r > 0:
+                # Прямые стороны
+                top_side = w - 2 * r
+                right_side = h - 2 * r
+                bottom_side = w - 2 * r
+                left_side = h - 2 * r
+                arc_length = r * math.pi / 2
+                total_perimeter = top_side + right_side + bottom_side + left_side + 4 * arc_length
+                
+                # Нормализуем t к длине периметра
+                pos = t * total_perimeter
+                
+                # Верхняя сторона
+                if pos <= top_side:
+                    x = rect.x() + r + pos
+                    y = rect.y()
+                    return QPointF(x, y)
+                pos -= top_side
+                
+                # Верхний правый угол (дуга) - центр в (w - r, r)
+                if pos <= arc_length:
+                    t_arc = pos / arc_length  # параметр от 0 до 1
+                    start_angle = 0  # вправо
+                    end_angle = math.pi / 2  # вниз
+                    angle = start_angle + t_arc * (end_angle - start_angle)
+                    center_x = rect.x() + w - r
+                    center_y = rect.y() + r
+                    x = center_x + r * math.cos(angle)
+                    y = center_y + r * math.sin(angle)
+                    return QPointF(x, y)
+                pos -= arc_length
+                
+                # Правая сторона
+                if pos <= right_side:
+                    x = rect.x() + w
+                    y = rect.y() + r + pos
+                    return QPointF(x, y)
+                pos -= right_side
+                
+                # Нижний правый угол (дуга) - центр в (w - r, h - r)
+                if pos <= arc_length:
+                    t_arc = pos / arc_length
+                    start_angle = math.pi / 2  # вниз
+                    end_angle = math.pi  # влево
+                    angle = start_angle + t_arc * (end_angle - start_angle)
+                    center_x = rect.x() + w - r
+                    center_y = rect.y() + h - r
+                    x = center_x + r * math.cos(angle)
+                    y = center_y + r * math.sin(angle)
+                    return QPointF(x, y)
+                pos -= arc_length
+                
+                # Нижняя сторона
+                if pos <= bottom_side:
+                    x = rect.x() + w - r - pos
+                    y = rect.y() + h
+                    return QPointF(x, y)
+                pos -= bottom_side
+                
+                # Нижний левый угол (дуга) - центр в (r, h - r)
+                if pos <= arc_length:
+                    t_arc = pos / arc_length
+                    start_angle = math.pi  # влево
+                    end_angle = 3 * math.pi / 2  # вверх
+                    angle = start_angle + t_arc * (end_angle - start_angle)
+                    center_x = rect.x() + r
+                    center_y = rect.y() + h - r
+                    x = center_x + r * math.cos(angle)
+                    y = center_y + r * math.sin(angle)
+                    return QPointF(x, y)
+                pos -= arc_length
+                
+                # Левая сторона
+                if pos <= left_side:
+                    x = rect.x()
+                    y = rect.y() + h - r - pos
+                    return QPointF(x, y)
+                pos -= left_side
+                
+                # Верхний левый угол (дуга) - центр в (r, r)
+                t_arc = pos / arc_length
+                start_angle = 3 * math.pi / 2  # вверх
+                end_angle = 2 * math.pi  # вправо (или 0)
+                angle = start_angle + t_arc * (end_angle - start_angle)
+                center_x = rect.x() + r
+                center_y = rect.y() + r
+                x = center_x + r * math.cos(angle)
+                y = center_y + r * math.sin(angle)
+                return QPointF(x, y)
+            else:
+                # Прямоугольник без скругления
+                corners = [
+                    QPointF(rect.x(), rect.y()),
+                    QPointF(rect.x() + w, rect.y()),
+                    QPointF(rect.x() + w, rect.y() + h),
+                    QPointF(rect.x(), rect.y() + h)
+                ]
+                total_perimeter = 2 * (w + h)
+                pos = t * total_perimeter
+                
+                # Верхняя сторона
+                if pos <= w:
+                    return QPointF(rect.x() + pos, rect.y())
+                pos -= w
+                
+                # Правая сторона
+                if pos <= h:
+                    return QPointF(rect.x() + w, rect.y() + pos)
+                pos -= h
+                
+                # Нижняя сторона
+                if pos <= w:
+                    return QPointF(rect.x() + w - pos, rect.y() + h)
+                pos -= w
+                
+                # Левая сторона
+                return QPointF(rect.x(), rect.y() + h - pos)
+        
+        # Генерируем точки вдоль периметра, явно проходя по каждому сегменту
+        # Это гарантирует точное совпадение точек на границах
         if r > 0:
-            # Для скругленных углов разбиваем контур на сегменты и применяем волнистый стиль
-            # Верхняя сторона
-            LineRenderer._draw_wavy_line(painter, 
-                                       QPointF(rect.x() + r, rect.y()), 
-                                       QPointF(rect.x() + w - r, rect.y()), 
-                                       pen)
-            # Верхний правый угол (дуга) - центр в центре квадрата 2r x 2r: (w - r, r)
-            if r > 0:
-                PrimitiveRenderer._draw_wavy_arc_segment(painter, 
-                    QPointF(rect.x() + w - r, rect.y()), 
-                    QPointF(rect.x() + w, rect.y() + r), 
-                    QPointF(rect.x() + w - r, rect.y() + r), r, pen)
-            # Правая сторона
-            LineRenderer._draw_wavy_line(painter, 
-                                       QPointF(rect.x() + w, rect.y() + r), 
-                                       QPointF(rect.x() + w, rect.y() + h - r), 
-                                       pen)
-            # Нижний правый угол (дуга) - центр в (w - r, h - r)
-            if r > 0:
-                PrimitiveRenderer._draw_wavy_arc_segment(painter, 
-                    QPointF(rect.x() + w, rect.y() + h - r), 
-                    QPointF(rect.x() + w - r, rect.y() + h), 
-                    QPointF(rect.x() + w - r, rect.y() + h - r), r, pen)
-            # Нижняя сторона
-            LineRenderer._draw_wavy_line(painter, 
-                                       QPointF(rect.x() + w - r, rect.y() + h), 
-                                       QPointF(rect.x() + r, rect.y() + h), 
-                                       pen)
-            # Нижний левый угол (дуга) - центр в (r, h - r)
-            if r > 0:
-                PrimitiveRenderer._draw_wavy_arc_segment(painter, 
-                    QPointF(rect.x() + r, rect.y() + h), 
-                    QPointF(rect.x(), rect.y() + h - r), 
-                    QPointF(rect.x() + r, rect.y() + h - r), r, pen)
-            # Левая сторона
-            LineRenderer._draw_wavy_line(painter, 
-                                       QPointF(rect.x(), rect.y() + h - r), 
-                                       QPointF(rect.x(), rect.y() + r), 
-                                       pen)
-            # Верхний левый угол (дуга) - центр в (r, r)
-            if r > 0:
-                PrimitiveRenderer._draw_wavy_arc_segment(painter, 
-                    QPointF(rect.x(), rect.y() + r), 
-                    QPointF(rect.x() + r, rect.y()), 
-                    QPointF(rect.x() + r, rect.y() + r), r, pen)
-        else:
-            # Обычный прямоугольник без скругления
-            bbox = rectangle.get_bounding_box()
-            corners = [
-                QPointF(bbox.left(), bbox.top()),
-                QPointF(bbox.right(), bbox.top()),
-                QPointF(bbox.right(), bbox.bottom()),
-                QPointF(bbox.left(), bbox.bottom())
-            ]
+            # Прямые стороны
+            top_side = w - 2 * r
+            right_side = h - 2 * r
+            bottom_side = w - 2 * r
+            left_side = h - 2 * r
+            arc_length = r * math.pi / 2
+            total_perimeter = top_side + right_side + bottom_side + left_side + 4 * arc_length
             
-            # Рисуем каждую сторону как волнистую линию
-            for i in range(4):
-                start = corners[i]
-                end = corners[(i + 1) % 4]
-                LineRenderer._draw_wavy_line(painter, start, end, pen)
+            # Плотность точек (точек на единицу длины)
+            points_per_unit = 8
+            total_points = max(200, int(total_perimeter * points_per_unit))
+            
+            # Генерируем точки сегмент за сегментом
+            accumulated_length = 0.0
+            
+            # Верхняя сторона
+            num_top = max(10, int(top_side * points_per_unit))
+            for i in range(num_top + 1):
+                t = i / num_top if num_top > 0 else 0
+                x = rect.x() + r + t * top_side
+                y = rect.y()
+                point = QPointF(x, y)
+                points.append(point)
+                if i > 0:
+                    dx = point.x() - points[-2].x()
+                    dy = point.y() - points[-2].y()
+                    segment_length = math.sqrt(dx*dx + dy*dy)
+                    accumulated_length += segment_length
+                arc_lengths.append(accumulated_length)
+            
+            # Верхний правый угол (дуга)
+            # Центр: (rect.x() + w - r, rect.y() + r)
+            # Начало: (rect.x() + w - r, rect.y()) - конец верхней стороны, угол = -pi/2
+            # Конец: (rect.x() + w, rect.y() + r) - начало правой стороны, угол = 0
+            center_x = rect.x() + w - r
+            center_y = rect.y() + r
+            num_arc = max(20, int(arc_length * points_per_unit))
+            for i in range(1, num_arc + 1):
+                t = i / num_arc
+                angle = -math.pi / 2 + t * math.pi / 2  # от -pi/2 до 0
+                x = center_x + r * math.cos(angle)
+                y = center_y + r * math.sin(angle)
+                point = QPointF(x, y)
+                points.append(point)
+                dx = point.x() - points[-2].x()
+                dy = point.y() - points[-2].y()
+                segment_length = math.sqrt(dx*dx + dy*dy)
+                accumulated_length += segment_length
+                arc_lengths.append(accumulated_length)
+            
+            # Правая сторона
+            num_right = max(10, int(right_side * points_per_unit))
+            for i in range(1, num_right + 1):
+                t = i / num_right
+                x = rect.x() + w
+                y = rect.y() + r + t * right_side
+                point = QPointF(x, y)
+                points.append(point)
+                dx = point.x() - points[-2].x()
+                dy = point.y() - points[-2].y()
+                segment_length = math.sqrt(dx*dx + dy*dy)
+                accumulated_length += segment_length
+                arc_lengths.append(accumulated_length)
+            
+            # Нижний правый угол (дуга)
+            # Центр: (rect.x() + w - r, rect.y() + h - r)
+            # Начало: (rect.x() + w, rect.y() + h - r) - конец правой стороны, угол = 0
+            # Конец: (rect.x() + w - r, rect.y() + h) - начало нижней стороны, угол = pi/2
+            center_x = rect.x() + w - r
+            center_y = rect.y() + h - r
+            num_arc = max(20, int(arc_length * points_per_unit))
+            for i in range(1, num_arc + 1):
+                t = i / num_arc
+                angle = 0 + t * math.pi / 2  # от 0 до pi/2
+                x = center_x + r * math.cos(angle)
+                y = center_y + r * math.sin(angle)
+                point = QPointF(x, y)
+                points.append(point)
+                dx = point.x() - points[-2].x()
+                dy = point.y() - points[-2].y()
+                segment_length = math.sqrt(dx*dx + dy*dy)
+                accumulated_length += segment_length
+                arc_lengths.append(accumulated_length)
+            
+            # Нижняя сторона
+            num_bottom = max(10, int(bottom_side * points_per_unit))
+            for i in range(1, num_bottom + 1):
+                t = i / num_bottom
+                x = rect.x() + w - r - t * bottom_side
+                y = rect.y() + h
+                point = QPointF(x, y)
+                points.append(point)
+                dx = point.x() - points[-2].x()
+                dy = point.y() - points[-2].y()
+                segment_length = math.sqrt(dx*dx + dy*dy)
+                accumulated_length += segment_length
+                arc_lengths.append(accumulated_length)
+            
+            # Нижний левый угол (дуга)
+            # Центр: (rect.x() + r, rect.y() + h - r)
+            # Начало: (rect.x() + r, rect.y() + h) - конец нижней стороны, угол = pi/2
+            # Конец: (rect.x(), rect.y() + h - r) - начало левой стороны, угол = pi
+            center_x = rect.x() + r
+            center_y = rect.y() + h - r
+            num_arc = max(20, int(arc_length * points_per_unit))
+            for i in range(1, num_arc + 1):
+                t = i / num_arc
+                angle = math.pi / 2 + t * math.pi / 2  # от pi/2 до pi
+                x = center_x + r * math.cos(angle)
+                y = center_y + r * math.sin(angle)
+                point = QPointF(x, y)
+                points.append(point)
+                dx = point.x() - points[-2].x()
+                dy = point.y() - points[-2].y()
+                segment_length = math.sqrt(dx*dx + dy*dy)
+                accumulated_length += segment_length
+                arc_lengths.append(accumulated_length)
+            
+            # Левая сторона
+            num_left = max(10, int(left_side * points_per_unit))
+            for i in range(1, num_left + 1):
+                t = i / num_left
+                x = rect.x()
+                y = rect.y() + h - r - t * left_side
+                point = QPointF(x, y)
+                points.append(point)
+                dx = point.x() - points[-2].x()
+                dy = point.y() - points[-2].y()
+                segment_length = math.sqrt(dx*dx + dy*dy)
+                accumulated_length += segment_length
+                arc_lengths.append(accumulated_length)
+            
+            # Верхний левый угол (дуга) - заканчивается в начальной точке
+            # Центр: (rect.x() + r, rect.y() + r)
+            # Начало: (rect.x(), rect.y() + r) - конец левой стороны, угол = pi
+            # Конец: (rect.x() + r, rect.y()) - начало верхней стороны, угол = 3*pi/2 (или -pi/2)
+            center_x = rect.x() + r
+            center_y = rect.y() + r
+            num_arc = max(20, int(arc_length * points_per_unit))
+            for i in range(1, num_arc + 1):
+                t = i / num_arc
+                angle = math.pi + t * math.pi / 2  # от pi до 3*pi/2
+                x = center_x + r * math.cos(angle)
+                y = center_y + r * math.sin(angle)
+                point = QPointF(x, y)
+                points.append(point)
+                dx = point.x() - points[-2].x()
+                dy = point.y() - points[-2].y()
+                segment_length = math.sqrt(dx*dx + dy*dy)
+                accumulated_length += segment_length
+                arc_lengths.append(accumulated_length)
+            
+            total_length = accumulated_length
+        else:
+            # Прямоугольник без скругления
+            total_perimeter = 2 * (w + h)
+            points_per_unit = 8
+            total_points = max(200, int(total_perimeter * points_per_unit))
+            
+            accumulated_length = 0.0
+            
+            # Верхняя сторона
+            num_top = max(10, int(w * points_per_unit))
+            for i in range(num_top + 1):
+                t = i / num_top if num_top > 0 else 0
+                x = rect.x() + t * w
+                y = rect.y()
+                point = QPointF(x, y)
+                points.append(point)
+                if i == 0:
+                    arc_lengths.append(0.0)
+                else:
+                    dx = point.x() - points[-2].x()
+                    dy = point.y() - points[-2].y()
+                    segment_length = math.sqrt(dx*dx + dy*dy)
+                    accumulated_length += segment_length
+                    arc_lengths.append(accumulated_length)
+            
+            # Правая сторона
+            num_right = max(10, int(h * points_per_unit))
+            for i in range(1, num_right + 1):
+                t = i / num_right
+                x = rect.x() + w
+                y = rect.y() + t * h
+                point = QPointF(x, y)
+                points.append(point)
+                dx = point.x() - points[-2].x()
+                dy = point.y() - points[-2].y()
+                segment_length = math.sqrt(dx*dx + dy*dy)
+                accumulated_length += segment_length
+                arc_lengths.append(accumulated_length)
+            
+            # Нижняя сторона
+            num_bottom = max(10, int(w * points_per_unit))
+            for i in range(1, num_bottom + 1):
+                t = i / num_bottom
+                x = rect.x() + w - t * w
+                y = rect.y() + h
+                point = QPointF(x, y)
+                points.append(point)
+                dx = point.x() - points[-2].x()
+                dy = point.y() - points[-2].y()
+                segment_length = math.sqrt(dx*dx + dy*dy)
+                accumulated_length += segment_length
+                arc_lengths.append(accumulated_length)
+            
+            # Левая сторона
+            num_left = max(10, int(h * points_per_unit))
+            for i in range(1, num_left + 1):
+                t = i / num_left
+                x = rect.x()
+                y = rect.y() + h - t * h
+                point = QPointF(x, y)
+                points.append(point)
+                dx = point.x() - points[-2].x()
+                dy = point.y() - points[-2].y()
+                segment_length = math.sqrt(dx*dx + dy*dy)
+                accumulated_length += segment_length
+                arc_lengths.append(accumulated_length)
+            
+            total_length = accumulated_length
+        
+        # Контур всегда замкнут, так как мы явно генерируем точки по сегментам
+        is_closed = True
+        
+        if total_length < 1:
+            return
+        
+        # Параметры волны для всего периметра
+        wave_length_px = amplitude_px * 5
+        num_waves = max(1, int(total_length / wave_length_px))
+        actual_wave_length = total_length / num_waves if num_waves > 0 else total_length
+        
+        # Строим волнистый путь вдоль периметра (как у сплайна)
+        path = QPainterPath()
+        
+        for i in range(len(points)):
+            # Вычисляем направление перпендикуляра к контуру
+            if i == 0:
+                # Для первой точки используем направление к следующей
+                if len(points) > 1:
+                    dx1 = points[1].x() - points[0].x()
+                    dy1 = points[1].y() - points[0].y()
+                    len1 = math.sqrt(dx1*dx1 + dy1*dy1)
+                    if len1 > 0.001:
+                        cos_angle = dx1 / len1
+                        sin_angle = dy1 / len1
+                        perp_cos = -sin_angle
+                        perp_sin = cos_angle
+                    else:
+                        perp_cos = 0
+                        perp_sin = 1
+                else:
+                    perp_cos = 0
+                    perp_sin = 1
+            elif i < len(points) - 1:
+                # Используем направление между соседними точками
+                dx1 = points[i].x() - points[i-1].x()
+                dy1 = points[i].y() - points[i-1].y()
+                len1 = math.sqrt(dx1*dx1 + dy1*dy1)
+                if len1 > 0.001:
+                    cos_angle = dx1 / len1
+                    sin_angle = dy1 / len1
+                    perp_cos = -sin_angle
+                    perp_sin = cos_angle
+                else:
+                    perp_cos = 0
+                    perp_sin = 1
+            else:
+                # Для последней точки используем направление от предыдущей
+                dx1 = points[i].x() - points[i-1].x()
+                dy1 = points[i].y() - points[i-1].y()
+                len1 = math.sqrt(dx1*dx1 + dy1*dy1)
+                if len1 > 0.001:
+                    cos_angle = dx1 / len1
+                    sin_angle = dy1 / len1
+                    perp_cos = -sin_angle
+                    perp_sin = cos_angle
+                else:
+                    perp_cos = 0
+                    perp_sin = 1
+            
+            # Вычисляем фазу волны на основе длины дуги
+            arc_pos = arc_lengths[i]
+            wave_phase = (arc_pos / actual_wave_length) * 2 * math.pi
+            wave_offset = amplitude_px * math.sin(wave_phase)
+            
+            # Применяем смещение перпендикулярно к контуру
+            wavy_point = QPointF(
+                points[i].x() + wave_offset * perp_cos,
+                points[i].y() + wave_offset * perp_sin
+            )
+            
+            if i == 0:
+                first_wavy_point = wavy_point
+                path.moveTo(wavy_point)
+            else:
+                path.lineTo(wavy_point)
+        
+        # Замыкаем контур, если он не замкнут
+        if not is_closed:
+            path.lineTo(first_wavy_point)
+        
+        painter.setPen(pen)
+        painter.setBrush(Qt.NoBrush)
+        painter.drawPath(path)
     
     @staticmethod
     def _draw_broken_rectangle(painter: QPainter, rectangle, pen: QPen):
@@ -1211,6 +1631,175 @@ class PrimitiveRenderer:
         painter.setPen(pen)
         painter.setBrush(Qt.NoBrush)
         painter.drawPath(path)
+    
+    @staticmethod
+    def _draw_wavy_arc_segment_continuous(painter: QPainter, start: QPointF, end: QPointF, center: QPointF, 
+                                          radius: float, pen: QPen, start_arc_pos: float, actual_wave_length: float, amplitude_px: float):
+        """Отрисовывает волнистую линию вдоль дуги с учетом накопленной длины дуги для непрерывной волны"""
+        from PySide6.QtGui import QPainterPath
+        
+        # Вычисляем углы относительно центра
+        start_angle = math.atan2(start.y() - center.y(), start.x() - center.x())
+        end_angle = math.atan2(end.y() - center.y(), end.x() - center.x())
+        
+        # Нормализуем углы
+        if end_angle < start_angle:
+            end_angle += 2 * math.pi
+        
+        # Длина дуги
+        arc_length = radius * (end_angle - start_angle)
+        
+        if arc_length < 1:
+            return
+        
+        # Для скругленных углов увеличиваем количество точек для более плавной кривой
+        # Используем больше точек на единицу длины для коротких дуг
+        # Минимум 200 точек на волну для плавности, особенно для скруглений
+        points_per_wave = 200
+        # Для очень коротких дуг (скругления) используем еще больше точек
+        if arc_length < radius * math.pi / 2:  # Если это четверть окружности или меньше
+            points_per_wave = 300
+        # Оцениваем количество волн на этой дуге для определения количества точек
+        estimated_waves = arc_length / actual_wave_length if actual_wave_length > 0 else 1
+        num_points = max(int(points_per_wave * estimated_waves), int(arc_length * 8))
+        path = QPainterPath()
+        
+        for i in range(num_points + 1):
+            t = i / num_points
+            angle = start_angle + t * (end_angle - start_angle)
+            
+            # Вычисляем расстояние вдоль дуги от начала
+            along_arc = t * arc_length
+            # Используем накопленную длину дуги для непрерывной волны
+            total_arc_pos = start_arc_pos + along_arc
+            wave_phase = (total_arc_pos / actual_wave_length) * 2 * math.pi
+            wave_offset = amplitude_px * math.sin(wave_phase)
+            
+            # Позиция на дуге
+            base_x = center.x() + radius * math.cos(angle)
+            base_y = center.y() + radius * math.sin(angle)
+            
+            # Перпендикулярное смещение для волны (перпендикуляр к касательной дуги)
+            # Правильный перпендикуляр к касательной дуги
+            # Касательная направлена по (-sin(angle), cos(angle))
+            # Перпендикуляр к касательной: (cos(angle), sin(angle)) или (-cos(angle), -sin(angle))
+            # Выбираем направление наружу от центра (от центра к точке на дуге)
+            perp_x = math.cos(angle) * wave_offset
+            perp_y = math.sin(angle) * wave_offset
+            
+            x = base_x + perp_x
+            y = base_y + perp_y
+            
+            if i == 0:
+                path.moveTo(x, y)
+            else:
+                # Используем lineTo для всех точек, но с большим количеством точек
+                # это создаст более плавную кривую
+                path.lineTo(x, y)
+        
+        painter.setPen(pen)
+        painter.setBrush(Qt.NoBrush)
+        painter.drawPath(path)
+    
+    @staticmethod
+    def _add_wavy_line_segment_to_path(path: QPainterPath, start_point: QPointF, end_point: QPointF,
+                                       start_arc_pos: float, actual_wave_length: float, amplitude_px: float,
+                                       first_point_set: bool):
+        """Добавляет волнистую линию в существующий путь для непрерывного контура"""
+        dx = end_point.x() - start_point.x()
+        dy = end_point.y() - start_point.y()
+        length = math.sqrt(dx*dx + dy*dy)
+        angle = math.atan2(dy, dx)
+        
+        if length < 1:
+            return path, first_point_set
+        
+        cos_angle = math.cos(angle)
+        sin_angle = math.sin(angle)
+        perp_cos = -sin_angle
+        perp_sin = cos_angle
+        
+        # Используем одинаковую плотность точек для всех сегментов (как у сплайна)
+        # Минимум 8 точек на единицу длины для плавности
+        num_points = max(int(length * 8), 50)
+        
+        # Пропускаем первую точку, если это не первый сегмент (она совпадает с последней точкой предыдущего)
+        start_idx = 0 if not first_point_set else 1
+        
+        for i in range(start_idx, num_points + 1):
+            t = i / num_points
+            along_line = t * length
+            # Используем накопленную длину дуги для непрерывной волны
+            total_arc_pos = start_arc_pos + along_line
+            wave_phase = (total_arc_pos / actual_wave_length) * 2 * math.pi
+            wave_offset = amplitude_px * math.sin(wave_phase)
+            
+            x = start_point.x() + along_line * cos_angle + wave_offset * perp_cos
+            y = start_point.y() + along_line * sin_angle + wave_offset * perp_sin
+            
+            if not first_point_set:
+                path.moveTo(x, y)
+                first_point_set = True
+            else:
+                path.lineTo(x, y)
+        
+        return path, first_point_set
+    
+    @staticmethod
+    def _add_wavy_arc_segment_to_path(path: QPainterPath, start: QPointF, end: QPointF, center: QPointF,
+                                     radius: float, start_arc_pos: float, actual_wave_length: float,
+                                     amplitude_px: float, first_point_set: bool):
+        """Добавляет волнистую дугу в существующий путь для непрерывного контура"""
+        # Вычисляем углы относительно центра
+        start_angle = math.atan2(start.y() - center.y(), start.x() - center.x())
+        end_angle = math.atan2(end.y() - center.y(), end.x() - center.x())
+        
+        # Нормализуем углы
+        if end_angle < start_angle:
+            end_angle += 2 * math.pi
+        
+        # Длина дуги
+        arc_length = radius * (end_angle - start_angle)
+        
+        if arc_length < 1:
+            return path, first_point_set
+        
+        # Используем одинаковую плотность точек для всех сегментов (как у сплайна)
+        # Минимум 8 точек на единицу длины для плавности, как и для прямых линий
+        num_points = max(int(arc_length * 8), 50)
+        
+        # Пропускаем первую точку, если это не первый сегмент (она совпадает с последней точкой предыдущего)
+        start_idx = 0 if not first_point_set else 1
+        
+        for i in range(start_idx, num_points + 1):
+            t = i / num_points
+            angle = start_angle + t * (end_angle - start_angle)
+            
+            # Вычисляем расстояние вдоль дуги от начала
+            along_arc = t * arc_length
+            # Используем накопленную длину дуги для непрерывной волны
+            total_arc_pos = start_arc_pos + along_arc
+            wave_phase = (total_arc_pos / actual_wave_length) * 2 * math.pi
+            wave_offset = amplitude_px * math.sin(wave_phase)
+            
+            # Позиция на дуге
+            base_x = center.x() + radius * math.cos(angle)
+            base_y = center.y() + radius * math.sin(angle)
+            
+            # Перпендикулярное смещение для волны (перпендикуляр к касательной дуги)
+            perp_x = math.cos(angle) * wave_offset
+            perp_y = math.sin(angle) * wave_offset
+            
+            x = base_x + perp_x
+            y = base_y + perp_y
+            
+            if not first_point_set:
+                path.moveTo(x, y)
+                first_point_set = True
+            else:
+                path.lineTo(x, y)
+        
+        return path, first_point_set
     
     @staticmethod
     def _draw_broken_arc_segment(painter: QPainter, start: QPointF, end: QPointF, center: QPointF, radius: float, pen: QPen):
