@@ -1167,10 +1167,14 @@ class PrimitiveRenderer:
         num_waves = max(min_waves, int(arc_length / wave_length_px))
         actual_wave_length = arc_length / num_waves if num_waves > 0 else arc_length
         
-        # Увеличиваем количество точек для более плавной и видимой волны
-        # Для каждой волны нужно больше точек для плавного перехода
-        points_per_wave = 100
-        num_points = max(points_per_wave * num_waves, int(arc_length * 4))
+        # Для скругленных углов увеличиваем количество точек для более плавной кривой
+        # Используем больше точек на единицу длины для коротких дуг
+        # Минимум 200 точек на волну для плавности, особенно для скруглений
+        points_per_wave = 200
+        # Для очень коротких дуг (скругления) используем еще больше точек
+        if arc_length < radius * math.pi / 2:  # Если это четверть окружности или меньше
+            points_per_wave = 300
+        num_points = max(points_per_wave * num_waves, int(arc_length * 8))
         path = QPainterPath()
         
         for i in range(num_points + 1):
@@ -1200,6 +1204,8 @@ class PrimitiveRenderer:
             if i == 0:
                 path.moveTo(x, y)
             else:
+                # Используем lineTo для всех точек, но с большим количеством точек
+                # это создаст более плавную кривую
                 path.lineTo(x, y)
         
         painter.setPen(pen)

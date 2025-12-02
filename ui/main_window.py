@@ -1668,7 +1668,7 @@ class MainWindow(QMainWindow):
         # Скрываем метку "Конечная точка" для дуги
         self.end_point_label_widget.hide()
         
-        # Скрываем ВСЕ группы (включая группы окружности и прямоугольника)
+        # Скрываем ВСЕ группы (включая группы окружности, прямоугольника, многоугольника и эллипса)
         self.cartesian_group.hide()
         self.polar_group.hide()
         self.circle_center_radius_group.hide()
@@ -1680,6 +1680,9 @@ class MainWindow(QMainWindow):
         self.rectangle_point_size_group.hide()
         self.rectangle_center_size_group.hide()
         self.rectangle_fillets_group.hide()
+        self.polygon_center_radius_vertices_group.hide()
+        self.ellipse_center_radii_group.hide()
+        self.ellipse_three_points_group.hide()
         
         # Показываем нужную группу
         method_name = self.arc_method_combo.currentText()
@@ -1732,7 +1735,7 @@ class MainWindow(QMainWindow):
         self.start_x_spin.show()
         self.start_y_spin.show()
         
-        # Скрываем ВСЕ группы (включая группы окружности и дуги)
+        # Скрываем ВСЕ группы (включая группы окружности, дуги, многоугольника и эллипса)
         self.cartesian_group.hide()
         self.polar_group.hide()
         self.circle_center_radius_group.hide()
@@ -1744,6 +1747,9 @@ class MainWindow(QMainWindow):
         self.rectangle_point_size_group.hide()
         self.rectangle_center_size_group.hide()
         self.rectangle_fillets_group.hide()
+        self.polygon_center_radius_vertices_group.hide()
+        self.ellipse_center_radii_group.hide()
+        self.ellipse_three_points_group.hide()
         
         # Показываем нужную группу
         method_name = self.rectangle_method_combo.currentText()
@@ -1887,7 +1893,7 @@ class MainWindow(QMainWindow):
         # Скрываем метку "Конечная точка" для окружности
         self.end_point_label_widget.hide()
         
-        # Скрываем ВСЕ группы (включая группы дуги и прямоугольника)
+        # Скрываем ВСЕ группы (включая группы дуги, прямоугольника, многоугольника и эллипса)
         self.cartesian_group.hide()
         self.polar_group.hide()
         self.circle_center_radius_group.hide()
@@ -1899,6 +1905,9 @@ class MainWindow(QMainWindow):
         self.rectangle_point_size_group.hide()
         self.rectangle_center_size_group.hide()
         self.rectangle_fillets_group.hide()
+        self.polygon_center_radius_vertices_group.hide()
+        self.ellipse_center_radii_group.hide()
+        self.ellipse_three_points_group.hide()
         
         # Показываем нужную группу
         method_name = self.circle_method_combo.currentText()
