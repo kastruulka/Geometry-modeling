@@ -3,7 +3,8 @@ import math
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                                QPushButton, QLabel, QComboBox, QDoubleSpinBox, QGroupBox,
                                QGridLayout, QSpinBox, QColorDialog, QMessageBox, QToolBar,
-                               QStatusBar, QMenu, QSizePolicy, QSplitter, QScrollArea)
+                               QStatusBar, QMenu, QSizePolicy, QSplitter, QScrollArea,
+                               QTableWidget, QTableWidgetItem, QHeaderView)
 from PySide6.QtCore import QPointF, Qt, QSize
 from PySide6.QtGui import QColor, QAction, QIcon, QKeySequence
 
@@ -73,7 +74,7 @@ class MainWindow(QMainWindow):
         primitive_layout = QHBoxLayout()
         primitive_layout.addWidget(QLabel("Тип примитива:"))
         self.primitive_combo = QComboBox()
-        self.primitive_combo.addItems(["Отрезок", "Окружность", "Дуга", "Прямоугольник", "Эллипс", "Многоугольник"])
+        self.primitive_combo.addItems(["Отрезок", "Окружность", "Дуга", "Прямоугольник", "Эллипс", "Многоугольник", "Сплайн"])
         self.primitive_combo.currentTextChanged.connect(self.change_primitive_type)
         primitive_layout.addWidget(self.primitive_combo)
         tools_layout.addLayout(primitive_layout)
@@ -150,11 +151,22 @@ class MainWindow(QMainWindow):
 
         tools_layout.addWidget(self.delete_last_btn)
         tools_layout.addWidget(self.delete_all_btn)
+        
+        # Группы для сплайна (добавляем в tools_group, чтобы не скрывалась с input_group)
+        self.spline_control_points_group = QWidget()
+        spline_cp_layout = QVBoxLayout()
+        spline_info_label = QLabel("Кликните левой кнопкой мыши для добавления контрольных точек.\nДвойной клик завершает создание сплайна.")
+        spline_info_label.setWordWrap(True)
+        spline_cp_layout.addWidget(spline_info_label)
+        self.spline_control_points_group.setLayout(spline_cp_layout)
+        self.spline_control_points_group.hide()
+        tools_layout.addWidget(self.spline_control_points_group)
+        
         tools_group.setLayout(tools_layout)
         left_panel.addWidget(tools_group)
         
         # панель ввода координат
-        input_group = QGroupBox("Ввод координат")
+        self.input_group = QGroupBox("Ввод координат")
         input_layout = QGridLayout()
         
         # начальная точка (всегда в декартовых координатах)
@@ -560,8 +572,8 @@ class MainWindow(QMainWindow):
         self.apply_coords_btn.clicked.connect(self.apply_coordinates)
         input_layout.addWidget(self.apply_coords_btn, 4, 0, 1, 5)
         
-        input_group.setLayout(input_layout)
-        left_panel.addWidget(input_group)
+        self.input_group.setLayout(input_layout)
+        left_panel.addWidget(self.input_group)
         
         # панель настроек
         settings_group = QGroupBox("Настройки")
@@ -1042,6 +1054,9 @@ class MainWindow(QMainWindow):
             return
         elif self.canvas.primitive_type == 'polygon':
             self.apply_polygon_coordinates(start_point)
+            return
+        elif self.canvas.primitive_type == 'spline':
+            # Для сплайна ручной ввод координат не поддерживается
             return
         
         # Для остальных примитивов (отрезок и т.д.)
@@ -1530,7 +1545,8 @@ class MainWindow(QMainWindow):
             "Дуга": "arc",
             "Прямоугольник": "rectangle",
             "Эллипс": "ellipse",
-            "Многоугольник": "polygon"
+            "Многоугольник": "polygon",
+            "Сплайн": "spline"
         }
         primitive_type = primitive_map.get(primitive_name, "line")
         self.canvas.set_primitive_type(primitive_type)
@@ -1600,6 +1616,9 @@ class MainWindow(QMainWindow):
             self.ellipse_three_points_group.hide()
             # Скрываем все группы многоугольника
             self.polygon_center_radius_vertices_group.hide()
+            # Скрываем все группы сплайна
+            if hasattr(self, 'spline_control_points_group'):
+                self.spline_control_points_group.hide()
             # Показываем метку "Конечная точка" для отрезка
             self.end_point_label_widget.show()
             # Показываем обычные поля ввода
@@ -1638,8 +1657,13 @@ class MainWindow(QMainWindow):
     
     def update_arc_input_fields(self):
         """Обновляет отображение полей ввода в зависимости от метода создания дуги"""
+        # Показываем группу "Ввод координат"
+        self.input_group.show()
         # Обновляем метку для дуги
         self.start_point_label_widget.setText("Начальная точка (x, y):")
+        self.start_point_label_widget.show()
+        self.start_x_spin.show()
+        self.start_y_spin.show()
         
         # Скрываем метку "Конечная точка" для дуги
         self.end_point_label_widget.hide()
@@ -1700,8 +1724,13 @@ class MainWindow(QMainWindow):
     
     def update_rectangle_input_fields(self):
         """Обновляет отображение полей ввода в зависимости от метода создания прямоугольника"""
+        # Показываем группу "Ввод координат"
+        self.input_group.show()
         # Обновляем метку для прямоугольника
         self.start_point_label_widget.setText("Начальная точка (x, y):")
+        self.start_point_label_widget.show()
+        self.start_x_spin.show()
+        self.start_y_spin.show()
         
         # Скрываем ВСЕ группы (включая группы окружности и дуги)
         self.cartesian_group.hide()
@@ -1901,6 +1930,15 @@ class MainWindow(QMainWindow):
         
         # Показываем группу многоугольника
         self.polygon_center_radius_vertices_group.show()
+    
+    def update_spline_input_fields(self):
+        """Обновляет отображение полей ввода для сплайна"""
+        # Скрываем всю группу "Ввод координат"
+        self.input_group.hide()
+        
+        # Показываем группу сплайна (она находится в tools_group, вне input_group)
+        if hasattr(self, 'spline_control_points_group'):
+            self.spline_control_points_group.show()
     
     def on_polygon_coordinates_changed(self):
         """Обработчик изменения координат многоугольника"""
@@ -2182,7 +2220,7 @@ class MainWindow(QMainWindow):
         
         # Определяем тип объекта и показываем соответствующую информацию
         from widgets.line_segment import LineSegment
-        from widgets.primitives import Circle, Arc, Rectangle, Ellipse, Polygon
+        from widgets.primitives import Circle, Arc, Rectangle, Ellipse, Polygon, Spline
         
         if isinstance(last_obj, LineSegment):
             self._update_line_info(last_obj)
@@ -2196,6 +2234,8 @@ class MainWindow(QMainWindow):
             self._update_ellipse_info(last_obj)
         elif isinstance(last_obj, Polygon):
             self._update_polygon_info(last_obj)
+        elif isinstance(last_obj, Spline):
+            self._update_spline_info(last_obj)
         else:
             self._clear_info_panel()
     
@@ -2358,3 +2398,37 @@ class MainWindow(QMainWindow):
         self.info_value3.setText(f"{num_vertices}")
         self.info_label4.setText("Периметр:")
         self.info_value4.setText(f"{perimeter:.2f}")
+    
+    def _update_spline_info(self, spline):
+        """Обновляет информацию о сплайне"""
+        num_points = len(spline.control_points)
+        
+        if num_points == 0:
+            self._clear_info_panel()
+            return
+        
+        # Вычисляем длину сплайна (приблизительно)
+        length = 0.0
+        if num_points >= 2:
+            num_samples = max(100, num_points * 20)
+            prev_point = spline._get_point_on_spline(0)
+            for i in range(1, num_samples):
+                t = i / (num_samples - 1) if num_samples > 1 else 0
+                curr_point = spline._get_point_on_spline(t)
+                dx = curr_point.x() - prev_point.x()
+                dy = curr_point.y() - prev_point.y()
+                length += math.sqrt(dx*dx + dy*dy)
+                prev_point = curr_point
+        
+        # Первая и последняя контрольные точки
+        first_point = spline.control_points[0]
+        last_point = spline.control_points[-1]
+        
+        self.info_label1.setText("Количество точек:")
+        self.info_value1.setText(f"{num_points}")
+        self.info_label2.setText("Первая точка:")
+        self.info_value2.setText(f"({first_point.x():.2f}, {first_point.y():.2f})")
+        self.info_label3.setText("Последняя точка:")
+        self.info_value3.setText(f"({last_point.x():.2f}, {last_point.y():.2f})")
+        self.info_label4.setText("Длина:")
+        self.info_value4.setText(f"{length:.2f}")

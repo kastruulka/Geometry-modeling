@@ -53,6 +53,10 @@ class CoordinateSystemWidget(QWidget):
         self.right_button_press_time = None
         self.right_button_click_count = 0
         self.right_button_click_timer = None
+        self.last_left_click_time = 0
+        self.last_left_click_pos = None
+        self.last_left_click_time = 0
+        self.last_left_click_pos = None
         
         # Координаты курсора
         self.cursor_world_coords = None
@@ -65,7 +69,7 @@ class CoordinateSystemWidget(QWidget):
         self.line_width = 2
         
         # Тип создаваемого примитива
-        self.primitive_type = 'line'  # 'line', 'circle', 'arc', 'rectangle', 'ellipse', 'polygon'
+        self.primitive_type = 'line'  # 'line', 'circle', 'arc', 'rectangle', 'ellipse', 'polygon', 'spline'
         # Метод создания окружности
         self.circle_creation_method = 'center_radius'  # 'center_radius', 'center_diameter', 'two_points', 'three_points'
         # Метод создания дуги
@@ -383,6 +387,9 @@ class CoordinateSystemWidget(QWidget):
                     elif self.primitive_type == 'polygon':
                         kwargs['polygon_method'] = self.polygon_creation_method
                         kwargs['num_vertices'] = self.polygon_num_vertices
+                    elif self.primitive_type == 'spline':
+                        # Для сплайна не нужны дополнительные параметры
+                        pass
                     self.scene.start_drawing(world_pos, drawing_type=self.primitive_type,
                                             style=style, color=self.line_color, width=self.line_width, **kwargs)
                     # Эмитируем сигнал о начале рисования прямоугольника (после start_drawing)
@@ -474,6 +481,22 @@ class CoordinateSystemWidget(QWidget):
                         obj = self.scene.finish_drawing()
                         if obj:
                             self.line_finished.emit()
+                    elif self.primitive_type == 'spline':
+                        # Для сплайна левый клик добавляет контрольную точку
+                        # Проверяем, не был ли это двойной клик (обрабатывается в mouseDoubleClickEvent)
+                        current_time = event.timestamp()
+                        is_double_click = (self.last_left_click_time > 0 and 
+                                         current_time - self.last_left_click_time < 300 and
+                                         self.last_left_click_pos and
+                                         (world_pos - self.last_left_click_pos).manhattanLength() < 5)
+                        
+                        if not is_double_click:
+                            self.scene.add_spline_control_point(world_pos)
+                            self.update()
+                            self.last_left_click_time = current_time
+                            self.last_left_click_pos = world_pos
+                        # Если это двойной клик, не добавляем точку и не обновляем время
+                        # (двойной клик обработается в mouseDoubleClickEvent)
                     elif self.primitive_type == 'rectangle':
                         # Проверяем метод создания прямоугольника
                         method = self.rectangle_creation_method
@@ -669,6 +692,44 @@ class CoordinateSystemWidget(QWidget):
         
         self.right_button_press_pos = None
         self.right_button_press_time = None
+    
+    def mouseDoubleClickEvent(self, event):
+        """Обработчик двойного клика мыши"""
+        if event.button() == Qt.LeftButton:
+            if not self.pan_mode and self.primitive_type == 'spline' and self.scene.is_drawing():
+                # Для сплайна двойной клик завершает создание
+                # Удаляем последнюю точку, если она была добавлена при первом клике двойного клика
+                if (self.last_left_click_time > 0 and 
+                    event.timestamp() - self.last_left_click_time < 300 and
+                    len(self.scene._spline_control_points) > 0):
+                    # Удаляем последнюю точку, которая была добавлена при первом клике
+                    self.scene._spline_control_points.pop()
+                    if self.scene._current_object:
+                        from widgets.primitives import Spline
+                        if isinstance(self.scene._current_object, Spline):
+                            self.scene._current_object.control_points = self.scene._spline_control_points.copy()
+                
+                world_pos = self.viewport.screen_to_world(event.position())
+                # Применяем привязку
+                world_pos = self._apply_snapping(world_pos)
+                
+                # Проверяем количество зафиксированных точек
+                if len(self.scene._spline_control_points) >= 2:
+                    obj = self.scene.finish_drawing()
+                    if obj:
+                        self.line_finished.emit()
+                    self.update()
+                else:
+                    # Если точек меньше 2, просто отменяем рисование
+                    self.scene.cancel_drawing()
+                    self.update()
+                # Сбрасываем счетчик для предотвращения добавления лишней точки
+                self.last_left_click_time = 0
+                self.last_left_click_pos = None
+                return
+        
+        # Для остальных случаев вызываем стандартную обработку
+        super().mouseDoubleClickEvent(event)
     
     def mouseReleaseEvent(self, event):
         """Обработчик отпускания кнопки мыши"""

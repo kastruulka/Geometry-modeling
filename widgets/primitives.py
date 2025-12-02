@@ -933,3 +933,191 @@ class Polygon(GeometricObject, Drawable):
         from core.renderer import PrimitiveRenderer
         PrimitiveRenderer.draw_polygon(painter, self, scale_factor, self.selected)
 
+
+class Spline(GeometricObject, Drawable):
+    """Класс для представления сплайна (кубический B-сплайн)"""
+    
+    def __init__(self, control_points: list, style=None, color=None, width=None):
+        super().__init__()
+        self.control_points = [QPointF(p) if not isinstance(p, QPointF) else p for p in control_points]
+        self._style = None
+        self._style_name = None
+        
+        if style:
+            self.style = style
+        
+        if color is not None:
+            self._legacy_color = color
+        else:
+            self._legacy_color = QColor(0, 0, 0)
+        
+        if width is not None:
+            self._legacy_width = width
+        else:
+            self._legacy_width = 2
+    
+    @property
+    def style(self):
+        return self._style
+    
+    @style.setter
+    def style(self, value):
+        if self._style:
+            self._style.unregister_object(self)
+        self._style = value
+        self._style_name = value.name if value else None
+        if value:
+            value.register_object(self)
+    
+    @property
+    def color(self):
+        if self._style:
+            return self._style.color
+        return self._legacy_color
+    
+    @property
+    def width(self):
+        if self._style:
+            return (self._style.thickness_mm * 96) / 25.4
+        return self._legacy_width
+    
+    def _get_point_on_spline(self, t: float) -> QPointF:
+        """Вычисляет точку на сплайне для параметра t [0, 1] используя Catmull-Rom сплайн"""
+        import math
+        if len(self.control_points) < 2:
+            if len(self.control_points) == 1:
+                return QPointF(self.control_points[0])
+            return QPointF(0, 0)
+        
+        if len(self.control_points) == 2:
+            # Для двух точек - просто линейная интерполяция
+            p1 = self.control_points[0]
+            p2 = self.control_points[1]
+            return QPointF(
+                p1.x() + t * (p2.x() - p1.x()),
+                p1.y() + t * (p2.y() - p1.y())
+            )
+        
+        # Используем Catmull-Rom сплайн, который проходит через все контрольные точки
+        # Нормализуем t к диапазону сегментов
+        num_segments = len(self.control_points) - 1
+        if num_segments <= 0:
+            return self.control_points[0] if self.control_points else QPointF(0, 0)
+        
+        segment_t = t * num_segments
+        segment_index = int(segment_t)
+        segment_index = min(segment_index, num_segments - 1)
+        local_t = segment_t - segment_index
+        
+        # Для Catmull-Rom сплайна нужны 4 точки: p0, p1, p2, p3
+        # где p1 и p2 - это точки сегмента, p0 и p3 - соседние точки для плавности
+        p1_idx = segment_index
+        p2_idx = segment_index + 1
+        
+        # Получаем соседние точки для плавности
+        if p1_idx > 0:
+            p0 = self.control_points[p1_idx - 1]
+        else:
+            # Если это первый сегмент, используем отражение
+            p0 = QPointF(
+                2 * self.control_points[0].x() - self.control_points[1].x(),
+                2 * self.control_points[0].y() - self.control_points[1].y()
+            )
+        
+        p1 = self.control_points[p1_idx]
+        p2 = self.control_points[p2_idx]
+        
+        if p2_idx < len(self.control_points) - 1:
+            p3 = self.control_points[p2_idx + 1]
+        else:
+            # Если это последний сегмент, используем отражение
+            p3 = QPointF(
+                2 * self.control_points[-1].x() - self.control_points[-2].x(),
+                2 * self.control_points[-1].y() - self.control_points[-2].y()
+            )
+        
+        # Catmull-Rom интерполяция
+        t2 = local_t * local_t
+        t3 = t2 * local_t
+        
+        # Матрица Catmull-Rom
+        x = 0.5 * (
+            (2 * p1.x()) +
+            (-p0.x() + p2.x()) * local_t +
+            (2 * p0.x() - 5 * p1.x() + 4 * p2.x() - p3.x()) * t2 +
+            (-p0.x() + 3 * p1.x() - 3 * p2.x() + p3.x()) * t3
+        )
+        
+        y = 0.5 * (
+            (2 * p1.y()) +
+            (-p0.y() + p2.y()) * local_t +
+            (2 * p0.y() - 5 * p1.y() + 4 * p2.y() - p3.y()) * t2 +
+            (-p0.y() + 3 * p1.y() - 3 * p2.y() + p3.y()) * t3
+        )
+        
+        return QPointF(x, y)
+    
+    def get_bounding_box(self) -> QRectF:
+        """Возвращает ограничивающий прямоугольник сплайна"""
+        if not self.control_points:
+            return QRectF()
+        
+        # Вычисляем точки на сплайне для более точного bounding box
+        min_x = float('inf')
+        max_x = float('-inf')
+        min_y = float('inf')
+        max_y = float('-inf')
+        
+        # Добавляем контрольные точки
+        for point in self.control_points:
+            min_x = min(min_x, point.x())
+            max_x = max(max_x, point.x())
+            min_y = min(min_y, point.y())
+            max_y = max(max_y, point.y())
+        
+        # Добавляем точки на сплайне для более точного вычисления
+        num_samples = max(50, len(self.control_points) * 10)
+        for i in range(num_samples + 1):
+            t = i / num_samples if num_samples > 0 else 0
+            point = self._get_point_on_spline(t)
+            min_x = min(min_x, point.x())
+            max_x = max(max_x, point.x())
+            min_y = min(min_y, point.y())
+            max_y = max(max_y, point.y())
+        
+        if min_x == float('inf'):
+            return QRectF()
+        
+        return QRectF(min_x, min_y, max_x - min_x, max_y - min_y)
+    
+    def contains_point(self, point: QPointF, tolerance: float = 5.0) -> bool:
+        """Проверяет, содержит ли сплайн точку (проверка на кривой)"""
+        import math
+        
+        if len(self.control_points) < 2:
+            return False
+        
+        # Проверяем расстояние до сплайна
+        num_samples = max(100, len(self.control_points) * 20)
+        min_distance = float('inf')
+        
+        for i in range(num_samples + 1):
+            t = i / num_samples if num_samples > 0 else 0
+            spline_point = self._get_point_on_spline(t)
+            dx = point.x() - spline_point.x()
+            dy = point.y() - spline_point.y()
+            distance = math.sqrt(dx*dx + dy*dy)
+            min_distance = min(min_distance, distance)
+        
+        return min_distance <= tolerance
+    
+    def intersects_rect(self, rect: QRectF) -> bool:
+        """Проверяет, пересекается ли сплайн с прямоугольником"""
+        bbox = self.get_bounding_box()
+        return rect.intersects(bbox)
+    
+    def draw(self, painter, scale_factor: float = 1.0):
+        """Отрисовывает сплайн"""
+        from core.renderer import PrimitiveRenderer
+        PrimitiveRenderer.draw_spline(painter, self, scale_factor, self.selected)
+

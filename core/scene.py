@@ -15,7 +15,7 @@ class Scene:
         self._objects: List[GeometricObject] = []
         self._current_object: Optional[GeometricObject] = None
         self._is_drawing = False
-        self._drawing_type: Optional[str] = None  # 'line', 'circle', 'arc', 'rectangle', 'ellipse', 'polygon'
+        self._drawing_type: Optional[str] = None  # 'line', 'circle', 'arc', 'rectangle', 'ellipse', 'polygon', 'spline'
         # Для дуги: отслеживание этапов создания
         self._arc_creation_method: Optional[str] = None  # 'three_points', 'center_angles'
         self._arc_start_point: Optional[QPointF] = None
@@ -43,6 +43,8 @@ class Scene:
         self._polygon_center: Optional[QPointF] = None
         self._polygon_radius: float = 0.0
         self._polygon_num_vertices: int = 3
+        # Для сплайна: отслеживание этапов создания
+        self._spline_control_points: List[QPointF] = []
     
     def add_object(self, obj: GeometricObject):
         """Добавляет объект на сцену"""
@@ -129,6 +131,16 @@ class Scene:
             from widgets.primitives import Polygon
             if isinstance(self._current_object, Polygon):
                 self._current_object.num_vertices = num_vertices
+    
+    def add_spline_control_point(self, point: QPointF):
+        """Добавляет контрольную точку к сплайну"""
+        if self._drawing_type == 'spline' and self._current_object:
+            from widgets.primitives import Spline
+            if isinstance(self._current_object, Spline):
+                # Добавляем точку в список зафиксированных точек
+                self._spline_control_points.append(point)
+                # Обновляем объект с новыми точками (без временной точки для предпросмотра)
+                self._current_object.control_points = self._spline_control_points.copy()
     
     def get_objects(self) -> List[GeometricObject]:
         """Возвращает все объекты на сцене"""
@@ -239,6 +251,12 @@ class Scene:
                 self._polygon_radius = 0.0
                 self._polygon_num_vertices = kwargs.get('num_vertices', 3)
                 self._current_object = Polygon(start_point, 0, self._polygon_num_vertices, style=style, color=color, width=width)
+        elif drawing_type == 'spline':
+            from widgets.primitives import Spline
+            # Для сплайна первый клик - первая контрольная точка
+            self._spline_control_points = [start_point]
+            # Создаем временный объект для предпросмотра
+            self._current_object = Spline([start_point], style=style, color=color, width=width)
         
         self._is_drawing = True
     
@@ -479,6 +497,13 @@ class Scene:
                     radius = math.sqrt(dx*dx + dy*dy)
                     self._current_object.radius = radius
                     self._polygon_radius = radius
+        elif self._drawing_type == 'spline':
+            from widgets.primitives import Spline
+            if isinstance(self._current_object, Spline):
+                # Обновляем предпросмотр сплайна с текущей позицией мыши как временной точкой
+                temp_points = self._spline_control_points.copy()
+                temp_points.append(point)
+                self._current_object.control_points = temp_points
     
     def finish_drawing(self) -> Optional[GeometricObject]:
         """Завершает рисование и возвращает созданный объект"""
@@ -493,6 +518,10 @@ class Scene:
         
         if self._drawing_type == 'ellipse' and self._ellipse_end_point is None:
             # Для эллипса нужно минимум 2 точки, не завершаем
+            return None
+        
+        if self._drawing_type == 'spline' and len(self._spline_control_points) < 2:
+            # Для сплайна нужно минимум 2 контрольные точки
             return None
         
         if self._current_object:
@@ -588,11 +617,31 @@ class Scene:
                                 self._objects.remove(obj)
                             return None
                 
-                # Сбрасываем все переменные многоугольника
-                self._polygon_creation_method = None
-                self._polygon_center = None
-                self._polygon_radius = 0.0
-                self._polygon_num_vertices = 3
+            # Сбрасываем все переменные многоугольника
+            self._polygon_creation_method = None
+            self._polygon_center = None
+            self._polygon_radius = 0.0
+            self._polygon_num_vertices = 3
+            
+            # Для сплайна проверяем количество контрольных точек
+            if drawing_type == 'spline':
+                from widgets.primitives import Spline
+                if isinstance(obj, Spline):
+                    # Убеждаемся, что у сплайна есть минимум 2 зафиксированные точки
+                    if len(self._spline_control_points) < 2:
+                        # Восстанавливаем состояние, если проверка не прошла
+                        self._current_object = obj
+                        self._is_drawing = True
+                        self._drawing_type = drawing_type
+                        # Удаляем объект из списка, так как мы его вернули
+                        if obj in self._objects:
+                            self._objects.remove(obj)
+                        return None
+                    # Обновляем контрольные точки объекта из списка зафиксированных точек
+                    obj.control_points = self._spline_control_points.copy()
+                
+                # Сбрасываем все переменные сплайна
+                self._spline_control_points = []
             
             return obj
         
@@ -683,6 +732,7 @@ class Scene:
         self._polygon_center = None
         self._polygon_radius = 0.0
         self._polygon_num_vertices = 3
+        self._spline_control_points = []
     
     def _calculate_ellipse_arc_from_three_points(self, p1: QPointF, p2: QPointF, p3: QPointF):
         """Вычисляет параметры дуги эллипса по трем точкам (начало, конец, вершина)

@@ -8,7 +8,7 @@ import math
 
 from core.geometry import GeometricObject
 from widgets.line_segment import LineSegment
-from widgets.primitives import Circle, Arc, Rectangle, Ellipse, Polygon
+from widgets.primitives import Circle, Arc, Rectangle, Ellipse, Polygon, Spline
 
 
 class SnapType(Enum):
@@ -88,6 +88,8 @@ class SnapManager:
                 snap_points.extend(self._get_ellipse_snap_points(obj))
             elif isinstance(obj, Polygon):
                 snap_points.extend(self._get_polygon_snap_points(obj))
+            elif isinstance(obj, Spline):
+                snap_points.extend(self._get_spline_snap_points(obj))
         
         return snap_points
     
@@ -307,6 +309,20 @@ class SnapManager:
                 mid_x = (p1.x() + p2.x()) / 2.0
                 mid_y = (p1.y() + p2.y()) / 2.0
                 points.append(SnapPoint(QPointF(mid_x, mid_y), SnapType.MIDDLE, polygon))
+        
+        return points
+    
+    def _get_spline_snap_points(self, spline: Spline) -> List[SnapPoint]:
+        """Получает точки привязки для сплайна"""
+        points = []
+        
+        # Все контрольные точки сплайна
+        if self.snap_to_vertex or self.snap_to_end:
+            for control_point in spline.control_points:
+                if self.snap_to_vertex:
+                    points.append(SnapPoint(control_point, SnapType.VERTEX, spline))
+                elif self.snap_to_end:
+                    points.append(SnapPoint(control_point, SnapType.END, spline))
         
         return points
     

@@ -1871,6 +1871,131 @@ class PrimitiveRenderer:
             end = vertices[(i + 1) % len(vertices)]
             LineRenderer._draw_dash_dot_line(painter, start, end, pen, style)
     
+    @staticmethod
+    def draw_spline(painter: QPainter, spline, scale_factor: float = 1.0, is_selected: bool = False):
+        """Отрисовывает сплайн с поддержкой всех типов линий"""
+        from PySide6.QtGui import QPainterPath
+        
+        if len(spline.control_points) < 2:
+            return
+        
+        if spline.style:
+            pen = spline.style.get_pen(scale_factor=scale_factor)
+            if hasattr(spline, '_legacy_color') and spline._legacy_color != spline.style.color:
+                pen.setColor(spline._legacy_color)
+            if is_selected:
+                pen.setWidthF(pen.widthF() * 1.5)
+                color = pen.color()
+                color.setAlpha(255)
+                pen.setColor(color)
+            
+            line_type = spline.style.line_type
+            
+            # Для специальных типов линий используем специальную отрисовку
+            if line_type == LineType.SOLID_WAVY:
+                PrimitiveRenderer._draw_wavy_spline(painter, spline, pen)
+            elif line_type == LineType.SOLID_THIN_BROKEN:
+                PrimitiveRenderer._draw_broken_spline(painter, spline, pen)
+            elif line_type == LineType.DASHED:
+                PrimitiveRenderer._draw_dashed_spline(painter, spline, pen, spline.style)
+            elif line_type in [LineType.DASH_DOT_THICK, LineType.DASH_DOT_THIN, LineType.DASH_DOT_TWO_DOTS]:
+                PrimitiveRenderer._draw_dash_dot_spline(painter, spline, pen, spline.style)
+            else:
+                # Обычные сплошные линии
+                path = QPainterPath()
+                num_samples = max(100, len(spline.control_points) * 20)
+                for i in range(num_samples + 1):
+                    t = i / num_samples if num_samples > 0 else 0
+                    point = spline._get_point_on_spline(t)
+                    if i == 0:
+                        path.moveTo(point)
+                    else:
+                        path.lineTo(point)
+                painter.setPen(pen)
+                painter.setBrush(Qt.NoBrush)
+                painter.drawPath(path)
+        else:
+            pen = QPen(spline.color, spline.width)
+            if is_selected:
+                pen.setWidthF(pen.widthF() * 1.5)
+            path = QPainterPath()
+            num_samples = max(100, len(spline.control_points) * 20)
+            for i in range(num_samples + 1):
+                t = i / num_samples if num_samples > 0 else 0
+                point = spline._get_point_on_spline(t)
+                if i == 0:
+                    path.moveTo(point)
+                else:
+                    path.lineTo(point)
+            painter.setPen(pen)
+            painter.setBrush(Qt.NoBrush)
+            painter.drawPath(path)
+    
+    # Методы специальной отрисовки для сплайнов
+    @staticmethod
+    def _draw_wavy_spline(painter: QPainter, spline, pen: QPen):
+        """Отрисовывает волнистый сплайн"""
+        if len(spline.control_points) < 2:
+            return
+        
+        # Разбиваем сплайн на сегменты и рисуем каждый как волнистую линию
+        num_samples = max(100, len(spline.control_points) * 20)
+        prev_point = spline._get_point_on_spline(0)
+        
+        for i in range(1, num_samples + 1):
+            t = i / num_samples if num_samples > 0 else 0
+            curr_point = spline._get_point_on_spline(t)
+            LineRenderer._draw_wavy_line(painter, prev_point, curr_point, pen)
+            prev_point = curr_point
+    
+    @staticmethod
+    def _draw_broken_spline(painter: QPainter, spline, pen: QPen):
+        """Отрисовывает сплайн с изломами"""
+        if len(spline.control_points) < 2:
+            return
+        
+        # Разбиваем сплайн на сегменты и рисуем каждый как ломаную линию
+        num_samples = max(100, len(spline.control_points) * 20)
+        prev_point = spline._get_point_on_spline(0)
+        
+        for i in range(1, num_samples + 1):
+            t = i / num_samples if num_samples > 0 else 0
+            curr_point = spline._get_point_on_spline(t)
+            LineRenderer._draw_broken_line(painter, prev_point, curr_point, pen)
+            prev_point = curr_point
+    
+    @staticmethod
+    def _draw_dashed_spline(painter: QPainter, spline, pen: QPen, style):
+        """Отрисовывает штриховой сплайн"""
+        if len(spline.control_points) < 2:
+            return
+        
+        # Разбиваем сплайн на сегменты и рисуем каждый как штриховую линию
+        num_samples = max(100, len(spline.control_points) * 20)
+        prev_point = spline._get_point_on_spline(0)
+        
+        for i in range(1, num_samples + 1):
+            t = i / num_samples if num_samples > 0 else 0
+            curr_point = spline._get_point_on_spline(t)
+            LineRenderer._draw_dashed_line(painter, prev_point, curr_point, pen, style)
+            prev_point = curr_point
+    
+    @staticmethod
+    def _draw_dash_dot_spline(painter: QPainter, spline, pen: QPen, style):
+        """Отрисовывает штрихпунктирный сплайн"""
+        if len(spline.control_points) < 2:
+            return
+        
+        # Разбиваем сплайн на сегменты и рисуем каждый как штрихпунктирную линию
+        num_samples = max(100, len(spline.control_points) * 20)
+        prev_point = spline._get_point_on_spline(0)
+        
+        for i in range(1, num_samples + 1):
+            t = i / num_samples if num_samples > 0 else 0
+            curr_point = spline._get_point_on_spline(t)
+            LineRenderer._draw_dash_dot_line(painter, prev_point, curr_point, pen, style)
+            prev_point = curr_point
+    
 
 class SceneRenderer:
     """Класс для отрисовки всей сцены"""
