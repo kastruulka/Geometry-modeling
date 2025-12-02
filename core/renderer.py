@@ -1160,12 +1160,17 @@ class PrimitiveRenderer:
         amplitude_mm = (main_thickness_mm / 2.5) * (line_thickness_mm / 0.4)
         amplitude_px = (amplitude_mm * 96) / 25.4
         
+        # Для коротких дуг (скругленные углы) гарантируем минимум одну волну
         wave_length_px = amplitude_px * 5
-        num_waves = max(1, int(arc_length / wave_length_px))
+        # Для дуг минимум 2 волны, чтобы волна была видна
+        min_waves = max(2, int(arc_length / wave_length_px)) if arc_length >= wave_length_px else 2
+        num_waves = max(min_waves, int(arc_length / wave_length_px))
         actual_wave_length = arc_length / num_waves if num_waves > 0 else arc_length
         
-        # Создаем путь вдоль дуги с волнистым эффектом
-        num_points = max(50, int(arc_length / 2))
+        # Увеличиваем количество точек для более плавной и видимой волны
+        # Для каждой волны нужно больше точек для плавного перехода
+        points_per_wave = 100
+        num_points = max(points_per_wave * num_waves, int(arc_length * 4))
         path = QPainterPath()
         
         for i in range(num_points + 1):
@@ -1182,8 +1187,12 @@ class PrimitiveRenderer:
             base_y = center.y() + radius * math.sin(angle)
             
             # Перпендикулярное смещение для волны (перпендикуляр к касательной дуги)
-            perp_x = -math.sin(angle) * wave_offset
-            perp_y = math.cos(angle) * wave_offset
+            # Правильный перпендикуляр к касательной дуги
+            # Касательная направлена по (-sin(angle), cos(angle))
+            # Перпендикуляр к касательной: (cos(angle), sin(angle)) или (-cos(angle), -sin(angle))
+            # Выбираем направление наружу от центра (от центра к точке на дуге)
+            perp_x = math.cos(angle) * wave_offset
+            perp_y = math.sin(angle) * wave_offset
             
             x = base_x + perp_x
             y = base_y + perp_y
@@ -1199,7 +1208,7 @@ class PrimitiveRenderer:
     
     @staticmethod
     def _draw_broken_arc_segment(painter: QPainter, start: QPointF, end: QPointF, center: QPointF, radius: float, pen: QPen):
-        """Отрисовывает ломаную линию вдоль дуги скругленного угла"""
+        """Отрисовывает гладкую дугу для ломаного стиля (скругления без заломов)"""
         import math
         from PySide6.QtGui import QPainterPath
         
@@ -1216,68 +1225,41 @@ class PrimitiveRenderer:
         if arc_length < 1:
             return
         
-        # Параметры зигзага (та же логика, что и для прямой линии)
-        zigzag_height_mm = 3.5
-        zigzag_width_mm = 4.0
-        dpi = 96
-        zigzag_height = (zigzag_height_mm * dpi) / 25.4
-        zigzag_length = (zigzag_width_mm * dpi) / 25.4
-        
-        if zigzag_length > arc_length * 0.8:
-            zigzag_length = arc_length * 0.8
-        
-        straight_length = (arc_length - zigzag_length) / 2
-        
+        # Для ломаного стиля скругления рисуем гладкой дугой без заломов
+        # Используем QPainterPath.arcTo для плавной дуги
         path = QPainterPath()
         path.moveTo(start)
         
-        # Первая прямая часть
-        if straight_length > 0:
-            t1 = straight_length / arc_length
-            angle1 = start_angle + t1 * (end_angle - start_angle)
-            x1 = center.x() + radius * math.cos(angle1)
-            y1 = center.y() + radius * math.sin(angle1)
-            path.lineTo(x1, y1)
-        else:
-            angle1 = start_angle
-            x1 = start.x()
-            y1 = start.y()
+        # Вычисляем параметры для arcTo
+        # arcTo требует прямоугольник, описывающий дугу
+        # Для скругленного угла это квадрат 2r x 2r
+        rect_size = 2 * radius
         
-        # Зигзаг по дуге (3 сегмента, как в _draw_broken_line)
-        segment_length_along = zigzag_length / 3
+        # Определяем, какой это угол (верхний правый, нижний правый, нижний левый, верхний левый)
+        # и вычисляем начальный угол и sweep angle для arcTo
+        # arcTo использует углы в градусах, где 0° = 3 часа, 90° = 12 часов, и т.д.
         
-        # Точка 1 зигзага
-        t_seg1 = (straight_length + segment_length_along) / arc_length
-        angle_seg1 = start_angle + t_seg1 * (end_angle - start_angle)
-        base_x1 = center.x() + radius * math.cos(angle_seg1)
-        base_y1 = center.y() + radius * math.sin(angle_seg1)
-        # Перпендикуляр к касательной в этой точке
-        perp_x1 = -math.sin(angle_seg1) * (zigzag_height / 2)
-        perp_y1 = math.cos(angle_seg1) * (zigzag_height / 2)
-        point1 = QPointF(base_x1 + perp_x1, base_y1 + perp_y1)
-        path.lineTo(point1)
+        # Вычисляем начальный угол в градусах для arcTo
+        # arcTo использует систему, где 0° = вправо, 90° = вверх, 180° = влево, 270° = вниз
+        start_angle_deg = math.degrees(start_angle)
+        sweep_angle_deg = math.degrees(end_angle - start_angle)
         
-        # Точка 2 зигзага
-        t_seg2 = (straight_length + 2 * segment_length_along) / arc_length
-        angle_seg2 = start_angle + t_seg2 * (end_angle - start_angle)
-        base_x2 = center.x() + radius * math.cos(angle_seg2)
-        base_y2 = center.y() + radius * math.sin(angle_seg2)
-        # Перпендикуляр в противоположном направлении
-        perp_x2 = -math.sin(angle_seg2) * (-zigzag_height)
-        perp_y2 = math.cos(angle_seg2) * (-zigzag_height)
-        point2 = QPointF(base_x2 + perp_x2, base_y2 + perp_y2)
-        path.lineTo(point2)
+        # Нормализуем углы для arcTo (arcTo использует другую систему координат)
+        # Нужно преобразовать из математической системы (0° = вправо, против часовой)
+        # в систему arcTo (0° = 3 часа, по часовой)
+        # В Qt arcTo: 0° = вправо, 90° = вверх (против часовой), но sweep может быть отрицательным
         
-        # Конец зигзага
-        t_zigzag_end = (straight_length + zigzag_length) / arc_length
-        angle_zigzag_end = start_angle + t_zigzag_end * (end_angle - start_angle)
-        x_zigzag_end = center.x() + radius * math.cos(angle_zigzag_end)
-        y_zigzag_end = center.y() + radius * math.sin(angle_zigzag_end)
-        path.lineTo(x_zigzag_end, y_zigzag_end)
-        
-        # Вторая прямая часть
-        if straight_length > 0:
-            path.lineTo(end)
+        # Используем более простой подход - рисуем дугу точками
+        num_points = max(50, int(arc_length))
+        for i in range(num_points + 1):
+            t = i / num_points
+            angle = start_angle + t * (end_angle - start_angle)
+            x = center.x() + radius * math.cos(angle)
+            y = center.y() + radius * math.sin(angle)
+            if i == 0:
+                path.moveTo(x, y)
+            else:
+                path.lineTo(x, y)
         
         painter.setPen(pen)
         painter.setBrush(Qt.NoBrush)
