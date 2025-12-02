@@ -5,8 +5,8 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                                QGridLayout, QSpinBox, QColorDialog, QMessageBox, QToolBar,
                                QStatusBar, QMenu, QSizePolicy, QSplitter, QScrollArea,
                                QTableWidget, QTableWidgetItem, QHeaderView)
-from PySide6.QtCore import QPointF, Qt, QSize
-from PySide6.QtGui import QColor, QAction, QIcon, QKeySequence
+from PySide6.QtCore import QPointF, Qt, QSize, QRectF
+from PySide6.QtGui import QColor, QAction, QIcon, QKeySequence, QPixmap, QPainter, QPen
 
 from widgets.coordinate_system import CoordinateSystemWidget
 from widgets.line_style import LineStyleManager
@@ -88,7 +88,13 @@ class MainWindow(QMainWindow):
         primitive_layout = QHBoxLayout()
         primitive_layout.addWidget(QLabel("Тип примитива:"))
         self.primitive_combo = QComboBox()
-        self.primitive_combo.addItems(["Отрезок", "Окружность", "Дуга", "Прямоугольник", "Эллипс", "Многоугольник", "Сплайн"])
+        
+        # Добавляем примитивы с иконками
+        primitives = ["Отрезок", "Окружность", "Дуга", "Прямоугольник", "Эллипс", "Многоугольник", "Сплайн"]
+        for primitive in primitives:
+            icon = self._create_primitive_icon(primitive)
+            self.primitive_combo.addItem(icon, primitive)
+        
         self.primitive_combo.currentTextChanged.connect(self.change_primitive_type)
         primitive_layout.addWidget(self.primitive_combo)
         tools_layout.addLayout(primitive_layout)
@@ -2661,6 +2667,66 @@ class MainWindow(QMainWindow):
         
         self.info_label1.setText("Количество точек:")
         self.info_value1.setText(f"{num_points}")
+    
+    def _create_primitive_icon(self, primitive_name: str) -> QIcon:
+        """Создает иконку для типа примитива"""
+        size = 24
+        pixmap = QPixmap(size, size)
+        pixmap.fill(Qt.transparent)
+        
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setPen(QPen(QColor(0, 0, 0), 2))
+        
+        margin = 3
+        width = size - 2 * margin
+        height = size - 2 * margin
+        center_x = size / 2
+        center_y = size / 2
+        
+        if primitive_name == "Отрезок":
+            # Линия
+            painter.drawLine(margin, center_y, size - margin, center_y)
+        elif primitive_name == "Окружность":
+            # Круг
+            painter.drawEllipse(margin, margin, width, height)
+        elif primitive_name == "Дуга":
+            # Дуга (четверть окружности)
+            rect = QRectF(margin, margin, width, height)
+            painter.drawArc(rect, 0, 90 * 16)  # 90 градусов
+        elif primitive_name == "Прямоугольник":
+            # Прямоугольник
+            painter.drawRect(margin, margin, width, height)
+        elif primitive_name == "Эллипс":
+            # Эллипс
+            painter.drawEllipse(margin + 2, margin, width - 4, height)
+        elif primitive_name == "Многоугольник":
+            # Шестиугольник (как пример многоугольника)
+            num_vertices = 6
+            radius = min(width, height) / 2 - 1
+            points = []
+            for i in range(num_vertices):
+                angle = 2 * math.pi * i / num_vertices - math.pi / 2
+                x = center_x + radius * math.cos(angle)
+                y = center_y + radius * math.sin(angle)
+                points.append((x, y))
+            
+            for i in range(num_vertices):
+                start = points[i]
+                end = points[(i + 1) % num_vertices]
+                painter.drawLine(int(start[0]), int(start[1]), int(end[0]), int(end[1]))
+        elif primitive_name == "Сплайн":
+            # Волнистая линия (сплайн)
+            num_points = 8
+            for i in range(num_points - 1):
+                x1 = margin + (width / (num_points - 1)) * i
+                y1 = center_y + 3 * math.sin(i * math.pi / 2)
+                x2 = margin + (width / (num_points - 1)) * (i + 1)
+                y2 = center_y + 3 * math.sin((i + 1) * math.pi / 2)
+                painter.drawLine(int(x1), int(y1), int(x2), int(y2))
+        
+        painter.end()
+        return QIcon(pixmap)
         self.info_label2.setText("Первая точка:")
         self.info_value2.setText(f"({first_point.x():.2f}, {first_point.y():.2f})")
         self.info_label3.setText("Последняя точка:")
