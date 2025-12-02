@@ -18,8 +18,12 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Построение отрезков в различных системах координат")
         self.setGeometry(100, 100, 1200, 800)
         
-        self.coordinate_system = "cartesian"  # "cartesian" или "polar"
-        self.angle_units = "degrees"  # "degrees" или "radians"
+        self.coordinate_system = "cartesian"  # "cartesian" или "polar" (для обратной совместимости)
+        self.angle_units = "degrees"  # "degrees" или "radians" (для обратной совместимости)
+        
+        # Система координат и единицы углов для отрезка
+        self.line_coordinate_system = "cartesian"  # "cartesian" или "polar"
+        self.line_angle_units = "degrees"  # "degrees" или "radians"
         
         # Создаем менеджер стилей
         self.style_manager = LineStyleManager()
@@ -31,6 +35,10 @@ class MainWindow(QMainWindow):
         self.selected_objects = []
         
         self.init_ui()
+        # Явно вызываем change_primitive_type для показа виджета способа задания отрезка
+        # (поскольку "Отрезок" выбран по умолчанию, сигнал currentTextChanged не сработает)
+        if hasattr(self, 'primitive_combo'):
+            self.change_primitive_type(self.primitive_combo.currentText())
         self.update_info()
     
     def init_ui(self):
@@ -78,6 +86,39 @@ class MainWindow(QMainWindow):
         self.primitive_combo.currentTextChanged.connect(self.change_primitive_type)
         primitive_layout.addWidget(self.primitive_combo)
         tools_layout.addLayout(primitive_layout)
+        
+        # Выбор способа задания отрезка (скрыто по умолчанию)
+        line_method_layout = QVBoxLayout()
+        line_method_layout.addWidget(QLabel("Способ задания:"))
+        self.line_method_combo = QComboBox()
+        self.line_method_combo.addItems([
+            "В декартовых координатах (x₁, y₁) и (x₂, y₂)",
+            "В полярных координатах (x₁, y₁) и (r₂, θ₂)"
+        ])
+        self.line_method_combo.currentTextChanged.connect(self.change_line_method)
+        line_method_layout.addWidget(self.line_method_combo)
+        
+        # Система координат и единицы углов для отрезка
+        line_coord_layout = QHBoxLayout()
+        line_coord_layout.addWidget(QLabel("Система координат:"))
+        self.line_coord_combo = QComboBox()
+        self.line_coord_combo.addItems(["Декартова", "Полярная"])
+        self.line_coord_combo.currentTextChanged.connect(self.change_line_coordinate_system)
+        line_coord_layout.addWidget(self.line_coord_combo)
+        line_method_layout.addLayout(line_coord_layout)
+        
+        line_angle_layout = QHBoxLayout()
+        line_angle_layout.addWidget(QLabel("Единицы углов:"))
+        self.line_angle_combo = QComboBox()
+        self.line_angle_combo.addItems(["Градусы", "Радианы"])
+        self.line_angle_combo.currentTextChanged.connect(self.change_line_angle_units)
+        line_angle_layout.addWidget(self.line_angle_combo)
+        line_method_layout.addLayout(line_angle_layout)
+        
+        self.line_method_widget = QWidget()
+        self.line_method_widget.setLayout(line_method_layout)
+        self.line_method_widget.hide()
+        tools_layout.addWidget(self.line_method_widget)
         
         # Выбор метода создания окружности (скрыто по умолчанию)
         circle_method_layout = QHBoxLayout()
@@ -229,7 +270,7 @@ class MainWindow(QMainWindow):
         self.angle_spin.setSingleStep(15)
         self.angle_spin.valueChanged.connect(self.on_polar_changed)
         
-        self.angle_label = QLabel("°" if self.angle_units == "degrees" else "rad")
+        self.angle_label = QLabel("°" if self.line_angle_units == "degrees" else "rad")
         
         polar_layout.addWidget(QLabel("r:"))
         polar_layout.addWidget(self.radius_spin)
@@ -578,24 +619,6 @@ class MainWindow(QMainWindow):
         # панель настроек
         settings_group = QGroupBox("Настройки")
         settings_layout = QVBoxLayout()
-        
-        # система координат
-        coord_layout = QHBoxLayout()
-        coord_layout.addWidget(QLabel("Система координат:"))
-        self.coord_combo = QComboBox()
-        self.coord_combo.addItems(["Декартова", "Полярная"])
-        self.coord_combo.currentTextChanged.connect(self.change_coordinate_system)
-        coord_layout.addWidget(self.coord_combo)
-        settings_layout.addLayout(coord_layout)
-        
-        # единицы измерения углов
-        angle_layout = QHBoxLayout()
-        angle_layout.addWidget(QLabel("Единицы углов:"))
-        self.angle_combo = QComboBox()
-        self.angle_combo.addItems(["Градусы", "Радианы"])
-        self.angle_combo.currentTextChanged.connect(self.change_angle_units)
-        angle_layout.addWidget(self.angle_combo)
-        settings_layout.addLayout(angle_layout)
         
         # шаг сетки (в миллиметрах)
         grid_layout = QHBoxLayout()
@@ -1060,14 +1083,15 @@ class MainWindow(QMainWindow):
             return
         
         # Для остальных примитивов (отрезок и т.д.)
-        if self.coordinate_system == "cartesian":
+        # Используем систему координат и единицы углов для отрезка
+        if self.line_coordinate_system == "cartesian":
             end_point = QPointF(self.end_x_spin.value(), self.end_y_spin.value())
         else:
             # преобразуем полярные координаты в декартовы ОТНОСИТЕЛЬНО НАЧАЛЬНОЙ ТОЧКИ
             radius = self.radius_spin.value()
             angle = self.angle_spin.value()
             
-            if self.angle_units == "degrees":
+            if self.line_angle_units == "degrees":
                 angle_rad = math.radians(angle)
             else:
                 angle_rad = angle
@@ -1555,11 +1579,36 @@ class MainWindow(QMainWindow):
         self.canvas.clear_input_points()
         
         # Показываем/скрываем выбор метода создания окружности или дуги
-        if primitive_type == "circle":
+        if primitive_type == "line":
+            self.line_method_widget.show()
+            self.circle_method_widget.hide()
+            self.arc_method_widget.hide()
+            self.rectangle_method_widget.hide()
+            self.ellipse_method_widget.hide()
+            # Убеждаемся, что комбобокс имеет правильное значение
+            if self.line_method_combo.currentIndex() < 0:
+                self.line_method_combo.setCurrentIndex(0)
+            # Синхронизируем комбобоксы системы координат и единиц углов с выбранным методом
+            method_text = self.line_method_combo.currentText()
+            if "декартовых" in method_text.lower():
+                self.line_coord_combo.blockSignals(True)
+                self.line_coord_combo.setCurrentText("Декартова")
+                self.line_coord_combo.blockSignals(False)
+                self.line_coordinate_system = "cartesian"
+            else:
+                self.line_coord_combo.blockSignals(True)
+                self.line_coord_combo.setCurrentText("Полярная")
+                self.line_coord_combo.blockSignals(False)
+                self.line_coordinate_system = "polar"
+            # Явно вызываем обновление полей ввода
+            self.change_line_method(method_text)
+        elif primitive_type == "circle":
+            self.line_method_widget.hide()
             self.circle_method_widget.show()
             self.arc_method_widget.hide()
             self.update_circle_input_fields()
         elif primitive_type == "arc":
+            self.line_method_widget.hide()
             self.circle_method_widget.hide()
             self.arc_method_widget.show()
             self.rectangle_method_widget.hide()
@@ -1569,6 +1618,7 @@ class MainWindow(QMainWindow):
             # Явно вызываем обновление полей ввода
             self.change_arc_method(self.arc_method_combo.currentText())
         elif primitive_type == "rectangle":
+            self.line_method_widget.hide()
             self.circle_method_widget.hide()
             self.arc_method_widget.hide()
             self.rectangle_method_widget.show()
@@ -1578,6 +1628,7 @@ class MainWindow(QMainWindow):
             # Явно вызываем обновление полей ввода
             self.change_rectangle_method(self.rectangle_method_combo.currentText())
         elif primitive_type == "ellipse":
+            self.line_method_widget.hide()
             self.circle_method_widget.hide()
             self.arc_method_widget.hide()
             self.rectangle_method_widget.hide()
@@ -1588,12 +1639,14 @@ class MainWindow(QMainWindow):
             # Явно вызываем обновление полей ввода
             self.change_ellipse_method(self.ellipse_method_combo.currentText())
         elif primitive_type == "polygon":
+            self.line_method_widget.hide()
             self.circle_method_widget.hide()
             self.arc_method_widget.hide()
             self.rectangle_method_widget.hide()
             self.ellipse_method_widget.hide()
             self.update_polygon_input_fields()
         else:
+            self.line_method_widget.hide()
             self.circle_method_widget.hide()
             self.arc_method_widget.hide()
             self.rectangle_method_widget.hide()
@@ -1628,6 +1681,95 @@ class MainWindow(QMainWindow):
             else:
                 self.cartesian_group.hide()
                 self.polar_group.show()
+    
+    def change_line_method(self, method_name):
+        """Изменяет способ задания отрезка"""
+        if "декартовых" in method_name.lower():
+            # Декартовы координаты
+            self.line_coordinate_system = "cartesian"
+            # Обновляем комбобокс без вызова сигнала, чтобы избежать рекурсии
+            self.line_coord_combo.blockSignals(True)
+            self.line_coord_combo.setCurrentText("Декартова")
+            self.line_coord_combo.blockSignals(False)
+        else:
+            # Полярные координаты
+            self.line_coordinate_system = "polar"
+            # Обновляем комбобокс без вызова сигнала, чтобы избежать рекурсии
+            self.line_coord_combo.blockSignals(True)
+            self.line_coord_combo.setCurrentText("Полярная")
+            self.line_coord_combo.blockSignals(False)
+        self.update_line_input_fields()
+        # Очищаем точки ввода при смене метода
+        self.canvas.clear_input_points()
+    
+    def change_line_coordinate_system(self, system):
+        """Изменяет систему координат для отрезка"""
+        self.line_coordinate_system = "polar" if system == "Полярная" else "cartesian"
+        self.update_line_input_fields()
+        self.update_info()
+    
+    def change_line_angle_units(self, units):
+        """Изменяет единицы углов для отрезка"""
+        self.line_angle_units = "radians" if units == "Радианы" else "degrees"
+        self.update_line_angle_units()
+        self.update_info()
+    
+    def update_line_input_fields(self):
+        """Обновляет поля ввода для отрезка в зависимости от способа задания"""
+        # Показываем метку "Конечная точка"
+        self.end_point_label_widget.show()
+        
+        # Обновляем отображение полей ввода в зависимости от системы координат
+        if self.line_coordinate_system == "cartesian":
+            self.cartesian_group.show()
+            self.polar_group.hide()
+        else:
+            self.cartesian_group.hide()
+            self.polar_group.show()
+            
+            # При переключении на полярные координаты преобразуем текущие декартовы координаты
+            # ОТНОСИТЕЛЬНО НАЧАЛЬНОЙ ТОЧКИ
+            start_x = self.start_x_spin.value()
+            start_y = self.start_y_spin.value()
+            end_x = self.end_x_spin.value()
+            end_y = self.end_y_spin.value()
+            
+            # Вычисляем смещение от начальной точки
+            delta_x = end_x - start_x
+            delta_y = end_y - start_y
+            
+            # Преобразуем смещение в полярные координаты
+            radius = math.sqrt(delta_x**2 + delta_y**2)
+            angle = math.atan2(delta_y, delta_x)
+            
+            if self.line_angle_units == "degrees":
+                angle = math.degrees(angle)
+            
+            self.radius_spin.blockSignals(True)
+            self.angle_spin.blockSignals(True)
+            self.radius_spin.setValue(radius)
+            self.angle_spin.setValue(angle)
+            self.radius_spin.blockSignals(False)
+            self.angle_spin.blockSignals(False)
+    
+    def update_line_angle_units(self):
+        """Обновляет единицы измерения углов для отрезка"""
+        # Обновляем метку единиц углов
+        self.angle_label.setText("°" if self.line_angle_units == "degrees" else "rad")
+        
+        # Конвертируем угол при смене единиц измерения
+        if self.line_coordinate_system == "polar":
+            current_angle = self.angle_spin.value()
+            if self.line_angle_units == "degrees":
+                # Были радианы, стали градусы
+                current_angle = math.degrees(current_angle)
+            else:
+                # Были градусы, стали радианы
+                current_angle = math.radians(current_angle)
+            
+            self.angle_spin.blockSignals(True)
+            self.angle_spin.setValue(current_angle)
+            self.angle_spin.blockSignals(False)
     
     def change_circle_method(self, method_name):
         """Изменяет метод создания окружности"""
@@ -2171,7 +2313,7 @@ class MainWindow(QMainWindow):
             if self.canvas.primitive_type == 'rectangle':
                 self.on_rectangle_coordinates_changed()
             return
-        if self.coordinate_system == "cartesian":
+        if self.line_coordinate_system == "cartesian":
             self.preview_coordinates()
 
     def on_polar_changed(self):
@@ -2182,7 +2324,7 @@ class MainWindow(QMainWindow):
             if self.canvas.primitive_type == 'rectangle':
                 self.on_rectangle_coordinates_changed()
             return
-        if self.coordinate_system == "polar":
+        if self.line_coordinate_system == "polar":
             self.preview_coordinates()
 
     def preview_coordinates(self):
@@ -2193,14 +2335,14 @@ class MainWindow(QMainWindow):
         
         start_point = QPointF(self.start_x_spin.value(), self.start_y_spin.value())
         
-        if self.coordinate_system == "cartesian":
+        if self.line_coordinate_system == "cartesian":
             end_point = QPointF(self.end_x_spin.value(), self.end_y_spin.value())
         else:
             # преобразуем полярные координаты в декартовы ОТНОСИТЕЛЬНО НАЧАЛЬНОЙ ТОЧКИ
             radius = self.radius_spin.value()
             angle = self.angle_spin.value()
             
-            if self.angle_units == "degrees":
+            if self.line_angle_units == "degrees":
                 angle_rad = math.radians(angle)
             else:
                 angle_rad = angle
@@ -2278,13 +2420,13 @@ class MainWindow(QMainWindow):
         
         if dx != 0 or dy != 0:
             angle_rad = math.atan2(dy, dx)
-            if self.angle_units == "degrees":
+            if self.line_angle_units == "degrees":
                 angle = math.degrees(angle_rad)
                 angle_str = f"{angle:.2f}°"
             else:
                 angle_str = f"{angle_rad:.2f} rad"
         else:
-            angle_str = "0.00°" if self.angle_units == "degrees" else "0.00 rad"
+            angle_str = "0.00°" if self.line_angle_units == "degrees" else "0.00 rad"
         
         self.info_label1.setText("Начальная точка:")
         self.info_value1.setText(f"({start_x:.2f}, {start_y:.2f})")
