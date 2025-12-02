@@ -1500,10 +1500,9 @@ class EditDialog(QDialog):
             state['center'] = QPointF(obj.center)
             state['radius'] = obj.radius
         elif isinstance(obj, Rectangle):
-            state['corner1'] = QPointF(obj.corner1)
-            state['corner2'] = QPointF(obj.corner2)
+            state['top_left'] = QPointF(obj.top_left)
+            state['bottom_right'] = QPointF(obj.bottom_right)
             state['fillet_radius'] = obj.fillet_radius
-            state['chamfer_size'] = obj.chamfer_size
         elif isinstance(obj, Arc):
             state['center'] = QPointF(obj.center)
             state['radius'] = obj.radius
@@ -1537,10 +1536,9 @@ class EditDialog(QDialog):
             obj.center = state['center']
             obj.radius = state['radius']
         elif isinstance(obj, Rectangle):
-            obj.corner1 = state['corner1']
-            obj.corner2 = state['corner2']
+            obj.top_left = state['top_left']
+            obj.bottom_right = state['bottom_right']
             obj.fillet_radius = state['fillet_radius']
-            obj.chamfer_size = state['chamfer_size']
         elif isinstance(obj, Arc):
             obj.center = state['center']
             obj.radius = state['radius']
