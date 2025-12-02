@@ -947,12 +947,15 @@ class Ellipse(GeometricObject, Drawable):
 class Polygon(GeometricObject, Drawable):
     """Класс для представления многоугольника"""
     
-    def __init__(self, center: QPointF, radius: float, num_vertices: int, style=None, color=None, width=None, construction_type: str = "inscribed"):
+    def __init__(self, center: QPointF, radius: float, num_vertices: int, style=None, color=None, width=None, construction_type: str = "inscribed", start_angle: float = None):
+        import math
         super().__init__()
         self.center = QPointF(center) if not isinstance(center, QPointF) else center
         self.radius = radius
         self.num_vertices = num_vertices
         self.construction_type = construction_type  # "inscribed" (вписанный) или "circumscribed" (описанный)
+        # Начальный угол для первой вершины (по умолчанию - верхняя точка)
+        self.start_angle = start_angle if start_angle is not None else -math.pi / 2
         self._style = None
         self._style_name = None
         
@@ -1015,7 +1018,7 @@ class Polygon(GeometricObject, Drawable):
             effective_radius = self.radius
         
         for i in range(self.num_vertices):
-            angle = i * angle_step - math.pi / 2  # Начинаем с верхней точки
+            angle = self.start_angle + i * angle_step  # Используем start_angle для направления первой вершины
             x = self.center.x() + effective_radius * math.cos(angle)
             y = self.center.y() + effective_radius * math.sin(angle)
             vertices.append(QPointF(x, y))

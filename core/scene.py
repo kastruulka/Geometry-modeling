@@ -139,15 +139,32 @@ class Scene:
             if isinstance(self._current_object, Polygon):
                 self._current_object.num_vertices = num_vertices
     
-    def add_spline_control_point(self, point: QPointF):
+    def add_spline_control_point(self, point: QPointF, tolerance: float = 10.0):
         """Добавляет контрольную точку к сплайну"""
         if self._drawing_type == 'spline' and self._current_object:
             from widgets.primitives import Spline
             if isinstance(self._current_object, Spline):
+                # Проверяем, есть ли уже точки
+                if len(self._spline_control_points) >= 2:
+                    # Проверяем, близко ли новая точка к первой точке (для замыкания сплайна)
+                    first_point = self._spline_control_points[0]
+                    import math
+                    dx = point.x() - first_point.x()
+                    dy = point.y() - first_point.y()
+                    distance = math.sqrt(dx*dx + dy*dy)
+                    
+                    if distance <= tolerance:
+                        # Замыкаем сплайн - добавляем первую точку в конец
+                        self._spline_control_points.append(QPointF(first_point))
+                        # Обновляем объект с замкнутым сплайном
+                        self._current_object.control_points = self._spline_control_points.copy()
+                        return True  # Возвращаем True, чтобы указать, что сплайн замкнут
+                
                 # Добавляем точку в список зафиксированных точек
                 self._spline_control_points.append(point)
                 # Обновляем объект с новыми точками (без временной точки для предпросмотра)
                 self._current_object.control_points = self._spline_control_points.copy()
+        return False
     
     def get_objects(self) -> List[GeometricObject]:
         """Возвращает все объекты на сцене"""
@@ -252,12 +269,26 @@ class Scene:
             creation_method = kwargs.get('polygon_method', 'center_radius_vertices')
             self._polygon_creation_method = creation_method
             
+            import math
             if creation_method == 'center_radius_vertices':
                 # Центр и радиус окружности и количество углов - центр уже задан
                 self._polygon_center = start_point
                 self._polygon_radius = 0.0
                 self._polygon_num_vertices = kwargs.get('num_vertices', 3)
-                self._current_object = Polygon(start_point, 0, self._polygon_num_vertices, style=style, color=color, width=width)
+                # Начальный угол будет установлен при движении мыши
+                self._current_object = Polygon(start_point, 0, self._polygon_num_vertices, style=style, color=color, width=width, start_angle=-math.pi / 2)
+            elif creation_method == 'inscribed_manual':
+                # Вписанная окружность с ручным вводом радиуса
+                self._polygon_center = start_point
+                self._polygon_radius = kwargs.get('radius', 50.0)
+                self._polygon_num_vertices = kwargs.get('num_vertices', 3)
+                self._current_object = Polygon(start_point, self._polygon_radius, self._polygon_num_vertices, style=style, color=color, width=width, construction_type='inscribed', start_angle=-math.pi / 2)
+            elif creation_method == 'circumscribed_manual':
+                # Описанная окружность с ручным вводом радиуса
+                self._polygon_center = start_point
+                self._polygon_radius = kwargs.get('radius', 50.0)
+                self._polygon_num_vertices = kwargs.get('num_vertices', 3)
+                self._current_object = Polygon(start_point, self._polygon_radius, self._polygon_num_vertices, style=style, color=color, width=width, construction_type='circumscribed', start_angle=-math.pi / 2)
         elif drawing_type == 'spline':
             from widgets.primitives import Spline
             # Для сплайна первый клик - первая контрольная точка
@@ -498,18 +529,48 @@ class Scene:
                 method = self._polygon_creation_method or 'center_radius_vertices'
                 
                 if method == 'center_radius_vertices':
-                    # Центр уже задан, точка определяет радиус
+                    # Центр уже задан, точка определяет радиус и направление
                     dx = point.x() - self._current_object.center.x()
                     dy = point.y() - self._current_object.center.y()
                     radius = math.sqrt(dx*dx + dy*dy)
+                    # Вычисляем угол направления первой вершины на основе позиции курсора
+                    start_angle = math.atan2(dy, dx)
                     self._current_object.radius = radius
+                    self._current_object.start_angle = start_angle
                     self._polygon_radius = radius
+                elif method == 'inscribed_manual' or method == 'circumscribed_manual':
+                    # Для ручного ввода радиуса точка определяет только направление
+                    dx = point.x() - self._current_object.center.x()
+                    dy = point.y() - self._current_object.center.y()
+                    # Вычисляем угол направления первой вершины
+                    start_angle = math.atan2(dy, dx)
+                    self._current_object.start_angle = start_angle
+                    # Радиус берется из UI (устанавливается через set_polygon_radius)
         elif self._drawing_type == 'spline':
             from widgets.primitives import Spline
             if isinstance(self._current_object, Spline):
                 # Обновляем предпросмотр сплайна с текущей позицией мыши как временной точкой
                 temp_points = self._spline_control_points.copy()
-                temp_points.append(point)
+                
+                # Проверяем, близко ли точка к первой точке (для предпросмотра замыкания)
+                if len(temp_points) >= 2:
+                    import math
+                    first_point = temp_points[0]
+                    dx = point.x() - first_point.x()
+                    dy = point.y() - first_point.y()
+                    distance = math.sqrt(dx*dx + dy*dy)
+                    tolerance = 10.0
+                    
+                    if distance <= tolerance:
+                        # Показываем предпросмотр замкнутого сплайна
+                        temp_points.append(QPointF(first_point))
+                    else:
+                        # Обычный предпросмотр
+                        temp_points.append(point)
+                else:
+                    # Обычный предпросмотр
+                    temp_points.append(point)
+                
                 self._current_object.control_points = temp_points
     
     def finish_drawing(self) -> Optional[GeometricObject]:

@@ -589,6 +589,21 @@ class MainWindow(QMainWindow):
         input_layout.addWidget(self.ellipse_three_points_group, 1, 1, 2, 4)
         
         # Группы для многоугольника
+        # Способ создания
+        self.polygon_method_group = QGroupBox("Способ создания")
+        polygon_method_layout = QVBoxLayout()
+        self.polygon_method_combo = QComboBox()
+        self.polygon_method_combo.addItems([
+            "Центр и радиус (курсором)",
+            "Вписанная окружность (ручной ввод)",
+            "Описанная окружность (ручной ввод)"
+        ])
+        self.polygon_method_combo.currentIndexChanged.connect(self.on_polygon_method_changed)
+        polygon_method_layout.addWidget(self.polygon_method_combo)
+        self.polygon_method_group.setLayout(polygon_method_layout)
+        self.polygon_method_group.hide()
+        input_layout.addWidget(self.polygon_method_group, 1, 0, 1, 5)
+        
         # Центр, радиус и количество углов
         self.polygon_center_radius_vertices_group = QWidget()
         polygon_crv_layout = QGridLayout()
@@ -610,14 +625,14 @@ class MainWindow(QMainWindow):
         self.polygon_center_radius_vertices_group.setLayout(polygon_crv_layout)
         self.polygon_center_radius_vertices_group.hide()
         
-        input_layout.addWidget(self.polygon_center_radius_vertices_group, 1, 1, 2, 4)
+        input_layout.addWidget(self.polygon_center_radius_vertices_group, 2, 0, 1, 5)
         
         # кнопка применения координат
         # Размещаем кнопку после всех возможных виджетов (строка 4 или больше)
         # Максимальный rowSpan = 3 (arc_center_angles_group), поэтому кнопка на строке 4
         self.apply_coords_btn = QPushButton("Применить координаты")
         self.apply_coords_btn.clicked.connect(self.apply_coordinates)
-        input_layout.addWidget(self.apply_coords_btn, 4, 0, 1, 5)
+        input_layout.addWidget(self.apply_coords_btn, 5, 0, 1, 5)
         
         self.input_group.setLayout(input_layout)
         left_panel.addWidget(self.input_group)
@@ -1545,14 +1560,31 @@ class MainWindow(QMainWindow):
         # Получаем параметры многоугольника
         radius = self.polygon_radius_spin.value()
         num_vertices = self.polygon_num_vertices_spin.value()
+        method_index = self.polygon_method_combo.currentIndex()
         
         if radius > 0 and num_vertices >= 3:
             style = None
             if self.style_manager:
                 style = self.style_manager.get_current_style()
             
-            polygon = Polygon(center_point, radius, num_vertices, style=style,
-                             color=self.canvas.line_color, width=self.canvas.line_width)
+            if method_index == 0:
+                # Центр и радиус курсором - создаем с начальным углом по умолчанию
+                polygon = Polygon(center_point, radius, num_vertices, style=style,
+                                 color=self.canvas.line_color, width=self.canvas.line_width)
+            elif method_index == 1:
+                # Вписанная окружность с ручным вводом
+                polygon = Polygon(center_point, radius, num_vertices, style=style,
+                                 color=self.canvas.line_color, width=self.canvas.line_width,
+                                 construction_type='inscribed')
+            elif method_index == 2:
+                # Описанная окружность с ручным вводом
+                polygon = Polygon(center_point, radius, num_vertices, style=style,
+                                 color=self.canvas.line_color, width=self.canvas.line_width,
+                                 construction_type='circumscribed')
+            else:
+                polygon = Polygon(center_point, radius, num_vertices, style=style,
+                                 color=self.canvas.line_color, width=self.canvas.line_width)
+            
             self.canvas.scene.add_object(polygon)
         
         self.canvas.update()
@@ -2115,6 +2147,7 @@ class MainWindow(QMainWindow):
         self.ellipse_three_points_group.hide()
         
         # Показываем группу многоугольника
+        self.polygon_method_group.show()
         self.polygon_center_radius_vertices_group.show()
     
     def update_spline_input_fields(self):
@@ -2125,6 +2158,19 @@ class MainWindow(QMainWindow):
         # Показываем группу сплайна (она находится в tools_group, вне input_group)
         if hasattr(self, 'spline_control_points_group'):
             self.spline_control_points_group.show()
+    
+    def on_polygon_method_changed(self):
+        """Обработчик изменения способа создания многоугольника"""
+        method_index = self.polygon_method_combo.currentIndex()
+        if method_index == 0:
+            # Центр и радиус курсором
+            self.canvas.set_polygon_creation_method('center_radius_vertices')
+        elif method_index == 1:
+            # Вписанная окружность с ручным вводом
+            self.canvas.set_polygon_creation_method('inscribed_manual')
+        elif method_index == 2:
+            # Описанная окружность с ручным вводом
+            self.canvas.set_polygon_creation_method('circumscribed_manual')
     
     def on_polygon_coordinates_changed(self):
         """Обработчик изменения координат многоугольника"""
@@ -2141,9 +2187,12 @@ class MainWindow(QMainWindow):
         
         # Если идет рисование, обновляем радиус
         if self.canvas.scene.is_drawing() and self.canvas.scene._drawing_type == 'polygon':
-            if radius > 0:
-                self.canvas.scene.set_polygon_radius(radius)
-                self.canvas.update()
+            method = self.canvas.scene._polygon_creation_method or 'center_radius_vertices'
+            if method in ['inscribed_manual', 'circumscribed_manual']:
+                # Для ручного ввода радиуса обновляем радиус объекта
+                if radius > 0:
+                    self.canvas.scene.set_polygon_radius(radius)
+                    self.canvas.update()
         
         # Вычисляем точку на окружности для визуализации
         import math

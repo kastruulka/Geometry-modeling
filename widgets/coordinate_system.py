@@ -1155,7 +1155,14 @@ class CoordinateSystemWidget(QWidget):
                                          (world_pos - self.last_left_click_pos).manhattanLength() < 5)
                         
                         if not is_double_click:
-                            self.scene.add_spline_control_point(world_pos)
+                            # Проверяем tolerance для привязки к начальной точке
+                            tolerance = 10.0 / self.viewport.get_scale()
+                            is_closed = self.scene.add_spline_control_point(world_pos, tolerance)
+                            if is_closed:
+                                # Если сплайн замкнут, завершаем создание
+                                obj = self.scene.finish_drawing()
+                                if obj:
+                                    self.line_finished.emit()
                             self.update()
                             self.last_left_click_time = current_time
                             self.last_left_click_pos = world_pos
@@ -1604,9 +1611,42 @@ class CoordinateSystemWidget(QWidget):
                 self.update()
                 return
         
-        # Применяем привязку при наведении мыши (даже если не рисуем)
-        # Это нужно для визуализации точек привязки
-        if not (event.buttons() & Qt.RightButton) and not self.pan_mode and not (event.buttons() & Qt.MiddleButton):
+        # Для сплайна проверяем привязку к начальной точке при создании
+        if self.primitive_type == 'spline' and self.scene.is_drawing():
+            if len(self.scene._spline_control_points) >= 2:
+                # Проверяем расстояние до первой точки
+                first_point = self.scene._spline_control_points[0]
+                dx = world_pos.x() - first_point.x()
+                dy = world_pos.y() - first_point.y()
+                distance = math.sqrt(dx*dx + dy*dy)
+                tolerance = 10.0 / self.viewport.get_scale()
+                
+                if distance <= tolerance:
+                    # Привязываем к начальной точке для замыкания
+                    world_pos = QPointF(first_point)
+                    # Устанавливаем специальную точку привязки для визуализации
+                    from core.snapping import SnapPoint, SnapType
+                    self.current_snap_point = SnapPoint(first_point, SnapType.END, "Начало сплайна")
+                    self.update()
+                else:
+                    # Применяем обычную привязку
+                    if not (event.buttons() & Qt.RightButton) and not self.pan_mode and not (event.buttons() & Qt.MiddleButton):
+                        had_snap_point = self.current_snap_point is not None
+                        self._apply_snapping(world_pos)
+                        has_snap_point = self.current_snap_point is not None
+                        if had_snap_point != has_snap_point:
+                            self.update()
+            else:
+                # Применяем обычную привязку
+                if not (event.buttons() & Qt.RightButton) and not self.pan_mode and not (event.buttons() & Qt.MiddleButton):
+                    had_snap_point = self.current_snap_point is not None
+                    self._apply_snapping(world_pos)
+                    has_snap_point = self.current_snap_point is not None
+                    if had_snap_point != has_snap_point:
+                        self.update()
+        elif not (event.buttons() & Qt.RightButton) and not self.pan_mode and not (event.buttons() & Qt.MiddleButton):
+            # Применяем привязку при наведении мыши (даже если не рисуем)
+            # Это нужно для визуализации точек привязки
             # Сохраняем предыдущее состояние привязки
             had_snap_point = self.current_snap_point is not None
             
