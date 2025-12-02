@@ -897,6 +897,14 @@ class MainWindow(QMainWindow):
         reset_view_action.setToolTip("Сбросить вид")
         reset_view_action.triggered.connect(self.canvas.reset_view)
         toolbar.addAction(reset_view_action)
+        
+        toolbar.addSeparator()
+        
+        # Кнопка редактирования
+        edit_action = QAction("Редактировать", self)
+        edit_action.setToolTip("Открыть окно редактирования выделенного объекта")
+        edit_action.triggered.connect(self.open_edit_dialog)
+        toolbar.addAction(edit_action)
     
     def create_style_toolbar(self):
         """Создает панель инструментов для стилей линий"""
@@ -952,17 +960,21 @@ class MainWindow(QMainWindow):
             self.object_properties_panel.show()
             # Обновляем панель свойств
             self.object_properties_panel.set_selected_objects(selected_objects)
-            
-            # Открываем окно редактирования, если выделен один объект
-            if len(selected_objects) == 1:
-                self.edit_dialog.set_object(selected_objects[0])
-                self.edit_dialog.show()
-            else:
-                # Если выделено несколько объектов, закрываем окно редактирования
-                self.edit_dialog.hide()
         else:
             self.object_properties_panel.hide()
-            self.edit_dialog.hide()
+    
+    def open_edit_dialog(self):
+        """Открывает окно редактирования для выделенного объекта"""
+        selected_objects = self.selected_objects
+        if len(selected_objects) == 1:
+            self.edit_dialog.set_object(selected_objects[0])
+            self.edit_dialog.show()
+        elif len(selected_objects) > 1:
+            QMessageBox.information(self, "Редактирование", 
+                                  "Пожалуйста, выберите один объект для редактирования.")
+        else:
+            QMessageBox.information(self, "Редактирование", 
+                                  "Пожалуйста, выберите объект для редактирования.")
     
     def create_statusbar(self):
         # строка состояния

@@ -115,9 +115,20 @@ class SnapManager:
         if self.snap_to_center:
             points.append(SnapPoint(circle.center, SnapType.CENTER, circle))
         
-        # Для окружности можно добавить точки на концах диаметров
-        # Но по требованиям нужны только Конец, Середина, Центр
-        # Для окружности "конец" не применим, "середина" тоже
+        # 4 крайние точки окружности (верхняя, нижняя, левая, правая)
+        if self.snap_to_vertex or self.snap_to_end:
+            extreme_points = [
+                QPointF(circle.center.x(), circle.center.y() - circle.radius),  # Верхняя
+                QPointF(circle.center.x(), circle.center.y() + circle.radius),  # Нижняя
+                QPointF(circle.center.x() - circle.radius, circle.center.y()),  # Левая
+                QPointF(circle.center.x() + circle.radius, circle.center.y())   # Правая
+            ]
+            
+            for point in extreme_points:
+                if self.snap_to_vertex:
+                    points.append(SnapPoint(point, SnapType.VERTEX, circle))
+                elif self.snap_to_end:
+                    points.append(SnapPoint(point, SnapType.END, circle))
         
         return points
     

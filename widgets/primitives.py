@@ -947,11 +947,12 @@ class Ellipse(GeometricObject, Drawable):
 class Polygon(GeometricObject, Drawable):
     """Класс для представления многоугольника"""
     
-    def __init__(self, center: QPointF, radius: float, num_vertices: int, style=None, color=None, width=None):
+    def __init__(self, center: QPointF, radius: float, num_vertices: int, style=None, color=None, width=None, construction_type: str = "inscribed"):
         super().__init__()
         self.center = QPointF(center) if not isinstance(center, QPointF) else center
         self.radius = radius
         self.num_vertices = num_vertices
+        self.construction_type = construction_type  # "inscribed" (вписанный) или "circumscribed" (описанный)
         self._style = None
         self._style_name = None
         
@@ -998,10 +999,25 @@ class Polygon(GeometricObject, Drawable):
         import math
         vertices = []
         angle_step = 2 * math.pi / self.num_vertices
+        
+        # Для описанного многоугольника нужно пересчитать радиус
+        # Если многоугольник описанный, то radius - это расстояние до сторон
+        # Для получения вершин нужно использовать радиус описанной окружности
+        if self.construction_type == "circumscribed":
+            # r = R * cos(π/n), где r - радиус вписанной окружности, R - радиус описанной
+            # Нам дан r, нужно найти R: R = r / cos(π/n)
+            if self.num_vertices > 2:
+                effective_radius = self.radius / math.cos(math.pi / self.num_vertices)
+            else:
+                effective_radius = self.radius
+        else:
+            # Для вписанного многоугольника radius - это расстояние до вершин
+            effective_radius = self.radius
+        
         for i in range(self.num_vertices):
             angle = i * angle_step - math.pi / 2  # Начинаем с верхней точки
-            x = self.center.x() + self.radius * math.cos(angle)
-            y = self.center.y() + self.radius * math.sin(angle)
+            x = self.center.x() + effective_radius * math.cos(angle)
+            y = self.center.y() + effective_radius * math.sin(angle)
             vertices.append(QPointF(x, y))
         return vertices
     

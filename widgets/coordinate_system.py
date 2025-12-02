@@ -14,6 +14,7 @@ from core.renderer import SceneRenderer
 from core.snapping import SnapManager, SnapPoint
 from widgets.line_segment import LineSegment
 from widgets.line_style import LineStyleManager
+from widgets.primitives import Arc, Ellipse, Polygon, Spline
 
 
 class CoordinateSystemWidget(QWidget):
@@ -166,11 +167,12 @@ class CoordinateSystemWidget(QWidget):
         
         painter.restore()  # Восстанавливаем состояние
     
-    def _apply_snapping(self, point: QPointF) -> QPointF:
+    def _apply_snapping(self, point: QPointF, exclude_object=None) -> QPointF:
         """
         Применяет привязку к точке
         Args:
             point: Исходная точка
+            exclude_object: Объект, который нужно исключить из привязки (например, редактируемый объект)
         Returns:
             Привязанная точка (или исходная, если привязка не найдена)
         """
@@ -178,12 +180,15 @@ class CoordinateSystemWidget(QWidget):
             self.current_snap_point = None
             return point
         
-        # Получаем все объекты, исключая текущий рисуемый
+        # Получаем все объекты, исключая текущий рисуемый и редактируемый
         objects = self.scene.get_objects()
         current_obj = self.scene.get_current_object()
         
+        # Исключаем объект для привязки (приоритет у exclude_object)
+        obj_to_exclude = exclude_object if exclude_object is not None else current_obj
+        
         # Получаем статические точки привязки
-        snap_points = self.snap_manager.get_snap_points(objects, exclude_object=current_obj)
+        snap_points = self.snap_manager.get_snap_points(objects, exclude_object=obj_to_exclude)
         
         # Получаем начальную точку для динамических привязок
         start_point = None
@@ -199,7 +204,7 @@ class CoordinateSystemWidget(QWidget):
         # Добавляем динамические точки привязки
         if start_point:
             dynamic_points = self.snap_manager.get_dynamic_snap_points(
-                point, objects, exclude_object=current_obj, start_point=start_point
+                point, objects, exclude_object=obj_to_exclude, start_point=start_point
             )
             snap_points.extend(dynamic_points)
         
@@ -376,8 +381,232 @@ class CoordinateSystemWidget(QWidget):
                 painter.setPen(QPen(QColor(255, 255, 0), 3))
                 painter.setBrush(QColor(255, 255, 0, 150))
                 painter.drawEllipse(bottom_left_screen, point_radius + 3, point_radius + 3)
+        elif isinstance(obj, Arc):
+            # Рисуем точки редактирования дуги
+            center_screen = self.viewport.world_to_screen(obj.center)
+            
+            # Вычисляем средний угол для точки радиуса
+            mid_angle = (obj.start_angle + obj.end_angle) / 2.0
+            if obj.start_angle > obj.end_angle:
+                # Если дуга пересекает 0°, вычисляем средний угол правильно
+                span = (360 - obj.start_angle) + obj.end_angle
+                mid_angle = (obj.start_angle + span / 2.0) % 360
+            
+            # Получаем точки на дуге для начального, конечного углов и середины
+            start_point = obj.get_point_at_angle(obj.start_angle)
+            end_point = obj.get_point_at_angle(obj.end_angle)
+            mid_point = obj.get_point_at_angle(mid_angle)
+            
+            start_point_screen = self.viewport.world_to_screen(start_point)
+            end_point_screen = self.viewport.world_to_screen(end_point)
+            mid_point_screen = self.viewport.world_to_screen(mid_point)
+            
+            # Центр дуги (синий)
+            painter.setPen(QPen(QColor(0, 0, 200), 2))
+            painter.setBrush(QColor(0, 0, 255, 200))
+            painter.drawEllipse(center_screen, point_radius, point_radius)
+            
+            # Начальная точка дуги (зеленая)
+            painter.setPen(QPen(QColor(0, 200, 0), 2))
+            painter.setBrush(QColor(0, 255, 0, 200))
+            painter.drawEllipse(start_point_screen, point_radius, point_radius)
+            
+            # Конечная точка дуги (красная)
+            painter.setPen(QPen(QColor(200, 0, 0), 2))
+            painter.setBrush(QColor(255, 0, 0, 200))
+            painter.drawEllipse(end_point_screen, point_radius, point_radius)
+            
+            # Точка для изменения радиуса (оранжевая) - в середине дуги
+            painter.setPen(QPen(QColor(255, 165, 0), 2))
+            painter.setBrush(QColor(255, 165, 0, 200))
+            painter.drawEllipse(mid_point_screen, point_radius, point_radius)
+            
+            # Подсвечиваем перемещаемую точку
+            if self.dragging_point == 'center':
+                painter.setPen(QPen(QColor(0, 0, 255), 3))
+                painter.setBrush(QColor(0, 0, 255, 150))
+                painter.drawEllipse(center_screen, point_radius + 3, point_radius + 3)
+            elif self.dragging_point == 'start_angle':
+                painter.setPen(QPen(QColor(0, 255, 0), 3))
+                painter.setBrush(QColor(0, 255, 0, 150))
+                painter.drawEllipse(start_point_screen, point_radius + 3, point_radius + 3)
+            elif self.dragging_point == 'end_angle':
+                painter.setPen(QPen(QColor(255, 0, 0), 3))
+                painter.setBrush(QColor(255, 0, 0, 150))
+                painter.drawEllipse(end_point_screen, point_radius + 3, point_radius + 3)
+            elif self.dragging_point == 'radius':
+                painter.setPen(QPen(QColor(255, 165, 0), 3))
+                painter.setBrush(QColor(255, 165, 0, 150))
+                painter.drawEllipse(mid_point_screen, point_radius + 3, point_radius + 3)
+        elif isinstance(obj, Ellipse):
+            # Рисуем точки редактирования эллипса
+            center_screen = self.viewport.world_to_screen(obj.center)
+            
+            # Точки на осях для изменения радиусов
+            # Горизонтальная ось (X) - справа от центра
+            radius_x_point = QPointF(obj.center.x() + obj.radius_x, obj.center.y())
+            # Вертикальная ось (Y) - сверху от центра
+            radius_y_point = QPointF(obj.center.x(), obj.center.y() - obj.radius_y)
+            
+            radius_x_screen = self.viewport.world_to_screen(radius_x_point)
+            radius_y_screen = self.viewport.world_to_screen(radius_y_point)
+            
+            # Центр эллипса (синий)
+            painter.setPen(QPen(QColor(0, 0, 200), 2))
+            painter.setBrush(QColor(0, 0, 255, 200))
+            painter.drawEllipse(center_screen, point_radius, point_radius)
+            
+            # Точка на горизонтальной оси (оранжевая)
+            painter.setPen(QPen(QColor(255, 165, 0), 2))
+            painter.setBrush(QColor(255, 165, 0, 200))
+            painter.drawEllipse(radius_x_screen, point_radius, point_radius)
+            
+            # Точка на вертикальной оси (оранжевая)
+            painter.setPen(QPen(QColor(255, 165, 0), 2))
+            painter.setBrush(QColor(255, 165, 0, 200))
+            painter.drawEllipse(radius_y_screen, point_radius, point_radius)
+            
+            # Подсвечиваем перемещаемую точку
+            if self.dragging_point == 'center':
+                painter.setPen(QPen(QColor(0, 0, 255), 3))
+                painter.setBrush(QColor(0, 0, 255, 150))
+                painter.drawEllipse(center_screen, point_radius + 3, point_radius + 3)
+            elif self.dragging_point == 'radius_x':
+                painter.setPen(QPen(QColor(255, 165, 0), 3))
+                painter.setBrush(QColor(255, 165, 0, 150))
+                painter.drawEllipse(radius_x_screen, point_radius + 3, point_radius + 3)
+            elif self.dragging_point == 'radius_y':
+                painter.setPen(QPen(QColor(255, 165, 0), 3))
+                painter.setBrush(QColor(255, 165, 0, 150))
+                painter.drawEllipse(radius_y_screen, point_radius + 3, point_radius + 3)
+        elif isinstance(obj, Polygon):
+            # Рисуем точки редактирования многоугольника
+            center_screen = self.viewport.world_to_screen(obj.center)
+            
+            # Точка для изменения радиуса - на окружности, справа от центра (0°)
+            # Для описанного многоугольника нужно учесть тип построения
+            if hasattr(obj, 'construction_type') and obj.construction_type == "circumscribed":
+                # Для описанного: radius - это расстояние до сторон, нужно найти радиус описанной окружности
+                if obj.num_vertices > 2:
+                    effective_radius = obj.radius / math.cos(math.pi / obj.num_vertices)
+                else:
+                    effective_radius = obj.radius
+            else:
+                effective_radius = obj.radius
+            
+            radius_point = QPointF(obj.center.x() + effective_radius, obj.center.y())
+            radius_point_screen = self.viewport.world_to_screen(radius_point)
+            
+            # Центр многоугольника (синий)
+            painter.setPen(QPen(QColor(0, 0, 200), 2))
+            painter.setBrush(QColor(0, 0, 255, 200))
+            painter.drawEllipse(center_screen, point_radius, point_radius)
+            
+            # Точка для изменения радиуса (оранжевая)
+            painter.setPen(QPen(QColor(255, 165, 0), 2))
+            painter.setBrush(QColor(255, 165, 0, 200))
+            painter.drawEllipse(radius_point_screen, point_radius, point_radius)
+            
+            # Подсвечиваем перемещаемую точку
+            if self.dragging_point == 'center':
+                painter.setPen(QPen(QColor(0, 0, 255), 3))
+                painter.setBrush(QColor(0, 0, 255, 150))
+                painter.drawEllipse(center_screen, point_radius + 3, point_radius + 3)
+            elif self.dragging_point == 'radius':
+                painter.setPen(QPen(QColor(255, 165, 0), 3))
+                painter.setBrush(QColor(255, 165, 0, 150))
+                painter.drawEllipse(radius_point_screen, point_radius + 3, point_radius + 3)
+        elif isinstance(obj, Spline):
+            # Рисуем контрольные точки сплайна
+            colors = [
+                QColor(0, 255, 0),    # Зеленая
+                QColor(255, 0, 0),    # Красная
+                QColor(0, 0, 255),    # Синяя
+                QColor(255, 165, 0),  # Оранжевая
+                QColor(255, 0, 255),  # Пурпурная
+                QColor(0, 255, 255),  # Голубая
+                QColor(255, 255, 0),  # Желтая
+                QColor(128, 128, 128) # Серая
+            ]
+            
+            for i, point in enumerate(obj.control_points):
+                point_screen = self.viewport.world_to_screen(point)
+                color = colors[i % len(colors)]
+                
+                # Подсвечиваем перемещаемую точку
+                if self.dragging_point == f'point_{i}':
+                    painter.setPen(QPen(color, 3))
+                    painter.setBrush(QColor(color.red(), color.green(), color.blue(), 150))
+                    painter.drawEllipse(point_screen, point_radius + 3, point_radius + 3)
+                else:
+                    painter.setPen(QPen(color, 2))
+                    painter.setBrush(QColor(color.red(), color.green(), color.blue(), 200))
+                    painter.drawEllipse(point_screen, point_radius, point_radius)
         
         painter.restore()
+    
+    def _find_spline_insertion_index(self, spline, point: QPointF) -> int:
+        """Находит индекс для вставки новой контрольной точки сплайна"""
+        if len(spline.control_points) == 0:
+            return 0
+        
+        if len(spline.control_points) == 1:
+            return 1
+        
+        # Находим ближайший сегмент между контрольными точками
+        min_dist = float('inf')
+        best_index = len(spline.control_points)
+        
+        for i in range(len(spline.control_points) - 1):
+            p1 = spline.control_points[i]
+            p2 = spline.control_points[i + 1]
+            
+            # Вычисляем расстояние от точки до сегмента
+            dx = p2.x() - p1.x()
+            dy = p2.y() - p1.y()
+            seg_len_sq = dx*dx + dy*dy
+            
+            if seg_len_sq < 1e-10:
+                # Точки совпадают, используем расстояние до одной из них
+                dist = math.sqrt((point.x() - p1.x())**2 + (point.y() - p1.y())**2)
+            else:
+                # Проекция точки на сегмент
+                t = ((point.x() - p1.x()) * dx + (point.y() - p1.y()) * dy) / seg_len_sq
+                t = max(0, min(1, t))
+                
+                # Ближайшая точка на сегменте
+                closest_x = p1.x() + t * dx
+                closest_y = p1.y() + t * dy
+                
+                # Расстояние до сегмента
+                dist = math.sqrt((point.x() - closest_x)**2 + (point.y() - closest_y)**2)
+            
+            if dist < min_dist:
+                min_dist = dist
+                best_index = i + 1
+        
+        # Также проверяем расстояние до сплайна (кривой)
+        # Находим ближайшую точку на сплайне
+        num_samples = 100
+        min_spline_dist = float('inf')
+        best_spline_index = len(spline.control_points)
+        
+        for i in range(num_samples + 1):
+            t = i / num_samples if num_samples > 0 else 0
+            spline_point = spline._get_point_on_spline(t)
+            dist = math.sqrt((point.x() - spline_point.x())**2 + (point.y() - spline_point.y())**2)
+            
+            if dist < min_spline_dist:
+                min_spline_dist = dist
+                # Находим, между какими контрольными точками находится эта точка на сплайне
+                # Для Catmull-Rom сплайна точка t находится между контрольными точками
+                if len(spline.control_points) >= 2:
+                    # Приблизительно определяем индекс
+                    segment_index = int(t * (len(spline.control_points) - 1))
+                    best_spline_index = min(segment_index + 1, len(spline.control_points))
+        
+        # Используем индекс, соответствующий ближайшему сегменту или точке на сплайне
+        return best_index
     
     def _draw_snap_point(self, painter):
         """Рисует текущую точку привязки"""
@@ -487,7 +716,7 @@ class CoordinateSystemWidget(QWidget):
                 # Получаем выделенные объекты
                 selected = self.selection_manager.get_selected_objects()
                 if len(selected) == 1:
-                    from widgets.primitives import Circle, Rectangle
+                    from widgets.primitives import Circle, Rectangle, Arc, Ellipse, Spline
                     obj = selected[0]
                     tolerance = 10.0 / self.viewport.get_scale()  # Толерантность в мировых координатах
                     
@@ -605,6 +834,168 @@ class CoordinateSystemWidget(QWidget):
                             self.drag_start_pos = world_pos
                             if self.edit_dialog:
                                 self.edit_dialog.set_dragging_point(self.dragging_point)
+                            return
+                    elif isinstance(obj, Arc):
+                        arc = obj
+                        # Проверяем, кликнули ли по центру дуги
+                        dist_to_center = math.sqrt(
+                            (world_pos.x() - arc.center.x())**2 + 
+                            (world_pos.y() - arc.center.y())**2
+                        )
+                        
+                        if dist_to_center <= tolerance:
+                            self.dragging_point = 'center'
+                            self.drag_start_pos = world_pos
+                            if self.edit_dialog:
+                                self.edit_dialog.set_dragging_point('center')
+                            return
+                        
+                        # Вычисляем средний угол для точки радиуса
+                        mid_angle = (arc.start_angle + arc.end_angle) / 2.0
+                        if arc.start_angle > arc.end_angle:
+                            span = (360 - arc.start_angle) + arc.end_angle
+                            mid_angle = (arc.start_angle + span / 2.0) % 360
+                        
+                        # Получаем точки на дуге
+                        start_point = arc.get_point_at_angle(arc.start_angle)
+                        end_point = arc.get_point_at_angle(arc.end_angle)
+                        mid_point = arc.get_point_at_angle(mid_angle)
+                        
+                        # Проверяем, кликнули ли по точкам на дуге
+                        dist_to_start = math.sqrt(
+                            (world_pos.x() - start_point.x())**2 + 
+                            (world_pos.y() - start_point.y())**2
+                        )
+                        dist_to_end = math.sqrt(
+                            (world_pos.x() - end_point.x())**2 + 
+                            (world_pos.y() - end_point.y())**2
+                        )
+                        dist_to_mid = math.sqrt(
+                            (world_pos.x() - mid_point.x())**2 + 
+                            (world_pos.y() - mid_point.y())**2
+                        )
+                        
+                        # Находим ближайшую точку
+                        min_dist = min(dist_to_start, dist_to_end, dist_to_mid)
+                        
+                        if min_dist <= tolerance:
+                            if min_dist == dist_to_start:
+                                self.dragging_point = 'start_angle'
+                            elif min_dist == dist_to_end:
+                                self.dragging_point = 'end_angle'
+                            else:
+                                self.dragging_point = 'radius'
+                            
+                            self.drag_start_pos = world_pos
+                            if self.edit_dialog:
+                                self.edit_dialog.set_dragging_point(self.dragging_point)
+                            return
+                    elif isinstance(obj, Ellipse):
+                        ellipse = obj
+                        # Проверяем, кликнули ли по центру эллипса
+                        dist_to_center = math.sqrt(
+                            (world_pos.x() - ellipse.center.x())**2 + 
+                            (world_pos.y() - ellipse.center.y())**2
+                        )
+                        
+                        if dist_to_center <= tolerance:
+                            self.dragging_point = 'center'
+                            self.drag_start_pos = world_pos
+                            if self.edit_dialog:
+                                self.edit_dialog.set_dragging_point('center')
+                            return
+                        
+                        # Точки на осях для изменения радиусов
+                        radius_x_point = QPointF(ellipse.center.x() + ellipse.radius_x, ellipse.center.y())
+                        radius_y_point = QPointF(ellipse.center.x(), ellipse.center.y() - ellipse.radius_y)
+                        
+                        dist_to_radius_x = math.sqrt(
+                            (world_pos.x() - radius_x_point.x())**2 + 
+                            (world_pos.y() - radius_x_point.y())**2
+                        )
+                        dist_to_radius_y = math.sqrt(
+                            (world_pos.x() - radius_y_point.x())**2 + 
+                            (world_pos.y() - radius_y_point.y())**2
+                        )
+                        
+                        # Находим ближайшую точку
+                        min_dist = min(dist_to_radius_x, dist_to_radius_y)
+                        
+                        if min_dist <= tolerance:
+                            if min_dist == dist_to_radius_x:
+                                self.dragging_point = 'radius_x'
+                            else:
+                                self.dragging_point = 'radius_y'
+                            
+                            self.drag_start_pos = world_pos
+                            if self.edit_dialog:
+                                self.edit_dialog.set_dragging_point(self.dragging_point)
+                            return
+                    elif isinstance(obj, Polygon):
+                        polygon = obj
+                        # Проверяем, кликнули ли по центру многоугольника
+                        dist_to_center = math.sqrt(
+                            (world_pos.x() - polygon.center.x())**2 + 
+                            (world_pos.y() - polygon.center.y())**2
+                        )
+                        
+                        if dist_to_center <= tolerance:
+                            self.dragging_point = 'center'
+                            self.drag_start_pos = world_pos
+                            if self.edit_dialog:
+                                self.edit_dialog.set_dragging_point('center')
+                            return
+                        
+                        # Точка для изменения радиуса - на окружности, справа от центра
+                        if hasattr(polygon, 'construction_type') and polygon.construction_type == "circumscribed":
+                            if polygon.num_vertices > 2:
+                                effective_radius = polygon.radius / math.cos(math.pi / polygon.num_vertices)
+                            else:
+                                effective_radius = polygon.radius
+                        else:
+                            effective_radius = polygon.radius
+                        
+                        radius_point = QPointF(polygon.center.x() + effective_radius, polygon.center.y())
+                        dist_to_radius = math.sqrt(
+                            (world_pos.x() - radius_point.x())**2 + 
+                            (world_pos.y() - radius_point.y())**2
+                        )
+                        
+                        if dist_to_radius <= tolerance:
+                            self.dragging_point = 'radius'
+                            self.drag_start_pos = world_pos
+                            if self.edit_dialog:
+                                self.edit_dialog.set_dragging_point('radius')
+                            return
+                    elif isinstance(obj, Spline):
+                        spline = obj
+                        # Проверяем, кликнули ли по контрольным точкам
+                        clicked_on_point = False
+                        for i, point in enumerate(spline.control_points):
+                            dist_to_point = math.sqrt(
+                                (world_pos.x() - point.x())**2 + 
+                                (world_pos.y() - point.y())**2
+                            )
+                            
+                            if dist_to_point <= tolerance:
+                                # Левый клик - начинаем перемещение
+                                clicked_on_point = True
+                                self.dragging_point = f'point_{i}'
+                                self.drag_start_pos = world_pos
+                                if self.edit_dialog:
+                                    self.edit_dialog.set_dragging_point(f'point_{i}')
+                                return
+                        
+                        # Если кликнули по сплайну (но не по точке), добавляем новую точку
+                        # Проверяем расстояние до сплайна (используем больший tolerance для удобства)
+                        if not clicked_on_point and spline.contains_point(world_pos, tolerance * 3):
+                            # Находим ближайший сегмент между контрольными точками
+                            insert_index = self._find_spline_insertion_index(spline, world_pos)
+                            # Вставляем точку в найденное место
+                            spline.control_points.insert(insert_index, QPointF(world_pos))
+                            if self.edit_dialog:
+                                self.edit_dialog.update_spline_info()
+                            self.update()
                             return
                 
                 # В режиме редактирования не начинаем рисование нового объекта
@@ -810,6 +1201,35 @@ class CoordinateSystemWidget(QWidget):
                 self.update()
         
         elif event.button() == Qt.RightButton:
+            # Проверяем, находимся ли мы в режиме редактирования
+            if self.editing_mode:
+                world_pos = self.viewport.screen_to_world(event.position())
+                world_pos = self._apply_snapping(world_pos)
+                
+                # Получаем выделенные объекты
+                selected = self.selection_manager.get_selected_objects()
+                if len(selected) == 1:
+                    from widgets.primitives import Spline
+                    obj = selected[0]
+                    
+                    if isinstance(obj, Spline):
+                        spline = obj
+                        tolerance = 10.0 / self.viewport.get_scale()
+                        
+                        # Проверяем, кликнули ли по контрольным точкам
+                        for i, point in enumerate(spline.control_points):
+                            dist_to_point = math.sqrt(
+                                (world_pos.x() - point.x())**2 + 
+                                (world_pos.y() - point.y())**2
+                            )
+                            
+                            if dist_to_point <= tolerance:
+                                # Правый клик - выбираем точку для удаления
+                                if self.edit_dialog:
+                                    self.edit_dialog.set_selected_spline_point(i)
+                                self.update()
+                                return
+            
             # Правая кнопка - сохраняем позицию для определения клика/перетаскивания
             self.right_button_press_pos = event.position()
             self.right_button_press_time = event.timestamp()
@@ -845,9 +1265,10 @@ class CoordinateSystemWidget(QWidget):
         if self.editing_mode and self.dragging_point and (event.buttons() & Qt.LeftButton):
             selected = self.selection_manager.get_selected_objects()
             if len(selected) == 1:
-                from widgets.primitives import Circle, Rectangle
+                from widgets.primitives import Circle, Rectangle, Arc, Ellipse, Polygon, Spline
                 obj = selected[0]
-                world_pos = self._apply_snapping(world_pos)
+                # Применяем привязку, исключая редактируемый объект
+                world_pos = self._apply_snapping(world_pos, exclude_object=obj)
                 
                 if isinstance(obj, LineSegment):
                     line = obj
@@ -1020,6 +1441,165 @@ class CoordinateSystemWidget(QWidget):
                             self.edit_dialog.rect_height_spin.setValue(bbox.height())
                             self.edit_dialog.rect_width_spin.blockSignals(False)
                             self.edit_dialog.rect_height_spin.blockSignals(False)
+                elif isinstance(obj, Arc):
+                    arc = obj
+                    if self.dragging_point == 'center':
+                        # Перемещаем центр дуги
+                        arc.center = QPointF(world_pos)
+                        # Обновляем поля в окне редактирования
+                        if self.edit_dialog:
+                            self.edit_dialog.arc_center_x_spin.blockSignals(True)
+                            self.edit_dialog.arc_center_y_spin.blockSignals(True)
+                            self.edit_dialog.arc_center_x_spin.setValue(world_pos.x())
+                            self.edit_dialog.arc_center_y_spin.setValue(world_pos.y())
+                            self.edit_dialog.arc_center_x_spin.blockSignals(False)
+                            self.edit_dialog.arc_center_y_spin.blockSignals(False)
+                    elif self.dragging_point == 'radius':
+                        # Изменяем радиус дуги
+                        # Вычисляем расстояние от центра до новой позиции
+                        dx = world_pos.x() - arc.center.x()
+                        dy = world_pos.y() - arc.center.y()
+                        new_radius = math.sqrt(dx*dx + dy*dy)
+                        # Минимальный радиус
+                        if new_radius < 0.01:
+                            new_radius = 0.01
+                        # Сохраняем пропорции радиусов
+                        ratio = arc.radius_y / arc.radius_x if arc.radius_x > 0 else 1.0
+                        arc.radius_x = new_radius
+                        arc.radius_y = new_radius * ratio
+                        arc.radius = max(arc.radius_x, arc.radius_y)
+                        # Обновляем поля в окне редактирования
+                        if self.edit_dialog:
+                            self.edit_dialog.arc_radius_x_spin.blockSignals(True)
+                            self.edit_dialog.arc_radius_y_spin.blockSignals(True)
+                            self.edit_dialog.arc_radius_x_spin.setValue(arc.radius_x)
+                            self.edit_dialog.arc_radius_y_spin.setValue(arc.radius_y)
+                            self.edit_dialog.arc_radius_x_spin.blockSignals(False)
+                            self.edit_dialog.arc_radius_y_spin.blockSignals(False)
+                    elif self.dragging_point == 'start_angle':
+                        # Изменяем начальный угол
+                        dx = world_pos.x() - arc.center.x()
+                        dy = world_pos.y() - arc.center.y()
+                        # Вычисляем угол в градусах
+                        angle_rad = math.atan2(dy, dx)
+                        new_angle = math.degrees(angle_rad)
+                        # Нормализуем угол в диапазон [0, 360)
+                        if new_angle < 0:
+                            new_angle += 360
+                        arc.start_angle = new_angle
+                        # Обновляем поля в окне редактирования
+                        if self.edit_dialog:
+                            self.edit_dialog.arc_start_angle_spin.blockSignals(True)
+                            self.edit_dialog.arc_start_angle_spin.setValue(new_angle)
+                            self.edit_dialog.arc_start_angle_spin.blockSignals(False)
+                    elif self.dragging_point == 'end_angle':
+                        # Изменяем конечный угол
+                        dx = world_pos.x() - arc.center.x()
+                        dy = world_pos.y() - arc.center.y()
+                        # Вычисляем угол в градусах
+                        angle_rad = math.atan2(dy, dx)
+                        new_angle = math.degrees(angle_rad)
+                        # Нормализуем угол в диапазон [0, 360)
+                        if new_angle < 0:
+                            new_angle += 360
+                        arc.end_angle = new_angle
+                        # Обновляем поля в окне редактирования
+                        if self.edit_dialog:
+                            self.edit_dialog.arc_end_angle_spin.blockSignals(True)
+                            self.edit_dialog.arc_end_angle_spin.setValue(new_angle)
+                            self.edit_dialog.arc_end_angle_spin.blockSignals(False)
+                elif isinstance(obj, Ellipse):
+                    ellipse = obj
+                    if self.dragging_point == 'center':
+                        # Перемещаем центр эллипса
+                        ellipse.center = QPointF(world_pos)
+                        # Обновляем поля в окне редактирования
+                        if self.edit_dialog:
+                            self.edit_dialog.ellipse_center_x_spin.blockSignals(True)
+                            self.edit_dialog.ellipse_center_y_spin.blockSignals(True)
+                            self.edit_dialog.ellipse_center_x_spin.setValue(world_pos.x())
+                            self.edit_dialog.ellipse_center_y_spin.setValue(world_pos.y())
+                            self.edit_dialog.ellipse_center_x_spin.blockSignals(False)
+                            self.edit_dialog.ellipse_center_y_spin.blockSignals(False)
+                    elif self.dragging_point == 'radius_x':
+                        # Изменяем горизонтальный радиус
+                        dx = world_pos.x() - ellipse.center.x()
+                        new_radius_x = abs(dx)
+                        # Минимальный радиус
+                        if new_radius_x < 0.01:
+                            new_radius_x = 0.01
+                        ellipse.radius_x = new_radius_x
+                        # Обновляем поля в окне редактирования
+                        if self.edit_dialog:
+                            self.edit_dialog.ellipse_radius_x_spin.blockSignals(True)
+                            self.edit_dialog.ellipse_radius_x_spin.setValue(new_radius_x)
+                            self.edit_dialog.ellipse_radius_x_spin.blockSignals(False)
+                    elif self.dragging_point == 'radius_y':
+                        # Изменяем вертикальный радиус
+                        dy = ellipse.center.y() - world_pos.y()  # Инвертируем, так как Y растет вниз
+                        new_radius_y = abs(dy)
+                        # Минимальный радиус
+                        if new_radius_y < 0.01:
+                            new_radius_y = 0.01
+                        ellipse.radius_y = new_radius_y
+                        # Обновляем поля в окне редактирования
+                        if self.edit_dialog:
+                            self.edit_dialog.ellipse_radius_y_spin.blockSignals(True)
+                            self.edit_dialog.ellipse_radius_y_spin.setValue(new_radius_y)
+                            self.edit_dialog.ellipse_radius_y_spin.blockSignals(False)
+                elif isinstance(obj, Polygon):
+                    polygon = obj
+                    if self.dragging_point == 'center':
+                        # Перемещаем центр многоугольника
+                        polygon.center = QPointF(world_pos)
+                        # Обновляем поля в окне редактирования
+                        if self.edit_dialog:
+                            self.edit_dialog.polygon_center_x_spin.blockSignals(True)
+                            self.edit_dialog.polygon_center_y_spin.blockSignals(True)
+                            self.edit_dialog.polygon_center_x_spin.setValue(world_pos.x())
+                            self.edit_dialog.polygon_center_y_spin.setValue(world_pos.y())
+                            self.edit_dialog.polygon_center_x_spin.blockSignals(False)
+                            self.edit_dialog.polygon_center_y_spin.blockSignals(False)
+                    elif self.dragging_point == 'radius':
+                        # Изменяем радиус многоугольника
+                        # Вычисляем расстояние от центра до новой позиции
+                        dx = world_pos.x() - polygon.center.x()
+                        dy = world_pos.y() - polygon.center.y()
+                        new_radius = math.sqrt(dx*dx + dy*dy)
+                        # Минимальный радиус
+                        if new_radius < 0.01:
+                            new_radius = 0.01
+                        
+                        # Для описанного многоугольника нужно пересчитать радиус
+                        if hasattr(polygon, 'construction_type') and polygon.construction_type == "circumscribed":
+                            # new_radius - это радиус описанной окружности, нужно найти радиус вписанной
+                            if polygon.num_vertices > 2:
+                                polygon.radius = new_radius * math.cos(math.pi / polygon.num_vertices)
+                            else:
+                                polygon.radius = new_radius
+                        else:
+                            # Для вписанного многоугольника new_radius - это и есть нужный радиус
+                            polygon.radius = new_radius
+                        
+                        # Обновляем поля в окне редактирования
+                        if self.edit_dialog:
+                            self.edit_dialog.polygon_radius_spin.blockSignals(True)
+                            self.edit_dialog.polygon_radius_spin.setValue(polygon.radius)
+                            self.edit_dialog.polygon_radius_spin.blockSignals(False)
+                elif isinstance(obj, Spline):
+                    spline = obj
+                    # Проверяем, какая точка перемещается
+                    if self.dragging_point and self.dragging_point.startswith('point_'):
+                        try:
+                            point_index = int(self.dragging_point.split('_')[1])
+                            if 0 <= point_index < len(spline.control_points):
+                                # Перемещаем контрольную точку
+                                spline.control_points[point_index] = QPointF(world_pos)
+                                # Обновляем информацию в окне редактирования
+                                if self.edit_dialog:
+                                    self.edit_dialog.update_spline_info()
+                        except (ValueError, IndexError):
+                            pass
                 
                 self.update()
                 return
@@ -1029,8 +1609,16 @@ class CoordinateSystemWidget(QWidget):
         if not (event.buttons() & Qt.RightButton) and not self.pan_mode and not (event.buttons() & Qt.MiddleButton):
             # Сохраняем предыдущее состояние привязки
             had_snap_point = self.current_snap_point is not None
+            
+            # В режиме редактирования исключаем редактируемый объект из привязки
+            exclude_obj = None
+            if self.editing_mode:
+                selected = self.selection_manager.get_selected_objects()
+                if len(selected) == 1:
+                    exclude_obj = selected[0]
+            
             # Применяем привязку для визуализации, но не изменяем world_pos если не рисуем
-            self._apply_snapping(world_pos)
+            self._apply_snapping(world_pos, exclude_object=exclude_obj)
             # Обновляем виджет если состояние привязки изменилось
             has_snap_point = self.current_snap_point is not None
             if had_snap_point != has_snap_point:
