@@ -103,12 +103,19 @@ class Scene:
     def set_rectangle_fillet_radius(self, radius: float):
         """Устанавливает радиус скругления для метода with_fillets"""
         self._rectangle_fillet_radius = radius
-        # Обновляем текущий объект, если он существует
-        if self._current_object and self._drawing_type == 'rectangle':
+        # Обновляем текущий объект, если он существует и еще не добавлен в сцену
+        # Это предотвращает изменение уже созданных прямоугольников
+        # Важно: применяем только для метода 'with_fillets' и только к новым объектам
+        if (self._current_object and 
+            self._drawing_type == 'rectangle' and 
+            self._rectangle_creation_method == 'with_fillets'):
             from widgets.primitives import Rectangle
             if isinstance(self._current_object, Rectangle):
-                if hasattr(self._current_object, 'fillet_radius'):
-                    self._current_object.fillet_radius = radius
+                # Проверяем, что объект еще не в сцене (новый объект в процессе создания)
+                # Это гарантирует, что мы не изменяем уже зафиксированные прямоугольники
+                if self._current_object not in self._objects:
+                    if hasattr(self._current_object, 'fillet_radius'):
+                        self._current_object.fillet_radius = radius
     
     def set_polygon_radius(self, radius: float):
         """Устанавливает радиус многоугольника"""

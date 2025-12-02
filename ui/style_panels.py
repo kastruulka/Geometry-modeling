@@ -597,7 +597,17 @@ class ObjectPropertiesPanel(QGroupBox):
             # Применяем стиль ко всем выделенным объектам
             for obj in self.selected_objects:
                 if hasattr(obj, 'style'):
-                    obj.style = style
+                    # Для уже зафиксированных прямоугольников сохраняем fillet_radius
+                    # Скругленные углы применяются только при создании нового прямоугольника
+                    from widgets.primitives import Rectangle
+                    if isinstance(obj, Rectangle):
+                        # Сохраняем текущий fillet_radius перед применением стиля
+                        original_fillet_radius = getattr(obj, 'fillet_radius', 0.0)
+                        obj.style = style
+                        # Восстанавливаем fillet_radius для зафиксированных прямоугольников
+                        obj.fillet_radius = original_fillet_radius
+                    else:
+                        obj.style = style
             # Обновляем отображение панели
             self.update_display()
             # Отправляем сигнал об изменении стиля

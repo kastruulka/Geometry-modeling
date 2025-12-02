@@ -440,6 +440,7 @@ class PrimitiveRenderer:
             line_type = rectangle.style.line_type
             
             # Для специальных типов линий используем специальную отрисовку
+            # Эти методы сами обрабатывают скругленные углы
             if line_type == LineType.SOLID_WAVY:
                 PrimitiveRenderer._draw_wavy_rectangle(painter, rectangle, pen)
             elif line_type == LineType.SOLID_THIN_BROKEN:
@@ -453,7 +454,7 @@ class PrimitiveRenderer:
                 painter.setPen(pen)
                 painter.setBrush(Qt.NoBrush)
                 rect = rectangle.get_bounding_box()
-                # Проверяем, есть ли скругление углов
+                # Проверяем скругление углов для обычных сплошных линий
                 fillet_radius = getattr(rectangle, 'fillet_radius', 0.0)
                 if fillet_radius > 0:
                     # Рисуем прямоугольник со скругленными углами
@@ -853,93 +854,541 @@ class PrimitiveRenderer:
     def _draw_wavy_rectangle(painter: QPainter, rectangle, pen: QPen):
         """Отрисовывает волнистый прямоугольник"""
         fillet_radius = getattr(rectangle, 'fillet_radius', 0.0)
-        if fillet_radius > 0:
-            # Для скругленных углов используем обычную отрисовку со скруглениями
-            PrimitiveRenderer.draw_rectangle(painter, rectangle, 1.0, False)
-            return
+        rect = rectangle.get_bounding_box()
+        w = rect.width()
+        h = rect.height()
+        r = min(fillet_radius, w / 2, h / 2) if fillet_radius > 0 else 0.0
         
-        bbox = rectangle.get_bounding_box()
-        corners = [
-            QPointF(bbox.left(), bbox.top()),
-            QPointF(bbox.right(), bbox.top()),
-            QPointF(bbox.right(), bbox.bottom()),
-            QPointF(bbox.left(), bbox.bottom())
-        ]
-        
-        # Рисуем каждую сторону как волнистую линию
-        for i in range(4):
-            start = corners[i]
-            end = corners[(i + 1) % 4]
-            LineRenderer._draw_wavy_line(painter, start, end, pen)
+        if r > 0:
+            # Для скругленных углов разбиваем контур на сегменты и применяем волнистый стиль
+            # Верхняя сторона
+            LineRenderer._draw_wavy_line(painter, 
+                                       QPointF(rect.x() + r, rect.y()), 
+                                       QPointF(rect.x() + w - r, rect.y()), 
+                                       pen)
+            # Верхний правый угол (дуга) - центр в центре квадрата 2r x 2r: (w - r, r)
+            if r > 0:
+                PrimitiveRenderer._draw_wavy_arc_segment(painter, 
+                    QPointF(rect.x() + w - r, rect.y()), 
+                    QPointF(rect.x() + w, rect.y() + r), 
+                    QPointF(rect.x() + w - r, rect.y() + r), r, pen)
+            # Правая сторона
+            LineRenderer._draw_wavy_line(painter, 
+                                       QPointF(rect.x() + w, rect.y() + r), 
+                                       QPointF(rect.x() + w, rect.y() + h - r), 
+                                       pen)
+            # Нижний правый угол (дуга) - центр в (w - r, h - r)
+            if r > 0:
+                PrimitiveRenderer._draw_wavy_arc_segment(painter, 
+                    QPointF(rect.x() + w, rect.y() + h - r), 
+                    QPointF(rect.x() + w - r, rect.y() + h), 
+                    QPointF(rect.x() + w - r, rect.y() + h - r), r, pen)
+            # Нижняя сторона
+            LineRenderer._draw_wavy_line(painter, 
+                                       QPointF(rect.x() + w - r, rect.y() + h), 
+                                       QPointF(rect.x() + r, rect.y() + h), 
+                                       pen)
+            # Нижний левый угол (дуга) - центр в (r, h - r)
+            if r > 0:
+                PrimitiveRenderer._draw_wavy_arc_segment(painter, 
+                    QPointF(rect.x() + r, rect.y() + h), 
+                    QPointF(rect.x(), rect.y() + h - r), 
+                    QPointF(rect.x() + r, rect.y() + h - r), r, pen)
+            # Левая сторона
+            LineRenderer._draw_wavy_line(painter, 
+                                       QPointF(rect.x(), rect.y() + h - r), 
+                                       QPointF(rect.x(), rect.y() + r), 
+                                       pen)
+            # Верхний левый угол (дуга) - центр в (r, r)
+            if r > 0:
+                PrimitiveRenderer._draw_wavy_arc_segment(painter, 
+                    QPointF(rect.x(), rect.y() + r), 
+                    QPointF(rect.x() + r, rect.y()), 
+                    QPointF(rect.x() + r, rect.y() + r), r, pen)
+        else:
+            # Обычный прямоугольник без скругления
+            bbox = rectangle.get_bounding_box()
+            corners = [
+                QPointF(bbox.left(), bbox.top()),
+                QPointF(bbox.right(), bbox.top()),
+                QPointF(bbox.right(), bbox.bottom()),
+                QPointF(bbox.left(), bbox.bottom())
+            ]
+            
+            # Рисуем каждую сторону как волнистую линию
+            for i in range(4):
+                start = corners[i]
+                end = corners[(i + 1) % 4]
+                LineRenderer._draw_wavy_line(painter, start, end, pen)
     
     @staticmethod
     def _draw_broken_rectangle(painter: QPainter, rectangle, pen: QPen):
         """Отрисовывает прямоугольник с изломами"""
         fillet_radius = getattr(rectangle, 'fillet_radius', 0.0)
-        if fillet_radius > 0:
-            # Для скругленных углов используем обычную отрисовку со скруглениями
-            PrimitiveRenderer.draw_rectangle(painter, rectangle, 1.0, False)
-            return
+        rect = rectangle.get_bounding_box()
+        w = rect.width()
+        h = rect.height()
+        r = min(fillet_radius, w / 2, h / 2) if fillet_radius > 0 else 0.0
         
-        bbox = rectangle.get_bounding_box()
-        corners = [
-            QPointF(bbox.left(), bbox.top()),
-            QPointF(bbox.right(), bbox.top()),
-            QPointF(bbox.right(), bbox.bottom()),
-            QPointF(bbox.left(), bbox.bottom())
-        ]
-        
-        # Рисуем каждую сторону как линию с изломами
-        for i in range(4):
-            start = corners[i]
-            end = corners[(i + 1) % 4]
-            LineRenderer._draw_broken_line(painter, start, end, pen)
+        if r > 0:
+            # Для скругленных углов разбиваем контур на сегменты и применяем стиль с изломами
+            # Верхняя сторона
+            LineRenderer._draw_broken_line(painter, 
+                                         QPointF(rect.x() + r, rect.y()), 
+                                         QPointF(rect.x() + w - r, rect.y()), 
+                                         pen)
+            # Верхний правый угол (дуга) - центр в (w - r, r)
+            if r > 0:
+                PrimitiveRenderer._draw_broken_arc_segment(painter, 
+                    QPointF(rect.x() + w - r, rect.y()), 
+                    QPointF(rect.x() + w, rect.y() + r), 
+                    QPointF(rect.x() + w - r, rect.y() + r), r, pen)
+            # Правая сторона
+            LineRenderer._draw_broken_line(painter, 
+                                         QPointF(rect.x() + w, rect.y() + r), 
+                                         QPointF(rect.x() + w, rect.y() + h - r), 
+                                         pen)
+            # Нижний правый угол (дуга) - центр в (w - r, h - r)
+            if r > 0:
+                PrimitiveRenderer._draw_broken_arc_segment(painter, 
+                    QPointF(rect.x() + w, rect.y() + h - r), 
+                    QPointF(rect.x() + w - r, rect.y() + h), 
+                    QPointF(rect.x() + w - r, rect.y() + h - r), r, pen)
+            # Нижняя сторона
+            LineRenderer._draw_broken_line(painter, 
+                                         QPointF(rect.x() + w - r, rect.y() + h), 
+                                         QPointF(rect.x() + r, rect.y() + h), 
+                                         pen)
+            # Нижний левый угол (дуга) - центр в (r, h - r)
+            if r > 0:
+                PrimitiveRenderer._draw_broken_arc_segment(painter, 
+                    QPointF(rect.x() + r, rect.y() + h), 
+                    QPointF(rect.x(), rect.y() + h - r), 
+                    QPointF(rect.x() + r, rect.y() + h - r), r, pen)
+            # Левая сторона
+            LineRenderer._draw_broken_line(painter, 
+                                         QPointF(rect.x(), rect.y() + h - r), 
+                                         QPointF(rect.x(), rect.y() + r), 
+                                         pen)
+            # Верхний левый угол (дуга) - центр в (r, r)
+            if r > 0:
+                PrimitiveRenderer._draw_broken_arc_segment(painter, 
+                    QPointF(rect.x(), rect.y() + r), 
+                    QPointF(rect.x() + r, rect.y()), 
+                    QPointF(rect.x() + r, rect.y() + r), r, pen)
+        else:
+            # Обычный прямоугольник без скругления
+            bbox = rectangle.get_bounding_box()
+            corners = [
+                QPointF(bbox.left(), bbox.top()),
+                QPointF(bbox.right(), bbox.top()),
+                QPointF(bbox.right(), bbox.bottom()),
+                QPointF(bbox.left(), bbox.bottom())
+            ]
+            
+            # Рисуем каждую сторону как линию с изломами
+            for i in range(4):
+                start = corners[i]
+                end = corners[(i + 1) % 4]
+                LineRenderer._draw_broken_line(painter, start, end, pen)
     
     @staticmethod
     def _draw_dashed_rectangle(painter: QPainter, rectangle, pen: QPen, style):
         """Отрисовывает штриховой прямоугольник"""
         fillet_radius = getattr(rectangle, 'fillet_radius', 0.0)
-        if fillet_radius > 0:
-            # Для скругленных углов используем обычную отрисовку со скруглениями
-            PrimitiveRenderer.draw_rectangle(painter, rectangle, 1.0, False)
-            return
+        rect = rectangle.get_bounding_box()
+        w = rect.width()
+        h = rect.height()
+        r = min(fillet_radius, w / 2, h / 2) if fillet_radius > 0 else 0.0
         
-        bbox = rectangle.get_bounding_box()
-        corners = [
-            QPointF(bbox.left(), bbox.top()),
-            QPointF(bbox.right(), bbox.top()),
-            QPointF(bbox.right(), bbox.bottom()),
-            QPointF(bbox.left(), bbox.bottom())
-        ]
-        
-        # Рисуем каждую сторону как штриховую линию
-        for i in range(4):
-            start = corners[i]
-            end = corners[(i + 1) % 4]
-            LineRenderer._draw_dashed_line(painter, start, end, pen, style)
+        if r > 0:
+            # Для скругленных углов разбиваем контур на сегменты и применяем штриховой стиль
+            # Верхняя сторона
+            LineRenderer._draw_dashed_line(painter, 
+                                         QPointF(rect.x() + r, rect.y()), 
+                                         QPointF(rect.x() + w - r, rect.y()), 
+                                         pen, style)
+            # Верхний правый угол (дуга) - центр в (w - r, r)
+            if r > 0:
+                PrimitiveRenderer._draw_dashed_arc_segment(painter, 
+                    QPointF(rect.x() + w - r, rect.y()), 
+                    QPointF(rect.x() + w, rect.y() + r), 
+                    QPointF(rect.x() + w - r, rect.y() + r), r, pen, style)
+            # Правая сторона
+            LineRenderer._draw_dashed_line(painter, 
+                                         QPointF(rect.x() + w, rect.y() + r), 
+                                         QPointF(rect.x() + w, rect.y() + h - r), 
+                                         pen, style)
+            # Нижний правый угол (дуга) - центр в (w - r, h - r)
+            if r > 0:
+                PrimitiveRenderer._draw_dashed_arc_segment(painter, 
+                    QPointF(rect.x() + w, rect.y() + h - r), 
+                    QPointF(rect.x() + w - r, rect.y() + h), 
+                    QPointF(rect.x() + w - r, rect.y() + h - r), r, pen, style)
+            # Нижняя сторона
+            LineRenderer._draw_dashed_line(painter, 
+                                         QPointF(rect.x() + w - r, rect.y() + h), 
+                                         QPointF(rect.x() + r, rect.y() + h), 
+                                         pen, style)
+            # Нижний левый угол (дуга) - центр в (r, h - r)
+            if r > 0:
+                PrimitiveRenderer._draw_dashed_arc_segment(painter, 
+                    QPointF(rect.x() + r, rect.y() + h), 
+                    QPointF(rect.x(), rect.y() + h - r), 
+                    QPointF(rect.x() + r, rect.y() + h - r), r, pen, style)
+            # Левая сторона
+            LineRenderer._draw_dashed_line(painter, 
+                                         QPointF(rect.x(), rect.y() + h - r), 
+                                         QPointF(rect.x(), rect.y() + r), 
+                                         pen, style)
+            # Верхний левый угол (дуга) - центр в (r, r)
+            if r > 0:
+                PrimitiveRenderer._draw_dashed_arc_segment(painter, 
+                    QPointF(rect.x(), rect.y() + r), 
+                    QPointF(rect.x() + r, rect.y()), 
+                    QPointF(rect.x() + r, rect.y() + r), r, pen, style)
+        else:
+            # Обычный прямоугольник без скругления
+            bbox = rectangle.get_bounding_box()
+            corners = [
+                QPointF(bbox.left(), bbox.top()),
+                QPointF(bbox.right(), bbox.top()),
+                QPointF(bbox.right(), bbox.bottom()),
+                QPointF(bbox.left(), bbox.bottom())
+            ]
+            
+            # Рисуем каждую сторону как штриховую линию
+            for i in range(4):
+                start = corners[i]
+                end = corners[(i + 1) % 4]
+                LineRenderer._draw_dashed_line(painter, start, end, pen, style)
     
     @staticmethod
     def _draw_dash_dot_rectangle(painter: QPainter, rectangle, pen: QPen, style):
         """Отрисовывает штрихпунктирный прямоугольник"""
         fillet_radius = getattr(rectangle, 'fillet_radius', 0.0)
-        if fillet_radius > 0:
-            # Для скругленных углов используем обычную отрисовку со скруглениями
-            PrimitiveRenderer.draw_rectangle(painter, rectangle, 1.0, False)
+        rect = rectangle.get_bounding_box()
+        w = rect.width()
+        h = rect.height()
+        r = min(fillet_radius, w / 2, h / 2) if fillet_radius > 0 else 0.0
+        
+        if r > 0:
+            # Для скругленных углов разбиваем контур на сегменты и применяем штрихпунктирный стиль
+            # Верхняя сторона
+            LineRenderer._draw_dash_dot_line(painter, 
+                                           QPointF(rect.x() + r, rect.y()), 
+                                           QPointF(rect.x() + w - r, rect.y()), 
+                                           pen, style)
+            # Верхний правый угол (дуга) - центр в (w - r, r)
+            if r > 0:
+                PrimitiveRenderer._draw_dash_dot_arc_segment(painter, 
+                    QPointF(rect.x() + w - r, rect.y()), 
+                    QPointF(rect.x() + w, rect.y() + r), 
+                    QPointF(rect.x() + w - r, rect.y() + r), r, pen, style)
+            # Правая сторона
+            LineRenderer._draw_dash_dot_line(painter, 
+                                           QPointF(rect.x() + w, rect.y() + r), 
+                                           QPointF(rect.x() + w, rect.y() + h - r), 
+                                           pen, style)
+            # Нижний правый угол (дуга) - центр в (w - r, h - r)
+            if r > 0:
+                PrimitiveRenderer._draw_dash_dot_arc_segment(painter, 
+                    QPointF(rect.x() + w, rect.y() + h - r), 
+                    QPointF(rect.x() + w - r, rect.y() + h), 
+                    QPointF(rect.x() + w - r, rect.y() + h - r), r, pen, style)
+            # Нижняя сторона
+            LineRenderer._draw_dash_dot_line(painter, 
+                                           QPointF(rect.x() + w - r, rect.y() + h), 
+                                           QPointF(rect.x() + r, rect.y() + h), 
+                                           pen, style)
+            # Нижний левый угол (дуга) - центр в (r, h - r)
+            if r > 0:
+                PrimitiveRenderer._draw_dash_dot_arc_segment(painter, 
+                    QPointF(rect.x() + r, rect.y() + h), 
+                    QPointF(rect.x(), rect.y() + h - r), 
+                    QPointF(rect.x() + r, rect.y() + h - r), r, pen, style)
+            # Левая сторона
+            LineRenderer._draw_dash_dot_line(painter, 
+                                           QPointF(rect.x(), rect.y() + h - r), 
+                                           QPointF(rect.x(), rect.y() + r), 
+                                           pen, style)
+            # Верхний левый угол (дуга) - центр в (r, r)
+            if r > 0:
+                PrimitiveRenderer._draw_dash_dot_arc_segment(painter, 
+                    QPointF(rect.x(), rect.y() + r), 
+                    QPointF(rect.x() + r, rect.y()), 
+                    QPointF(rect.x() + r, rect.y() + r), r, pen, style)
+        else:
+            # Обычный прямоугольник без скругления
+            bbox = rectangle.get_bounding_box()
+            corners = [
+                QPointF(bbox.left(), bbox.top()),
+                QPointF(bbox.right(), bbox.top()),
+                QPointF(bbox.right(), bbox.bottom()),
+                QPointF(bbox.left(), bbox.bottom())
+            ]
+            
+            # Рисуем каждую сторону как штрихпунктирную линию
+            for i in range(4):
+                start = corners[i]
+                end = corners[(i + 1) % 4]
+                LineRenderer._draw_dash_dot_line(painter, start, end, pen, style)
+    
+    @staticmethod
+    def _draw_wavy_arc_segment(painter: QPainter, start: QPointF, end: QPointF, center: QPointF, radius: float, pen: QPen):
+        """Отрисовывает волнистую линию вдоль дуги скругленного угла"""
+        import math
+        from PySide6.QtGui import QPainterPath
+        
+        # Вычисляем углы относительно центра
+        start_angle = math.atan2(start.y() - center.y(), start.x() - center.x())
+        end_angle = math.atan2(end.y() - center.y(), end.x() - center.x())
+        
+        # Нормализуем углы
+        if end_angle < start_angle:
+            end_angle += 2 * math.pi
+        
+        # Длина дуги
+        arc_length = radius * (end_angle - start_angle)
+        
+        if arc_length < 1:
             return
         
-        bbox = rectangle.get_bounding_box()
-        corners = [
-            QPointF(bbox.left(), bbox.top()),
-            QPointF(bbox.right(), bbox.top()),
-            QPointF(bbox.right(), bbox.bottom()),
-            QPointF(bbox.left(), bbox.bottom())
-        ]
+        # Амплитуда волны согласно ГОСТ (та же логика, что и для прямой линии)
+        main_thickness_mm = 0.8
+        line_thickness_mm = pen.widthF() * 25.4 / 96
+        amplitude_mm = (main_thickness_mm / 2.5) * (line_thickness_mm / 0.4)
+        amplitude_px = (amplitude_mm * 96) / 25.4
         
-        # Рисуем каждую сторону как штрихпунктирную линию
-        for i in range(4):
-            start = corners[i]
-            end = corners[(i + 1) % 4]
-            LineRenderer._draw_dash_dot_line(painter, start, end, pen, style)
+        wave_length_px = amplitude_px * 5
+        num_waves = max(1, int(arc_length / wave_length_px))
+        actual_wave_length = arc_length / num_waves if num_waves > 0 else arc_length
+        
+        # Создаем путь вдоль дуги с волнистым эффектом
+        num_points = max(50, int(arc_length / 2))
+        path = QPainterPath()
+        
+        for i in range(num_points + 1):
+            t = i / num_points
+            angle = start_angle + t * (end_angle - start_angle)
+            
+            # Вычисляем расстояние вдоль дуги от начала
+            along_arc = t * arc_length
+            wave_phase = (along_arc / actual_wave_length) * 2 * math.pi
+            wave_offset = amplitude_px * math.sin(wave_phase)
+            
+            # Позиция на дуге
+            base_x = center.x() + radius * math.cos(angle)
+            base_y = center.y() + radius * math.sin(angle)
+            
+            # Перпендикулярное смещение для волны (перпендикуляр к касательной дуги)
+            perp_x = -math.sin(angle) * wave_offset
+            perp_y = math.cos(angle) * wave_offset
+            
+            x = base_x + perp_x
+            y = base_y + perp_y
+            
+            if i == 0:
+                path.moveTo(x, y)
+            else:
+                path.lineTo(x, y)
+        
+        painter.setPen(pen)
+        painter.setBrush(Qt.NoBrush)
+        painter.drawPath(path)
+    
+    @staticmethod
+    def _draw_broken_arc_segment(painter: QPainter, start: QPointF, end: QPointF, center: QPointF, radius: float, pen: QPen):
+        """Отрисовывает ломаную линию вдоль дуги скругленного угла"""
+        import math
+        from PySide6.QtGui import QPainterPath
+        
+        # Вычисляем углы относительно центра
+        start_angle = math.atan2(start.y() - center.y(), start.x() - center.x())
+        end_angle = math.atan2(end.y() - center.y(), end.x() - center.x())
+        
+        if end_angle < start_angle:
+            end_angle += 2 * math.pi
+        
+        # Длина дуги
+        arc_length = radius * (end_angle - start_angle)
+        
+        if arc_length < 1:
+            return
+        
+        # Параметры зигзага (та же логика, что и для прямой линии)
+        zigzag_height_mm = 3.5
+        zigzag_width_mm = 4.0
+        dpi = 96
+        zigzag_height = (zigzag_height_mm * dpi) / 25.4
+        zigzag_length = (zigzag_width_mm * dpi) / 25.4
+        
+        if zigzag_length > arc_length * 0.8:
+            zigzag_length = arc_length * 0.8
+        
+        straight_length = (arc_length - zigzag_length) / 2
+        
+        path = QPainterPath()
+        path.moveTo(start)
+        
+        # Первая прямая часть
+        if straight_length > 0:
+            t1 = straight_length / arc_length
+            angle1 = start_angle + t1 * (end_angle - start_angle)
+            x1 = center.x() + radius * math.cos(angle1)
+            y1 = center.y() + radius * math.sin(angle1)
+            path.lineTo(x1, y1)
+        else:
+            angle1 = start_angle
+            x1 = start.x()
+            y1 = start.y()
+        
+        # Зигзаг по дуге (3 сегмента, как в _draw_broken_line)
+        segment_length_along = zigzag_length / 3
+        
+        # Точка 1 зигзага
+        t_seg1 = (straight_length + segment_length_along) / arc_length
+        angle_seg1 = start_angle + t_seg1 * (end_angle - start_angle)
+        base_x1 = center.x() + radius * math.cos(angle_seg1)
+        base_y1 = center.y() + radius * math.sin(angle_seg1)
+        # Перпендикуляр к касательной в этой точке
+        perp_x1 = -math.sin(angle_seg1) * (zigzag_height / 2)
+        perp_y1 = math.cos(angle_seg1) * (zigzag_height / 2)
+        point1 = QPointF(base_x1 + perp_x1, base_y1 + perp_y1)
+        path.lineTo(point1)
+        
+        # Точка 2 зигзага
+        t_seg2 = (straight_length + 2 * segment_length_along) / arc_length
+        angle_seg2 = start_angle + t_seg2 * (end_angle - start_angle)
+        base_x2 = center.x() + radius * math.cos(angle_seg2)
+        base_y2 = center.y() + radius * math.sin(angle_seg2)
+        # Перпендикуляр в противоположном направлении
+        perp_x2 = -math.sin(angle_seg2) * (-zigzag_height)
+        perp_y2 = math.cos(angle_seg2) * (-zigzag_height)
+        point2 = QPointF(base_x2 + perp_x2, base_y2 + perp_y2)
+        path.lineTo(point2)
+        
+        # Конец зигзага
+        t_zigzag_end = (straight_length + zigzag_length) / arc_length
+        angle_zigzag_end = start_angle + t_zigzag_end * (end_angle - start_angle)
+        x_zigzag_end = center.x() + radius * math.cos(angle_zigzag_end)
+        y_zigzag_end = center.y() + radius * math.sin(angle_zigzag_end)
+        path.lineTo(x_zigzag_end, y_zigzag_end)
+        
+        # Вторая прямая часть
+        if straight_length > 0:
+            path.lineTo(end)
+        
+        painter.setPen(pen)
+        painter.setBrush(Qt.NoBrush)
+        painter.drawPath(path)
+    
+    @staticmethod
+    def _draw_dashed_arc_segment(painter: QPainter, start: QPointF, end: QPointF, center: QPointF, radius: float, pen: QPen, style):
+        """Отрисовывает штриховую линию вдоль дуги скругленного угла"""
+        import math
+        from PySide6.QtGui import QPainterPath
+        
+        # Вычисляем углы относительно центра
+        start_angle = math.atan2(start.y() - center.y(), start.x() - center.x())
+        end_angle = math.atan2(end.y() - center.y(), end.x() - center.x())
+        
+        if end_angle < start_angle:
+            end_angle += 2 * math.pi
+        
+        # Длина дуги
+        arc_length = radius * (end_angle - start_angle)
+        
+        dash_length = style.dash_length
+        dash_gap = style.dash_gap
+        
+        # Рисуем штрихи вдоль дуги
+        current_angle = start_angle
+        painter.setPen(pen)
+        
+        while current_angle < end_angle:
+            # Вычисляем длину текущего сегмента дуги
+            dash_angle = dash_length / radius if radius > 0 else 0
+            gap_angle = dash_gap / radius if radius > 0 else 0
+            
+            dash_end_angle = min(current_angle + dash_angle, end_angle)
+            
+            # Рисуем штрих
+            num_points = max(10, int((dash_end_angle - current_angle) * radius / 2))
+            path = QPainterPath()
+            
+            for i in range(num_points):
+                t = i / (num_points - 1) if num_points > 1 else 0
+                angle = current_angle + t * (dash_end_angle - current_angle)
+                x = center.x() + radius * math.cos(angle)
+                y = center.y() + radius * math.sin(angle)
+                
+                if i == 0:
+                    path.moveTo(x, y)
+                else:
+                    path.lineTo(x, y)
+            
+            if num_points > 0:
+                painter.drawPath(path)
+            
+            # Переходим к следующему штриху
+            current_angle = dash_end_angle + gap_angle
+    
+    @staticmethod
+    def _draw_dash_dot_arc_segment(painter: QPainter, start: QPointF, end: QPointF, center: QPointF, radius: float, pen: QPen, style):
+        """Отрисовывает штрихпунктирную линию вдоль дуги скругленного угла"""
+        import math
+        from PySide6.QtGui import QPainterPath
+        
+        # Вычисляем углы относительно центра
+        start_angle = math.atan2(start.y() - center.y(), start.x() - center.x())
+        end_angle = math.atan2(end.y() - center.y(), end.x() - center.x())
+        
+        if end_angle < start_angle:
+            end_angle += 2 * math.pi
+        
+        dash_length = style.dash_length
+        dash_gap = style.dash_gap
+        dot_length = style.thickness_mm * 0.5
+        
+        if style.line_type == LineType.DASH_DOT_TWO_DOTS:
+            pattern = [dash_length, dash_gap, dot_length, dash_gap, dot_length, dash_gap]
+        else:
+            pattern = [dash_length, dash_gap, dot_length, dash_gap]
+        
+        # Рисуем паттерн вдоль дуги
+        current_angle = start_angle
+        pattern_index = 0
+        painter.setPen(pen)
+        
+        while current_angle < end_angle:
+            segment_length = pattern[pattern_index % len(pattern)]
+            segment_angle = segment_length / radius if radius > 0 else 0
+            segment_end_angle = min(current_angle + segment_angle, end_angle)
+            
+            is_gap = (segment_length == dash_gap)
+            
+            if not is_gap:
+                # Рисуем сегмент (штрих или точку)
+                num_points = max(5, int((segment_end_angle - current_angle) * radius / 2))
+                path = QPainterPath()
+                
+                for i in range(num_points):
+                    t = i / (num_points - 1) if num_points > 1 else 0
+                    angle = current_angle + t * (segment_end_angle - current_angle)
+                    x = center.x() + radius * math.cos(angle)
+                    y = center.y() + radius * math.sin(angle)
+                    
+                    if i == 0:
+                        path.moveTo(x, y)
+                    else:
+                        path.lineTo(x, y)
+                
+                if num_points > 0:
+                    painter.drawPath(path)
+            
+            current_angle = segment_end_angle
+            pattern_index += 1
     
     # Методы специальной отрисовки для эллипсов
     @staticmethod

@@ -1831,24 +1831,32 @@ class MainWindow(QMainWindow):
         self.canvas.set_input_points(input_points)
         
         # Обновляем размеры прямоугольника в сцене, если идет рисование
+        # Важно: применяем параметры только к новому прямоугольнику в процессе создания,
+        # не к уже зафиксированным объектам
         if self.canvas.scene.is_drawing() and self.canvas.scene._drawing_type == 'rectangle':
-            if method_name == "Одна точка, ширина и высота":
-                width = self.rectangle_width_spin.value()
-                height = self.rectangle_height_spin.value()
-                if width > 0 and height > 0:
-                    self.canvas.scene.set_rectangle_size(width, height)
-                    self.canvas.update()
-            elif method_name == "Центр, ширина и высота":
-                width = self.rectangle_center_width_spin.value()
-                height = self.rectangle_center_height_spin.value()
-                if width > 0 and height > 0:
-                    self.canvas.scene.set_rectangle_size(width, height)
-                    self.canvas.update()
-            elif method_name == "С фасками/скруглениями при создании":
-                radius = self.rectangle_fillet_radius_spin.value()
-                if radius > 0:
-                    self.canvas.scene.set_rectangle_fillet_radius(radius)
-                    self.canvas.update()
+            # Дополнительная проверка: убеждаемся, что текущий объект еще не в сцене
+            if self.canvas.scene._current_object is not None:
+                from widgets.primitives import Rectangle
+                if isinstance(self.canvas.scene._current_object, Rectangle):
+                    if self.canvas.scene._current_object not in self.canvas.scene._objects:
+                        if method_name == "Одна точка, ширина и высота":
+                            width = self.rectangle_width_spin.value()
+                            height = self.rectangle_height_spin.value()
+                            if width > 0 and height > 0:
+                                self.canvas.scene.set_rectangle_size(width, height)
+                                self.canvas.update()
+                        elif method_name == "Центр, ширина и высота":
+                            width = self.rectangle_center_width_spin.value()
+                            height = self.rectangle_center_height_spin.value()
+                            if width > 0 and height > 0:
+                                self.canvas.scene.set_rectangle_size(width, height)
+                                self.canvas.update()
+                        elif method_name == "С фасками/скруглениями при создании":
+                            # Применяем fillet_radius только к новому прямоугольнику в процессе создания
+                            radius = self.rectangle_fillet_radius_spin.value()
+                            if radius >= 0:  # Разрешаем 0 для отключения скругления
+                                self.canvas.scene.set_rectangle_fillet_radius(radius)
+                                self.canvas.update()
     
     def update_rectangle_on_drawing_start(self, method: str):
         """Обновляет параметры прямоугольника при начале рисования"""
