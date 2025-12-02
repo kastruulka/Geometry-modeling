@@ -2919,7 +2919,7 @@ class PrimitiveRenderer:
             
             # Для специальных типов линий используем специальную отрисовку
             if line_type == LineType.SOLID_WAVY:
-                PrimitiveRenderer._draw_wavy_spline(painter, spline, pen)
+                PrimitiveRenderer._draw_wavy_spline(painter, spline, pen, scale_factor)
             elif line_type == LineType.SOLID_THIN_BROKEN:
                 PrimitiveRenderer._draw_broken_spline(painter, spline, pen)
             elif line_type == LineType.DASHED:
@@ -2959,7 +2959,7 @@ class PrimitiveRenderer:
     
     # Методы специальной отрисовки для сплайнов
     @staticmethod
-    def _draw_wavy_spline(painter: QPainter, spline, pen: QPen):
+    def _draw_wavy_spline(painter: QPainter, spline, pen: QPen, scale_factor: float = 1.0):
         """Отрисовывает волнистый сплайн вдоль кривой"""
         import math
         from PySide6.QtGui import QPainterPath
@@ -2967,8 +2967,27 @@ class PrimitiveRenderer:
         if len(spline.control_points) < 2:
             return
         
+        # Параметры волны (вычисляем до расчета точек для правильного масштабирования)
+        main_thickness_mm = 0.8
+        line_thickness_mm = pen.widthF() * 25.4 / 96
+        amplitude_mm = (main_thickness_mm / 2.5) * (line_thickness_mm / 0.4)
+        amplitude_px = (amplitude_mm * 96) / 25.4
+        
+        # Используем фиксированную длину волны в пикселях для равномерного распределения
+        wave_length_px = amplitude_px * 5
+        
+        # Конвертируем длину волны в мировые координаты для равномерного распределения
+        # При масштабировании длина волны должна оставаться постоянной в пикселях
+        wave_length_world = wave_length_px / scale_factor if scale_factor > 0 else wave_length_px
+        
         # Сначала вычисляем точки на сплайне и накапливаем длину дуги
-        num_samples = max(200, len(spline.control_points) * 40)
+        # Используем адаптивное количество точек для более равномерного распределения волн
+        # Количество точек должно быть достаточным для плавного отображения волн
+        # Минимум 20 точек на волну для плавности
+        estimated_waves = 10  # Примерная оценка, будет уточнена после расчета длины
+        min_points_per_wave = 20
+        num_samples = max(500, len(spline.control_points) * 100, estimated_waves * min_points_per_wave)
+        
         points = []
         arc_lengths = [0.0]
         total_length = 0.0
@@ -2991,14 +3010,34 @@ class PrimitiveRenderer:
         if total_length < 1:
             return
         
-        # Параметры волны
-        main_thickness_mm = 0.8
-        line_thickness_mm = pen.widthF() * 25.4 / 96
-        amplitude_mm = (main_thickness_mm / 2.5) * (line_thickness_mm / 0.4)
-        amplitude_px = (amplitude_mm * 96) / 25.4
-        wave_length_px = amplitude_px * 5
-        num_waves = max(1, int(total_length / wave_length_px))
-        actual_wave_length = total_length / num_waves if num_waves > 0 else total_length
+        # Уточняем количество точек, если нужно, для более равномерного распределения
+        num_waves = max(1, int(total_length / wave_length_world))
+        # Используем фиксированную длину волны для равномерного распределения
+        actual_wave_length = wave_length_world
+        
+        # Увеличиваем количество точек, если нужно для плавности
+        min_total_points = num_waves * min_points_per_wave
+        if len(points) < min_total_points:
+            # Пересчитываем с большим количеством точек
+            num_samples = min_total_points
+            points = []
+            arc_lengths = [0.0]
+            total_length = 0.0
+            
+            prev_point = spline._get_point_on_spline(0)
+            points.append(prev_point)
+            
+            for i in range(1, num_samples + 1):
+                t = i / num_samples if num_samples > 0 else 0
+                curr_point = spline._get_point_on_spline(t)
+                points.append(curr_point)
+                
+                dx = curr_point.x() - prev_point.x()
+                dy = curr_point.y() - prev_point.y()
+                segment_length = math.sqrt(dx*dx + dy*dy)
+                total_length += segment_length
+                arc_lengths.append(total_length)
+                prev_point = curr_point
         
         # Строим волнистый путь вдоль сплайна
         path = QPainterPath()
