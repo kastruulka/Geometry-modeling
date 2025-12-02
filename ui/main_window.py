@@ -11,6 +11,7 @@ from PySide6.QtGui import QColor, QAction, QIcon, QKeySequence
 from widgets.coordinate_system import CoordinateSystemWidget
 from widgets.line_style import LineStyleManager
 from ui.style_panels import ObjectPropertiesPanel, StyleManagementPanel, StyleComboBox
+from ui.edit_dialog import EditDialog
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -35,6 +36,11 @@ class MainWindow(QMainWindow):
         self.selected_objects = []
         
         self.init_ui()
+        
+        # Окно редактирования (создаем после init_ui, чтобы canvas был готов)
+        self.edit_dialog = EditDialog(self)
+        self.edit_dialog.set_canvas(self.canvas)
+        
         # Явно вызываем change_primitive_type для показа виджета способа задания отрезка
         # (поскольку "Отрезок" выбран по умолчанию, сигнал currentTextChanged не сработает)
         if hasattr(self, 'primitive_combo'):
@@ -937,17 +943,26 @@ class MainWindow(QMainWindow):
         # Обновляем отрисовку
         self.canvas.update()
     
-    def on_selection_changed(self, selected_lines):
+    def on_selection_changed(self, selected_objects):
         """Обработчик изменения выделения"""
         # Обновляем выделенные объекты
-        self.selected_objects = selected_lines
+        self.selected_objects = selected_objects
         # Показываем или скрываем панель свойств в зависимости от выделения
-        if selected_lines:
+        if selected_objects:
             self.object_properties_panel.show()
             # Обновляем панель свойств
-            self.object_properties_panel.set_selected_objects(selected_lines)
+            self.object_properties_panel.set_selected_objects(selected_objects)
+            
+            # Открываем окно редактирования, если выделен один объект
+            if len(selected_objects) == 1:
+                self.edit_dialog.set_object(selected_objects[0])
+                self.edit_dialog.show()
+            else:
+                # Если выделено несколько объектов, закрываем окно редактирования
+                self.edit_dialog.hide()
         else:
             self.object_properties_panel.hide()
+            self.edit_dialog.hide()
     
     def create_statusbar(self):
         # строка состояния
