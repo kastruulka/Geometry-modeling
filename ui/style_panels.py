@@ -832,7 +832,8 @@ class StyleEditDialog(QDialog):
             self.dash_length_spin.setValue(self.style.dash_length)
         else:
             self.dash_length_spin.setValue(5.0)
-        layout.addRow("Длина штриха:", self.dash_length_spin)
+        self.dash_length_label = QLabel("Длина штриха:")
+        layout.addRow(self.dash_length_label, self.dash_length_spin)
         
         # Расстояние между штрихами
         self.dash_gap_spin = QDoubleSpinBox()
@@ -844,7 +845,8 @@ class StyleEditDialog(QDialog):
             self.dash_gap_spin.setValue(self.style.dash_gap)
         else:
             self.dash_gap_spin.setValue(2.5)
-        layout.addRow("Расстояние между штрихами:", self.dash_gap_spin)
+        self.dash_gap_label = QLabel("Расстояние между штрихами:")
+        layout.addRow(self.dash_gap_label, self.dash_gap_spin)
         
         # Количество зигзагов (только для ломаной линии)
         self.zigzag_count_spin = QSpinBox()
@@ -913,17 +915,28 @@ class StyleEditDialog(QDialog):
         """Обновляет видимость полей в зависимости от типа линии"""
         line_type = self.type_combo.currentData()
         
-        # Показываем/скрываем поля в зависимости от типа линии
+        # Определяем, какие поля нужны для каждого типа линии
         is_broken = line_type == LineType.SOLID_THIN_BROKEN
         is_wavy = line_type == LineType.SOLID_WAVY
+        # Поля для штрихов используются только для штриховых и штрихпунктирных линий
+        is_dashed = line_type in [LineType.DASHED, LineType.DASH_DOT_THICK, 
+                                  LineType.DASH_DOT_THIN, LineType.DASH_DOT_TWO_DOTS]
         
+        # Поля для зигзагов (только для ломаной линии)
         self.zigzag_count_label.setVisible(is_broken)
         self.zigzag_count_spin.setVisible(is_broken)
         self.zigzag_step_label.setVisible(is_broken)
         self.zigzag_step_spin.setVisible(is_broken)
         
+        # Поля для амплитуды (только для волнистой линии)
         self.wavy_amplitude_label.setVisible(is_wavy)
         self.wavy_amplitude_spin.setVisible(is_wavy)
+        
+        # Поля для штрихов (только для штриховых и штрихпунктирных линий)
+        self.dash_length_label.setVisible(is_dashed)
+        self.dash_length_spin.setVisible(is_dashed)
+        self.dash_gap_label.setVisible(is_dashed)
+        self.dash_gap_spin.setVisible(is_dashed)
     
     def update_preview(self):
         """Обновляет превью стиля"""

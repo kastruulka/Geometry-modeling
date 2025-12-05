@@ -91,6 +91,11 @@ class SnapManager:
             elif isinstance(obj, Spline):
                 snap_points.extend(self._get_spline_snap_points(obj))
         
+        # Добавляем точки пересечения между всеми парами объектов
+        if self.snap_to_intersection:
+            intersection_points = self._get_all_intersections(objects, exclude_object)
+            snap_points.extend(intersection_points)
+        
         return snap_points
     
     def _get_line_snap_points(self, line: LineSegment) -> List[SnapPoint]:
@@ -433,6 +438,668 @@ class SnapManager:
         
         return intersections
     
+    def _get_all_intersections(self, objects: List[GeometricObject],
+                               exclude_object: Optional[GeometricObject] = None) -> List[SnapPoint]:
+        """
+        Вычисляет все точки пересечения между всеми парами объектов
+        Args:
+            objects: Список объектов
+            exclude_object: Объект, который нужно исключить
+        Returns:
+            Список точек привязки для пересечений
+        """
+        intersection_snap_points = []
+        seen_intersections = set()  # Для избежания дубликатов
+        
+        for i, obj1 in enumerate(objects):
+            if exclude_object and obj1 is exclude_object:
+                continue
+            
+            for j, obj2 in enumerate(objects[i+1:], start=i+1):
+                if exclude_object and obj2 is exclude_object:
+                    continue
+                
+                # Вычисляем пересечения между obj1 и obj2
+                intersections = self._find_object_intersections(obj1, obj2)
+                
+                for intersection in intersections:
+                    # Проверяем, не дубликат ли это (с учетом небольшой погрешности)
+                    intersection_key = (round(intersection.x(), 6), round(intersection.y(), 6))
+                    if intersection_key not in seen_intersections:
+                        seen_intersections.add(intersection_key)
+                        # Создаем точку привязки для пересечения
+                        # Используем obj1 как основной объект (можно было бы использовать оба)
+                        intersection_snap_points.append(
+                            SnapPoint(intersection, SnapType.INTERSECTION, obj1)
+                        )
+        
+        return intersection_snap_points
+    
+    def _find_object_intersections(self, obj1: GeometricObject, 
+                                   obj2: GeometricObject) -> List[QPointF]:
+        """
+        Находит точки пересечения между двумя объектами
+        Args:
+            obj1: Первый объект
+            obj2: Второй объект
+        Returns:
+            Список точек пересечения
+        """
+        intersections = []
+        
+        # Отрезок с отрезком
+        if isinstance(obj1, LineSegment) and isinstance(obj2, LineSegment):
+            intersection = self._line_line_intersection(
+                obj1.start_point, obj1.end_point,
+                obj2.start_point, obj2.end_point
+            )
+            if intersection:
+                intersections.append(intersection)
+        
+        # Отрезок с окружностью
+        elif isinstance(obj1, LineSegment) and isinstance(obj2, Circle):
+            intersections.extend(self._line_circle_intersection(
+                obj1.start_point, obj1.end_point,
+                obj2.center, obj2.radius
+            ))
+        elif isinstance(obj1, Circle) and isinstance(obj2, LineSegment):
+            intersections.extend(self._line_circle_intersection(
+                obj2.start_point, obj2.end_point,
+                obj1.center, obj1.radius
+            ))
+        
+        # Отрезок с дугой
+        elif isinstance(obj1, LineSegment) and isinstance(obj2, Arc):
+            intersections.extend(self._line_arc_intersection(
+                obj1.start_point, obj1.end_point, obj2
+            ))
+        elif isinstance(obj1, Arc) and isinstance(obj2, LineSegment):
+            intersections.extend(self._line_arc_intersection(
+                obj2.start_point, obj2.end_point, obj1
+            ))
+        
+        # Отрезок с эллипсом
+        elif isinstance(obj1, LineSegment) and isinstance(obj2, Ellipse):
+            intersections.extend(self._line_ellipse_intersection(
+                obj1.start_point, obj1.end_point, obj2
+            ))
+        elif isinstance(obj1, Ellipse) and isinstance(obj2, LineSegment):
+            intersections.extend(self._line_ellipse_intersection(
+                obj2.start_point, obj2.end_point, obj1
+            ))
+        
+        # Отрезок с прямоугольником
+        elif isinstance(obj1, LineSegment) and isinstance(obj2, Rectangle):
+            bbox = obj2.get_bounding_box()
+            sides = [
+                (QPointF(bbox.left(), bbox.top()), QPointF(bbox.right(), bbox.top())),  # top
+                (QPointF(bbox.right(), bbox.top()), QPointF(bbox.right(), bbox.bottom())),  # right
+                (QPointF(bbox.right(), bbox.bottom()), QPointF(bbox.left(), bbox.bottom())),  # bottom
+                (QPointF(bbox.left(), bbox.bottom()), QPointF(bbox.left(), bbox.top()))  # left
+            ]
+            for side_start, side_end in sides:
+                intersection = self._line_line_intersection(
+                    obj1.start_point, obj1.end_point, side_start, side_end
+                )
+                if intersection:
+                    intersections.append(intersection)
+        elif isinstance(obj1, Rectangle) and isinstance(obj2, LineSegment):
+            bbox = obj1.get_bounding_box()
+            sides = [
+                (QPointF(bbox.left(), bbox.top()), QPointF(bbox.right(), bbox.top())),  # top
+                (QPointF(bbox.right(), bbox.top()), QPointF(bbox.right(), bbox.bottom())),  # right
+                (QPointF(bbox.right(), bbox.bottom()), QPointF(bbox.left(), bbox.bottom())),  # bottom
+                (QPointF(bbox.left(), bbox.bottom()), QPointF(bbox.left(), bbox.top()))  # left
+            ]
+            for side_start, side_end in sides:
+                intersection = self._line_line_intersection(
+                    obj2.start_point, obj2.end_point, side_start, side_end
+                )
+                if intersection:
+                    intersections.append(intersection)
+        
+        # Отрезок с многоугольником
+        elif isinstance(obj1, LineSegment) and isinstance(obj2, Polygon):
+            vertices = obj2.get_vertices()
+            for i in range(len(vertices)):
+                p1 = vertices[i]
+                p2 = vertices[(i + 1) % len(vertices)]
+                intersection = self._line_line_intersection(
+                    obj1.start_point, obj1.end_point, p1, p2
+                )
+                if intersection:
+                    intersections.append(intersection)
+        elif isinstance(obj1, Polygon) and isinstance(obj2, LineSegment):
+            vertices = obj1.get_vertices()
+            for i in range(len(vertices)):
+                p1 = vertices[i]
+                p2 = vertices[(i + 1) % len(vertices)]
+                intersection = self._line_line_intersection(
+                    obj2.start_point, obj2.end_point, p1, p2
+                )
+                if intersection:
+                    intersections.append(intersection)
+        
+        # Отрезок со сплайном (приближенно)
+        elif isinstance(obj1, LineSegment) and isinstance(obj2, Spline):
+            # Аппроксимируем сплайн сегментами и находим пересечения
+            intersections.extend(self._line_spline_intersection(
+                obj1.start_point, obj1.end_point, obj2
+            ))
+        elif isinstance(obj1, Spline) and isinstance(obj2, LineSegment):
+            intersections.extend(self._line_spline_intersection(
+                obj2.start_point, obj2.end_point, obj1
+            ))
+        
+        # Окружность с окружностью
+        elif isinstance(obj1, Circle) and isinstance(obj2, Circle):
+            intersections.extend(self._circle_circle_intersection(
+                obj1.center, obj1.radius, obj2.center, obj2.radius
+            ))
+        
+        # Окружность с дугой/эллипсом
+        elif isinstance(obj1, Circle) and isinstance(obj2, (Arc, Ellipse)):
+            # Находим пересечения окружности с эллипсом
+            ellipse_intersections = self._circle_ellipse_intersection(
+                obj1.center, obj1.radius, obj2
+            )
+            # Если это дуга, фильтруем по диапазону
+            if isinstance(obj2, Arc):
+                for point in ellipse_intersections:
+                    if self._point_on_arc(point, obj2):
+                        intersections.append(point)
+            else:
+                intersections.extend(ellipse_intersections)
+        elif isinstance(obj1, (Arc, Ellipse)) and isinstance(obj2, Circle):
+            ellipse_intersections = self._circle_ellipse_intersection(
+                obj2.center, obj2.radius, obj1
+            )
+            if isinstance(obj1, Arc):
+                for point in ellipse_intersections:
+                    if self._point_on_arc(point, obj1):
+                        intersections.append(point)
+            else:
+                intersections.extend(ellipse_intersections)
+        
+        # Эллипс с эллипсом (приближенно)
+        elif isinstance(obj1, (Arc, Ellipse)) and isinstance(obj2, (Arc, Ellipse)):
+            # Упрощенный метод: аппроксимируем эллипсы многоугольниками
+            intersections.extend(self._ellipse_ellipse_intersection(obj1, obj2))
+        
+        # Прямоугольник с окружностью
+        elif isinstance(obj1, Rectangle) and isinstance(obj2, Circle):
+            intersections.extend(self._rectangle_circle_intersection(obj1, obj2))
+        elif isinstance(obj1, Circle) and isinstance(obj2, Rectangle):
+            intersections.extend(self._rectangle_circle_intersection(obj2, obj1))
+        
+        # Прямоугольник с дугой/эллипсом
+        elif isinstance(obj1, Rectangle) and isinstance(obj2, (Arc, Ellipse)):
+            intersections.extend(self._rectangle_ellipse_intersection(obj1, obj2))
+        elif isinstance(obj1, (Arc, Ellipse)) and isinstance(obj2, Rectangle):
+            intersections.extend(self._rectangle_ellipse_intersection(obj2, obj1))
+        
+        # Многоугольник с окружностью
+        elif isinstance(obj1, Polygon) and isinstance(obj2, Circle):
+            intersections.extend(self._polygon_circle_intersection(obj1, obj2))
+        elif isinstance(obj1, Circle) and isinstance(obj2, Polygon):
+            intersections.extend(self._polygon_circle_intersection(obj2, obj1))
+        
+        # Многоугольник с дугой/эллипсом
+        elif isinstance(obj1, Polygon) and isinstance(obj2, (Arc, Ellipse)):
+            intersections.extend(self._polygon_ellipse_intersection(obj1, obj2))
+        elif isinstance(obj1, (Arc, Ellipse)) and isinstance(obj2, Polygon):
+            intersections.extend(self._polygon_ellipse_intersection(obj2, obj1))
+        
+        # Многоугольник с прямоугольником
+        elif isinstance(obj1, Polygon) and isinstance(obj2, Rectangle):
+            intersections.extend(self._polygon_rectangle_intersection(obj1, obj2))
+        elif isinstance(obj1, Rectangle) and isinstance(obj2, Polygon):
+            intersections.extend(self._polygon_rectangle_intersection(obj2, obj1))
+        
+        # Прямоугольник с прямоугольником
+        elif isinstance(obj1, Rectangle) and isinstance(obj2, Rectangle):
+            intersections.extend(self._rectangle_rectangle_intersection(obj1, obj2))
+        
+        # Сплайн с окружностью
+        elif isinstance(obj1, Spline) and isinstance(obj2, Circle):
+            intersections.extend(self._spline_circle_intersection(obj1, obj2))
+        elif isinstance(obj1, Circle) and isinstance(obj2, Spline):
+            intersections.extend(self._spline_circle_intersection(obj2, obj1))
+        
+        # Сплайн с дугой/эллипсом
+        elif isinstance(obj1, Spline) and isinstance(obj2, (Arc, Ellipse)):
+            intersections.extend(self._spline_ellipse_intersection(obj1, obj2))
+        elif isinstance(obj1, (Arc, Ellipse)) and isinstance(obj2, Spline):
+            intersections.extend(self._spline_ellipse_intersection(obj2, obj1))
+        
+        # Сплайн с прямоугольником
+        elif isinstance(obj1, Spline) and isinstance(obj2, Rectangle):
+            intersections.extend(self._spline_rectangle_intersection(obj1, obj2))
+        elif isinstance(obj1, Rectangle) and isinstance(obj2, Spline):
+            intersections.extend(self._spline_rectangle_intersection(obj2, obj1))
+        
+        # Сплайн с многоугольником
+        elif isinstance(obj1, Spline) and isinstance(obj2, Polygon):
+            intersections.extend(self._spline_polygon_intersection(obj1, obj2))
+        elif isinstance(obj1, Polygon) and isinstance(obj2, Spline):
+            intersections.extend(self._spline_polygon_intersection(obj2, obj1))
+        
+        return intersections
+    
+    def _line_spline_intersection(self, line_start: QPointF, line_end: QPointF,
+                                  spline: Spline) -> List[QPointF]:
+        """Находит точки пересечения линии со сплайном (приближенно)"""
+        intersections = []
+        
+        # Аппроксимируем сплайн сегментами
+        num_samples = max(50, len(spline.control_points) * 10)
+        prev_point = spline._get_point_on_spline(0)
+        
+        for i in range(1, num_samples + 1):
+            t = i / num_samples if num_samples > 0 else 0
+            curr_point = spline._get_point_on_spline(t)
+            
+            # Проверяем пересечение линии с сегментом сплайна
+            intersection = self._line_line_intersection(
+                line_start, line_end, prev_point, curr_point
+            )
+            if intersection:
+                intersections.append(intersection)
+            
+            prev_point = curr_point
+        
+        return intersections
+    
+    def _circle_circle_intersection(self, center1: QPointF, radius1: float,
+                                    center2: QPointF, radius2: float) -> List[QPointF]:
+        """Находит точки пересечения двух окружностей"""
+        intersections = []
+        
+        dx = center2.x() - center1.x()
+        dy = center2.y() - center1.y()
+        dist_sq = dx*dx + dy*dy
+        dist = math.sqrt(dist_sq)
+        
+        # Проверяем, пересекаются ли окружности
+        if dist > radius1 + radius2 or dist < abs(radius1 - radius2):
+            return intersections  # Не пересекаются
+        
+        if dist < 1e-10:
+            return intersections  # Концентрические окружности
+        
+        # Вычисляем точки пересечения
+        a = (radius1*radius1 - radius2*radius2 + dist_sq) / (2 * dist)
+        h_sq = radius1*radius1 - a*a
+        
+        if h_sq < 0:
+            return intersections
+        
+        h = math.sqrt(h_sq)
+        
+        # Точка на линии между центрами
+        p2_x = center1.x() + a * dx / dist
+        p2_y = center1.y() + a * dy / dist
+        
+        # Перпендикулярное направление
+        perp_x = -dy / dist
+        perp_y = dx / dist
+        
+        # Две точки пересечения
+        for sign in [-1, 1]:
+            x = p2_x + sign * h * perp_x
+            y = p2_y + sign * h * perp_y
+            intersections.append(QPointF(x, y))
+        
+        return intersections
+    
+    def _circle_ellipse_intersection(self, circle_center: QPointF, circle_radius: float,
+                                     ellipse) -> List[QPointF]:
+        """Находит точки пересечения окружности с эллипсом (приближенно)"""
+        intersections = []
+        seen_points = set()  # Для избежания дубликатов
+        
+        # Аппроксимируем окружность многоугольником и находим пересечения с эллипсом
+        num_samples = 128  # Увеличиваем количество точек для лучшей точности
+        prev_point = QPointF(
+            circle_center.x() + circle_radius,
+            circle_center.y()
+        )
+        
+        for i in range(1, num_samples + 1):
+            angle = 2 * math.pi * i / num_samples
+            curr_point = QPointF(
+                circle_center.x() + circle_radius * math.cos(angle),
+                circle_center.y() + circle_radius * math.sin(angle)
+            )
+            
+            # Проверяем пересечение сегмента окружности с эллипсом
+            segment_intersections = self._line_ellipse_intersection(
+                prev_point, curr_point, ellipse
+            )
+            
+            # Добавляем только уникальные точки
+            for point in segment_intersections:
+                point_key = (round(point.x(), 6), round(point.y(), 6))
+                if point_key not in seen_points:
+                    seen_points.add(point_key)
+                    intersections.append(point)
+            
+            prev_point = curr_point
+        
+        return intersections
+    
+    def _ellipse_ellipse_intersection(self, ellipse1, ellipse2) -> List[QPointF]:
+        """Находит точки пересечения двух эллипсов (приближенно)"""
+        intersections = []
+        seen_points = set()  # Для избежания дубликатов
+        
+        # Аппроксимируем первый эллипс многоугольником
+        num_samples = 128  # Увеличиваем количество точек для лучшей точности
+        
+        # Генерируем точки на первом эллипсе
+        ellipse1_points = []
+        for i in range(num_samples):
+            angle = 2 * math.pi * i / num_samples
+            local_x = ellipse1.radius_x * math.cos(angle)
+            local_y = ellipse1.radius_y * math.sin(angle)
+            
+            # Применяем поворот
+            if abs(ellipse1.rotation_angle) > 1e-6:
+                cos_r = math.cos(ellipse1.rotation_angle)
+                sin_r = math.sin(ellipse1.rotation_angle)
+                x = ellipse1.center.x() + local_x * cos_r - local_y * sin_r
+                y = ellipse1.center.y() + local_x * sin_r + local_y * cos_r
+            else:
+                x = ellipse1.center.x() + local_x
+                y = ellipse1.center.y() + local_y
+            
+            ellipse1_points.append(QPointF(x, y))
+        
+        # Проверяем пересечения сегментов первого эллипса со вторым
+        for i in range(len(ellipse1_points)):
+            p1 = ellipse1_points[i]
+            p2 = ellipse1_points[(i + 1) % len(ellipse1_points)]
+            
+            segment_intersections = self._line_ellipse_intersection(
+                p1, p2, ellipse2
+            )
+            
+            # Добавляем только уникальные точки
+            for point in segment_intersections:
+                point_key = (round(point.x(), 6), round(point.y(), 6))
+                if point_key not in seen_points:
+                    seen_points.add(point_key)
+                    intersections.append(point)
+        
+        return intersections
+    
+    def _rectangle_circle_intersection(self, rectangle: Rectangle, 
+                                       circle: Circle) -> List[QPointF]:
+        """Находит точки пересечения прямоугольника с окружностью"""
+        intersections = []
+        bbox = rectangle.get_bounding_box()
+        
+        # Проверяем пересечение окружности с каждой стороной прямоугольника
+        sides = [
+            (QPointF(bbox.left(), bbox.top()), QPointF(bbox.right(), bbox.top())),  # top
+            (QPointF(bbox.right(), bbox.top()), QPointF(bbox.right(), bbox.bottom())),  # right
+            (QPointF(bbox.right(), bbox.bottom()), QPointF(bbox.left(), bbox.bottom())),  # bottom
+            (QPointF(bbox.left(), bbox.bottom()), QPointF(bbox.left(), bbox.top()))  # left
+        ]
+        
+        for side_start, side_end in sides:
+            side_intersections = self._line_circle_intersection(
+                side_start, side_end, circle.center, circle.radius
+            )
+            intersections.extend(side_intersections)
+        
+        return intersections
+    
+    def _rectangle_ellipse_intersection(self, rectangle: Rectangle,
+                                       ellipse) -> List[QPointF]:
+        """Находит точки пересечения прямоугольника с эллипсом/дугой"""
+        intersections = []
+        bbox = rectangle.get_bounding_box()
+        
+        # Проверяем пересечение эллипса с каждой стороной прямоугольника
+        sides = [
+            (QPointF(bbox.left(), bbox.top()), QPointF(bbox.right(), bbox.top())),  # top
+            (QPointF(bbox.right(), bbox.top()), QPointF(bbox.right(), bbox.bottom())),  # right
+            (QPointF(bbox.right(), bbox.bottom()), QPointF(bbox.left(), bbox.bottom())),  # bottom
+            (QPointF(bbox.left(), bbox.bottom()), QPointF(bbox.left(), bbox.top()))  # left
+        ]
+        
+        for side_start, side_end in sides:
+            side_intersections = self._line_ellipse_intersection(
+                side_start, side_end, ellipse
+            )
+            # Если это дуга, фильтруем по диапазону
+            if isinstance(ellipse, Arc):
+                for point in side_intersections:
+                    if self._point_on_arc(point, ellipse):
+                        intersections.append(point)
+            else:
+                intersections.extend(side_intersections)
+        
+        return intersections
+    
+    def _polygon_circle_intersection(self, polygon: Polygon,
+                                     circle: Circle) -> List[QPointF]:
+        """Находит точки пересечения многоугольника с окружностью"""
+        intersections = []
+        vertices = polygon.get_vertices()
+        
+        # Проверяем пересечение окружности с каждой стороной многоугольника
+        for i in range(len(vertices)):
+            p1 = vertices[i]
+            p2 = vertices[(i + 1) % len(vertices)]
+            side_intersections = self._line_circle_intersection(
+                p1, p2, circle.center, circle.radius
+            )
+            intersections.extend(side_intersections)
+        
+        return intersections
+    
+    def _polygon_ellipse_intersection(self, polygon: Polygon,
+                                      ellipse) -> List[QPointF]:
+        """Находит точки пересечения многоугольника с эллипсом/дугой"""
+        intersections = []
+        vertices = polygon.get_vertices()
+        
+        # Проверяем пересечение эллипса с каждой стороной многоугольника
+        for i in range(len(vertices)):
+            p1 = vertices[i]
+            p2 = vertices[(i + 1) % len(vertices)]
+            side_intersections = self._line_ellipse_intersection(
+                p1, p2, ellipse
+            )
+            # Если это дуга, фильтруем по диапазону
+            if isinstance(ellipse, Arc):
+                for point in side_intersections:
+                    if self._point_on_arc(point, ellipse):
+                        intersections.append(point)
+            else:
+                intersections.extend(side_intersections)
+        
+        return intersections
+    
+    def _polygon_rectangle_intersection(self, polygon: Polygon,
+                                        rectangle: Rectangle) -> List[QPointF]:
+        """Находит точки пересечения многоугольника с прямоугольником"""
+        intersections = []
+        polygon_vertices = polygon.get_vertices()
+        rect_bbox = rectangle.get_bounding_box()
+        
+        # Стороны прямоугольника
+        rect_sides = [
+            (QPointF(rect_bbox.left(), rect_bbox.top()), QPointF(rect_bbox.right(), rect_bbox.top())),  # top
+            (QPointF(rect_bbox.right(), rect_bbox.top()), QPointF(rect_bbox.right(), rect_bbox.bottom())),  # right
+            (QPointF(rect_bbox.right(), rect_bbox.bottom()), QPointF(rect_bbox.left(), rect_bbox.bottom())),  # bottom
+            (QPointF(rect_bbox.left(), rect_bbox.bottom()), QPointF(rect_bbox.left(), rect_bbox.top()))  # left
+        ]
+        
+        # Проверяем пересечение каждой стороны многоугольника с каждой стороной прямоугольника
+        for i in range(len(polygon_vertices)):
+            p1 = polygon_vertices[i]
+            p2 = polygon_vertices[(i + 1) % len(polygon_vertices)]
+            
+            for rect_side_start, rect_side_end in rect_sides:
+                intersection = self._line_line_intersection(
+                    p1, p2, rect_side_start, rect_side_end
+                )
+                if intersection:
+                    intersections.append(intersection)
+        
+        return intersections
+    
+    def _rectangle_rectangle_intersection(self, rect1: Rectangle,
+                                         rect2: Rectangle) -> List[QPointF]:
+        """Находит точки пересечения двух прямоугольников"""
+        intersections = []
+        bbox1 = rect1.get_bounding_box()
+        bbox2 = rect2.get_bounding_box()
+        
+        # Стороны первого прямоугольника
+        sides1 = [
+            (QPointF(bbox1.left(), bbox1.top()), QPointF(bbox1.right(), bbox1.top())),  # top
+            (QPointF(bbox1.right(), bbox1.top()), QPointF(bbox1.right(), bbox1.bottom())),  # right
+            (QPointF(bbox1.right(), bbox1.bottom()), QPointF(bbox1.left(), bbox1.bottom())),  # bottom
+            (QPointF(bbox1.left(), bbox1.bottom()), QPointF(bbox1.left(), bbox1.top()))  # left
+        ]
+        
+        # Стороны второго прямоугольника
+        sides2 = [
+            (QPointF(bbox2.left(), bbox2.top()), QPointF(bbox2.right(), bbox2.top())),  # top
+            (QPointF(bbox2.right(), bbox2.top()), QPointF(bbox2.right(), bbox2.bottom())),  # right
+            (QPointF(bbox2.right(), bbox2.bottom()), QPointF(bbox2.left(), bbox2.bottom())),  # bottom
+            (QPointF(bbox2.left(), bbox2.bottom()), QPointF(bbox2.left(), bbox2.top()))  # left
+        ]
+        
+        # Проверяем пересечение каждой стороны первого прямоугольника с каждой стороной второго
+        for side1_start, side1_end in sides1:
+            for side2_start, side2_end in sides2:
+                intersection = self._line_line_intersection(
+                    side1_start, side1_end, side2_start, side2_end
+                )
+                if intersection:
+                    intersections.append(intersection)
+        
+        return intersections
+    
+    def _spline_circle_intersection(self, spline: Spline,
+                                    circle: Circle) -> List[QPointF]:
+        """Находит точки пересечения сплайна с окружностью"""
+        intersections = []
+        
+        # Аппроксимируем сплайн сегментами
+        num_samples = max(50, len(spline.control_points) * 10)
+        prev_point = spline._get_point_on_spline(0)
+        
+        for i in range(1, num_samples + 1):
+            t = i / num_samples if num_samples > 0 else 0
+            curr_point = spline._get_point_on_spline(t)
+            
+            # Проверяем пересечение сегмента сплайна с окружностью
+            segment_intersections = self._line_circle_intersection(
+                prev_point, curr_point, circle.center, circle.radius
+            )
+            intersections.extend(segment_intersections)
+            
+            prev_point = curr_point
+        
+        return intersections
+    
+    def _spline_ellipse_intersection(self, spline: Spline,
+                                      ellipse) -> List[QPointF]:
+        """Находит точки пересечения сплайна с эллипсом/дугой"""
+        intersections = []
+        
+        # Аппроксимируем сплайн сегментами
+        num_samples = max(50, len(spline.control_points) * 10)
+        prev_point = spline._get_point_on_spline(0)
+        
+        for i in range(1, num_samples + 1):
+            t = i / num_samples if num_samples > 0 else 0
+            curr_point = spline._get_point_on_spline(t)
+            
+            # Проверяем пересечение сегмента сплайна с эллипсом
+            segment_intersections = self._line_ellipse_intersection(
+                prev_point, curr_point, ellipse
+            )
+            # Если это дуга, фильтруем по диапазону
+            if isinstance(ellipse, Arc):
+                for point in segment_intersections:
+                    if self._point_on_arc(point, ellipse):
+                        intersections.append(point)
+            else:
+                intersections.extend(segment_intersections)
+            
+            prev_point = curr_point
+        
+        return intersections
+    
+    def _spline_rectangle_intersection(self, spline: Spline,
+                                       rectangle: Rectangle) -> List[QPointF]:
+        """Находит точки пересечения сплайна с прямоугольником"""
+        intersections = []
+        bbox = rectangle.get_bounding_box()
+        
+        # Стороны прямоугольника
+        sides = [
+            (QPointF(bbox.left(), bbox.top()), QPointF(bbox.right(), bbox.top())),  # top
+            (QPointF(bbox.right(), bbox.top()), QPointF(bbox.right(), bbox.bottom())),  # right
+            (QPointF(bbox.right(), bbox.bottom()), QPointF(bbox.left(), bbox.bottom())),  # bottom
+            (QPointF(bbox.left(), bbox.bottom()), QPointF(bbox.left(), bbox.top()))  # left
+        ]
+        
+        # Аппроксимируем сплайн сегментами
+        num_samples = max(50, len(spline.control_points) * 10)
+        prev_point = spline._get_point_on_spline(0)
+        
+        for i in range(1, num_samples + 1):
+            t = i / num_samples if num_samples > 0 else 0
+            curr_point = spline._get_point_on_spline(t)
+            
+            # Проверяем пересечение сегмента сплайна с каждой стороной прямоугольника
+            for side_start, side_end in sides:
+                intersection = self._line_line_intersection(
+                    prev_point, curr_point, side_start, side_end
+                )
+                if intersection:
+                    intersections.append(intersection)
+            
+            prev_point = curr_point
+        
+        return intersections
+    
+    def _spline_polygon_intersection(self, spline: Spline,
+                                    polygon: Polygon) -> List[QPointF]:
+        """Находит точки пересечения сплайна с многоугольником"""
+        intersections = []
+        vertices = polygon.get_vertices()
+        
+        # Аппроксимируем сплайн сегментами
+        num_samples = max(50, len(spline.control_points) * 10)
+        prev_point = spline._get_point_on_spline(0)
+        
+        for i in range(1, num_samples + 1):
+            t = i / num_samples if num_samples > 0 else 0
+            curr_point = spline._get_point_on_spline(t)
+            
+            # Проверяем пересечение сегмента сплайна с каждой стороной многоугольника
+            for j in range(len(vertices)):
+                p1 = vertices[j]
+                p2 = vertices[(j + 1) % len(vertices)]
+                intersection = self._line_line_intersection(
+                    prev_point, curr_point, p1, p2
+                )
+                if intersection:
+                    intersections.append(intersection)
+            
+            prev_point = curr_point
+        
+        return intersections
+    
     def _find_perpendicular_point(self, line_start: QPointF, line_end: QPointF,
                                  obj: GeometricObject) -> Optional[QPointF]:
         """Находит точку на объекте, которая является основанием перпендикуляра от линии"""
@@ -637,15 +1304,15 @@ class SnapManager:
         y2_norm = y2_rot / ellipse.radius_y
         
         # Находим пересечение с единичной окружностью
-        dx = x2_norm - x1_norm
-        dy = y2_norm - y1_norm
-        dr_sq = dx*dx + dy*dy
+        dx_norm = x2_norm - x1_norm
+        dy_norm = y2_norm - y1_norm
+        dr_sq_norm = dx_norm*dx_norm + dy_norm*dy_norm
         
-        if dr_sq < 1e-10:
+        if dr_sq_norm < 1e-10:
             return intersections
         
         D = x1_norm * y2_norm - x2_norm * y1_norm
-        discriminant = dr_sq - D*D
+        discriminant = dr_sq_norm - D*D
         
         if discriminant < 0:
             return intersections
@@ -654,8 +1321,8 @@ class SnapManager:
         
         # Две точки пересечения
         for sign in [-1, 1]:
-            x_norm = (D * dy + sign * (dy if dy >= 0 else -dy) * sqrt_disc) / dr_sq
-            y_norm = (-D * dx + sign * abs(dy) * sqrt_disc) / dr_sq
+            x_norm = (D * dy_norm + sign * (dy_norm if dy_norm >= 0 else -dy_norm) * sqrt_disc) / dr_sq_norm
+            y_norm = (-D * dx_norm + sign * abs(dy_norm) * sqrt_disc) / dr_sq_norm
             
             # Обратное преобразование к локальным координатам
             x_local = x_norm * ellipse.radius_x
@@ -674,11 +1341,33 @@ class SnapManager:
             x = x_world + ellipse.center.x()
             y = y_world + ellipse.center.y()
             
-            # Проверяем, что точка на отрезке
-            t = ((x - line_start.x()) * (line_end.x() - line_start.x()) + 
-                 (y - line_start.y()) * (line_end.y() - line_start.y())) / dr_sq if dr_sq > 0 else 0
-            if 0 <= t <= 1:
-                intersections.append(QPointF(x, y))
+            # Проверяем, что точка на отрезке (используем правильную формулу)
+            # Вычисляем параметр t для точки на линии: P = P1 + t * (P2 - P1)
+            dx_line = line_end.x() - line_start.x()
+            dy_line = line_end.y() - line_start.y()
+            line_len_sq = dx_line*dx_line + dy_line*dy_line
+            
+            if line_len_sq > 1e-10:
+                t = ((x - line_start.x()) * dx_line + (y - line_start.y()) * dy_line) / line_len_sq
+                # Проверяем, что точка находится на отрезке (с небольшой погрешностью)
+                if -1e-6 <= t <= 1.0 + 1e-6:
+                    # Убеждаемся, что точка действительно на эллипсе (проверка расстояния)
+                    # Переводим точку обратно в локальные координаты для проверки
+                    check_x = x - ellipse.center.x()
+                    check_y = y - ellipse.center.y()
+                    
+                    if abs(ellipse.rotation_angle) > 1e-6:
+                        cos_r = math.cos(-ellipse.rotation_angle)
+                        sin_r = math.sin(-ellipse.rotation_angle)
+                        check_x_rot = check_x * cos_r - check_y * sin_r
+                        check_y_rot = check_x * sin_r + check_y * cos_r
+                    else:
+                        check_x_rot, check_y_rot = check_x, check_y
+                    
+                    # Проверяем уравнение эллипса: (x/a)^2 + (y/b)^2 = 1
+                    ellipse_eq = (check_x_rot / ellipse.radius_x)**2 + (check_y_rot / ellipse.radius_y)**2
+                    if abs(ellipse_eq - 1.0) < 0.01:  # Допустимая погрешность
+                        intersections.append(QPointF(x, y))
         
         return intersections
     
