@@ -40,6 +40,10 @@ class MainWindow(QMainWindow):
         # Окно редактирования (создаем после init_ui, чтобы canvas был готов)
         self.edit_dialog = EditDialog(self)
         self.edit_dialog.set_canvas(self.canvas)
+        # Подключаем сигнал об изменении объекта для обновления панели информации
+        self.edit_dialog.object_changed.connect(self.on_object_edited)
+        # Отслеживаем закрытие диалога для обновления информации
+        self.edit_dialog.finished.connect(self.on_edit_dialog_closed)
         
         # Явно вызываем change_primitive_type для показа виджета способа задания отрезка
         # (поскольку "Отрезок" выбран по умолчанию, сигнал currentTextChanged не сработает)
@@ -201,9 +205,14 @@ class MainWindow(QMainWindow):
 
         self.delete_all_btn = QPushButton("Удалить все")
         self.delete_all_btn.clicked.connect(self.delete_all_lines)
+        
+        self.delete_selected_btn = QPushButton("Удалить выбранное")
+        self.delete_selected_btn.clicked.connect(self.delete_selected_objects)
+        self.delete_selected_btn.setEnabled(False)  # По умолчанию отключена, пока нет выделения
 
         tools_layout.addWidget(self.delete_last_btn)
         tools_layout.addWidget(self.delete_all_btn)
+        tools_layout.addWidget(self.delete_selected_btn)
         
         # Группы для сплайна (добавляем в tools_group, чтобы не скрывалась с input_group)
         self.spline_control_points_group = QWidget()
@@ -976,6 +985,9 @@ class MainWindow(QMainWindow):
         """Обработчик изменения выделения"""
         # Обновляем выделенные объекты
         self.selected_objects = selected_objects
+        # Включаем/отключаем кнопку удаления выбранного
+        if hasattr(self, 'delete_selected_btn'):
+            self.delete_selected_btn.setEnabled(len(selected_objects) > 0)
         # Показываем или скрываем панель свойств в зависимости от выделения
         if selected_objects:
             self.object_properties_panel.show()
@@ -983,12 +995,17 @@ class MainWindow(QMainWindow):
             self.object_properties_panel.set_selected_objects(selected_objects)
         else:
             self.object_properties_panel.hide()
+        # Обновляем информацию об объекте
+        self.update_info()
     
     def open_edit_dialog(self):
         """Открывает окно редактирования для выделенного объекта"""
         selected_objects = self.selected_objects
         if len(selected_objects) == 1:
-            self.edit_dialog.set_object(selected_objects[0])
+            obj = selected_objects[0]
+            self.edit_dialog.set_object(obj)
+            # Обновляем информацию для редактируемого объекта
+            self.update_info_for_object(obj)
             self.edit_dialog.show()
         elif len(selected_objects) > 1:
             QMessageBox.information(self, "Редактирование", 
@@ -1105,6 +1122,26 @@ class MainWindow(QMainWindow):
         #  удаляет все отрезки
         self.canvas.delete_all_lines()
         self.update_info()
+    
+    def delete_selected_objects(self):
+        """Удаляет выделенные объекты"""
+        if not self.selected_objects:
+            return
+        
+        # Создаем копию списка, так как мы будем изменять selected_objects
+        objects_to_delete = list(self.selected_objects)
+        
+        # Удаляем каждый выделенный объект из сцены
+        for obj in objects_to_delete:
+            self.canvas.scene.remove_object(obj)
+        
+        # Очищаем выделение через selection_manager (это автоматически отправит сигнал selection_changed)
+        # который вызовет on_selection_changed и обновит UI
+        if hasattr(self.canvas, 'selection_manager'):
+            self.canvas.selection_manager.clear_selection()
+        
+        # Обновляем отображение
+        self.canvas.update()
     
     def apply_coordinates(self):
         # координаты из полей ввода и фикс объекта
@@ -1320,6 +1357,9 @@ class MainWindow(QMainWindow):
         if self.canvas.scene.is_drawing():
             self.canvas.scene.cancel_drawing()
         
+        # Обновляем информацию об объекте
+        self.update_info()
+        
         # Сбрасываем значения для следующей дуги
         self.start_x_spin.blockSignals(True)
         self.start_y_spin.blockSignals(True)
@@ -1435,6 +1475,9 @@ class MainWindow(QMainWindow):
         if self.canvas.scene.is_drawing():
             self.canvas.scene.cancel_drawing()
         
+        # Обновляем информацию об объекте
+        self.update_info()
+        
         # Сбрасываем значения для следующего прямоугольника
         self.start_x_spin.blockSignals(True)
         self.start_y_spin.blockSignals(True)
@@ -1523,6 +1566,9 @@ class MainWindow(QMainWindow):
         if self.canvas.scene.is_drawing():
             self.canvas.scene.cancel_drawing()
         
+        # Обновляем информацию об объекте
+        self.update_info()
+        
         # Сбрасываем значения для следующего эллипса
         self.start_x_spin.blockSignals(True)
         self.start_y_spin.blockSignals(True)
@@ -1603,6 +1649,9 @@ class MainWindow(QMainWindow):
         # Убеждаемся, что нет активного рисования
         if self.canvas.scene.is_drawing():
             self.canvas.scene.cancel_drawing()
+        
+        # Обновляем информацию об объекте
+        self.update_info()
         
         # Сбрасываем значения для следующего многоугольника
         self.start_x_spin.blockSignals(True)
@@ -2451,34 +2500,96 @@ class MainWindow(QMainWindow):
         total_objects = len(objects)
         self.lines_count_label.setText(f"Объектов на экране: {total_objects}")
         
-        # Получаем последний объект
         if not objects:
             # Нет объектов - показываем пустую информацию
             self._clear_info_panel()
             return
         
-        last_obj = objects[-1]
+        # Определяем, какой объект показывать:
+        # 1. Если открыт диалог редактирования - показываем редактируемый объект
+        # 2. Если есть выделенный объект - показываем его
+        # 3. Иначе - показываем последний объект (новый объект)
+        obj_to_display = None
+        
+        # Проверяем, открыт ли диалог редактирования (не только наличие editing_object)
+        if (hasattr(self, 'edit_dialog') and 
+            self.edit_dialog.isVisible() and 
+            hasattr(self.edit_dialog, 'editing_object') and 
+            self.edit_dialog.editing_object):
+            obj_to_display = self.edit_dialog.editing_object
+            # Проверяем, что объект все еще в сцене
+            if obj_to_display not in objects:
+                obj_to_display = None
+        
+        if obj_to_display is None and self.selected_objects:
+            obj_to_display = self.selected_objects[0]
+            # Проверяем, что объект все еще в сцене
+            if obj_to_display not in objects:
+                obj_to_display = None
+        
+        # Если не нашли объект для отображения, используем последний (новый объект)
+        if obj_to_display is None:
+            obj_to_display = objects[-1]
+        
+        self.update_info_for_object(obj_to_display)
+    
+    def update_info_for_object(self, obj):
+        """Обновляет информационную панель для конкретного объекта"""
+        if obj is None:
+            self._clear_info_panel()
+            return
         
         # Определяем тип объекта и показываем соответствующую информацию
         from widgets.line_segment import LineSegment
         from widgets.primitives import Circle, Arc, Rectangle, Ellipse, Polygon, Spline
         
-        if isinstance(last_obj, LineSegment):
-            self._update_line_info(last_obj)
-        elif isinstance(last_obj, Circle):
-            self._update_circle_info(last_obj)
-        elif isinstance(last_obj, Arc):
-            self._update_arc_info(last_obj)
-        elif isinstance(last_obj, Rectangle):
-            self._update_rectangle_info(last_obj)
-        elif isinstance(last_obj, Ellipse):
-            self._update_ellipse_info(last_obj)
-        elif isinstance(last_obj, Polygon):
-            self._update_polygon_info(last_obj)
-        elif isinstance(last_obj, Spline):
-            self._update_spline_info(last_obj)
+        if isinstance(obj, LineSegment):
+            self._update_line_info(obj)
+        elif isinstance(obj, Circle):
+            self._update_circle_info(obj)
+        elif isinstance(obj, Arc):
+            self._update_arc_info(obj)
+        elif isinstance(obj, Rectangle):
+            self._update_rectangle_info(obj)
+        elif isinstance(obj, Ellipse):
+            self._update_ellipse_info(obj)
+        elif isinstance(obj, Polygon):
+            self._update_polygon_info(obj)
+        elif isinstance(obj, Spline):
+            self._update_spline_info(obj)
         else:
             self._clear_info_panel()
+    
+    def on_object_edited(self, obj):
+        """Обработчик изменения объекта в диалоге редактирования"""
+        # Обновляем информацию об объекте в панели
+        self._update_info_if_needed(obj)
+    
+    def on_edit_dialog_closed(self, result):
+        """Обработчик закрытия диалога редактирования"""
+        # При закрытии диалога обновляем информацию
+        # После закрытия диалога показываем последний объект или выделенный
+        self.update_info()
+    
+    def _update_info_if_needed(self, obj):
+        """Обновляет информацию в панели, если объект отображается"""
+        if obj is None:
+            return
+        
+        objects = self.canvas.scene.get_objects()
+        if obj not in objects:
+            return
+        
+        # Определяем, какой объект сейчас отображается в панели информации
+        # По умолчанию это последний объект в сцене
+        current_displayed_obj = objects[-1] if objects else None
+        
+        # Обновляем информацию, если:
+        # 1. Редактируемый объект - это последний объект (что отображается)
+        # 2. Или редактируемый объект выделен (и может отображаться)
+        # 3. Или редактируемый объект совпадает с текущим отображаемым
+        if current_displayed_obj == obj or obj in self.selected_objects:
+            self.update_info_for_object(obj)
     
     def _clear_info_panel(self):
         """Очищает информационную панель"""
@@ -2732,4 +2843,5 @@ class MainWindow(QMainWindow):
         self.info_label3.setText("Последняя точка:")
         self.info_value3.setText(f"({last_point.x():.2f}, {last_point.y():.2f})")
         self.info_label4.setText("Длина:")
+        self.info_value4.setText(f"{length:.2f}")
         self.info_value4.setText(f"{length:.2f}")
