@@ -2,7 +2,7 @@
 UI панели для управления стилями линий
 """
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox,
-                               QGroupBox, QPushButton, QDoubleSpinBox, QListWidget,
+                               QGroupBox, QPushButton, QDoubleSpinBox, QSpinBox, QListWidget,
                                QListWidgetItem, QMessageBox, QDialog, QFormLayout,
                                QDialogButtonBox, QLineEdit, QCheckBox, QStyledItemDelegate,
                                QToolTip, QStyleOptionViewItem, QFrame, QApplication)
@@ -75,13 +75,16 @@ class StylePreviewWidget(QWidget):
         if length < 1:
             return
         
-        # Амплитуда волны согласно ГОСТ: от S/3 до S/2, где S - толщина основной линии (0.8 мм)
-        # Для тонкой линии (0.4 мм) используем пропорциональную амплитуду
-        # Используем среднее значение: S/2.5
-        main_thickness_mm = 0.8  # Толщина основной линии по ГОСТ
-        line_thickness_mm = pen.widthF() * 25.4 / 96  # Текущая толщина в мм
-        # Амплитуда пропорциональна толщине линии
-        amplitude_mm = (main_thickness_mm / 2.5) * (line_thickness_mm / 0.4)
+        # Амплитуда волны - используем из стиля, если доступна
+        if self.style and hasattr(self.style, 'wavy_amplitude_mm'):
+            amplitude_mm = self.style.wavy_amplitude_mm
+        else:
+            # Автоматический расчет по ГОСТ
+            main_thickness_mm = 0.8  # Толщина основной линии по ГОСТ
+            line_thickness_mm = pen.widthF() * 25.4 / 96  # Текущая толщина в мм
+            # Амплитуда пропорциональна толщине линии
+            amplitude_mm = (main_thickness_mm / 2.5) * (line_thickness_mm / 0.4)
+        
         amplitude_px = (amplitude_mm * 96) / 25.4
         
         # Длина волны: примерно 4-6 амплитуд для плавной волны
@@ -137,22 +140,35 @@ class StylePreviewWidget(QWidget):
         if length < 1:
             return
         
+        # Количество зигзагов и шаг из стиля
+        zigzag_count = self.style.zigzag_count if self.style and hasattr(self.style, 'zigzag_count') else 1
+        zigzag_count = max(1, int(zigzag_count))  # Минимум 1 зигзаг
+        zigzag_step_mm = self.style.zigzag_step_mm if self.style and hasattr(self.style, 'zigzag_step_mm') else 4.0
+        
         # Параметры зигзага: фиксированные размеры в миллиметрах (не зависят от длины линии)
-        # Стандартная высота зигзага: 2.5 мм (чуть больше)
+        # Стандартная высота зигзага: 3.5 мм
         zigzag_height_mm = 3.5
-        # Стандартная ширина зигзага: 6.0 мм (фиксированная)
+        # Стандартная ширина одного зигзага: 4.0 мм
         zigzag_width_mm = 4.0
         dpi = 96
         # Конвертируем миллиметры в пиксели (независимо от масштаба)
         zigzag_height = (zigzag_height_mm * dpi) / 25.4
-        zigzag_length = (zigzag_width_mm * dpi) / 25.4
+        zigzag_length_single = (zigzag_width_mm * dpi) / 25.4
+        zigzag_step = (zigzag_step_mm * dpi) / 25.4  # Шаг между зигзагами в пикселях
+        
+        # Общая длина области зигзагов: ширина одного зигзага * количество + шаги между ними
+        total_zigzag_length = zigzag_length_single * zigzag_count + zigzag_step * (zigzag_count - 1)
         
         # Вычисляем длину прямых участков по бокам
-        # Если зигзаг длиннее линии, делаем его короче
-        if zigzag_length > length * 0.8:
-            zigzag_length = length * 0.8
+        # Если зигзаги длиннее линии, уменьшаем шаг
+        if total_zigzag_length > length * 0.9:
+            max_length = length * 0.9
+            if zigzag_count > 1:
+                zigzag_step = (max_length - zigzag_length_single * zigzag_count) / (zigzag_count - 1)
+                zigzag_step = max(zigzag_step, zigzag_length_single * 0.5)  # Минимальный шаг
+            total_zigzag_length = zigzag_length_single * zigzag_count + zigzag_step * (zigzag_count - 1)
         
-        straight_length = (length - zigzag_length) / 2  # Длина прямых участков по бокам
+        straight_length = (length - total_zigzag_length) / 2  # Длина прямых участков по бокам
         
         # Единичные векторы направления линии и перпендикуляра
         cos_angle = math.cos(angle)
@@ -171,36 +187,41 @@ class StylePreviewWidget(QWidget):
         )
         path.lineTo(zigzag_start)
         
-        # Центральный зигзаг: 3 сегмента
-        # 1. Вверх на половину высоты
-        # 2. Вниз на всю высоту
-        # 3. Вверх на половину высоты
-        # Все три сегмента равной длины вдоль линии
-        # Высота зигзага фиксированная (уже вычислена выше в миллиметрах)
-        
-        # Длина каждого сегмента вдоль линии
-        segment_length_along = zigzag_length / 3
-        
-        # Первый сегмент: вверх на половину высоты
-        point1 = QPointF(
-            zigzag_start.x() + segment_length_along * cos_angle + (zigzag_height / 2) * perp_cos,
-            zigzag_start.y() + segment_length_along * sin_angle + (zigzag_height / 2) * perp_sin
-        )
-        path.lineTo(point1)
-        
-        # Второй сегмент: вниз на всю высоту
-        point2 = QPointF(
-            point1.x() + segment_length_along * cos_angle - zigzag_height * perp_cos,
-            point1.y() + segment_length_along * sin_angle - zigzag_height * perp_sin
-        )
-        path.lineTo(point2)
-        
-        # Третий сегмент: вверх на половину высоты (возврат к прямой линии)
-        zigzag_end = QPointF(
-            zigzag_start.x() + zigzag_length * cos_angle,
-            zigzag_start.y() + zigzag_length * sin_angle
-        )
-        path.lineTo(zigzag_end)
+        # Рисуем все зигзаги с шагом между ними
+        current_pos = zigzag_start
+        for z in range(zigzag_count):
+            segment_length_along = zigzag_length_single / 3
+            
+            # Первый сегмент: вверх на половину высоты
+            point1 = QPointF(
+                current_pos.x() + segment_length_along * cos_angle + (zigzag_height / 2) * perp_cos,
+                current_pos.y() + segment_length_along * sin_angle + (zigzag_height / 2) * perp_sin
+            )
+            path.lineTo(point1)
+            
+            # Второй сегмент: вниз на всю высоту
+            point2 = QPointF(
+                point1.x() + segment_length_along * cos_angle - zigzag_height * perp_cos,
+                point1.y() + segment_length_along * sin_angle - zigzag_height * perp_sin
+            )
+            path.lineTo(point2)
+            
+            # Третий сегмент: вверх на половину высоты (возврат к прямой линии)
+            zigzag_end = QPointF(
+                current_pos.x() + zigzag_length_single * cos_angle,
+                current_pos.y() + zigzag_length_single * sin_angle
+            )
+            path.lineTo(zigzag_end)
+            
+            # Если это не последний зигзаг, добавляем шаг (прямой участок) до следующего зигзага
+            if z < zigzag_count - 1:
+                current_pos = QPointF(
+                    zigzag_end.x() + zigzag_step * cos_angle,
+                    zigzag_end.y() + zigzag_step * sin_angle
+                )
+                path.lineTo(current_pos)
+            else:
+                current_pos = zigzag_end
         
         # Второй прямой участок до конца
         path.lineTo(end_point)
@@ -825,6 +846,43 @@ class StyleEditDialog(QDialog):
             self.dash_gap_spin.setValue(2.5)
         layout.addRow("Расстояние между штрихами:", self.dash_gap_spin)
         
+        # Количество зигзагов (только для ломаной линии)
+        self.zigzag_count_spin = QSpinBox()
+        self.zigzag_count_spin.setRange(1, 20)
+        self.zigzag_count_spin.setSingleStep(1)
+        if self.style:
+            self.zigzag_count_spin.setValue(getattr(self.style, 'zigzag_count', 1))
+        else:
+            self.zigzag_count_spin.setValue(1)
+        self.zigzag_count_label = QLabel("Количество зигзагов:")
+        layout.addRow(self.zigzag_count_label, self.zigzag_count_spin)
+        
+        # Шаг между зигзагами (только для ломаной линии)
+        self.zigzag_step_spin = QDoubleSpinBox()
+        self.zigzag_step_spin.setRange(0.5, 50.0)
+        self.zigzag_step_spin.setDecimals(2)
+        self.zigzag_step_spin.setSingleStep(0.5)
+        self.zigzag_step_spin.setSuffix(" мм")
+        if self.style:
+            self.zigzag_step_spin.setValue(getattr(self.style, 'zigzag_step_mm', 4.0))
+        else:
+            self.zigzag_step_spin.setValue(4.0)
+        self.zigzag_step_label = QLabel("Шаг между зигзагами:")
+        layout.addRow(self.zigzag_step_label, self.zigzag_step_spin)
+        
+        # Амплитуда волнистой линии (только для волнистой линии)
+        self.wavy_amplitude_spin = QDoubleSpinBox()
+        self.wavy_amplitude_spin.setRange(0.1, 10.0)
+        self.wavy_amplitude_spin.setDecimals(2)
+        self.wavy_amplitude_spin.setSingleStep(0.1)
+        self.wavy_amplitude_spin.setSuffix(" мм")
+        if self.style:
+            self.wavy_amplitude_spin.setValue(getattr(self.style, 'wavy_amplitude_mm', 0.32))
+        else:
+            self.wavy_amplitude_spin.setValue(0.32)
+        self.wavy_amplitude_label = QLabel("Амплитуда волны:")
+        layout.addRow(self.wavy_amplitude_label, self.wavy_amplitude_spin)
+        
         # Превью
         self.preview_widget = StylePreviewWidget(None, 200, 30)
         layout.addRow("Превью:", self.preview_widget)
@@ -838,12 +896,34 @@ class StyleEditDialog(QDialog):
         self.setLayout(layout)
         
         # Обновляем превью при изменении параметров
+        self.type_combo.currentIndexChanged.connect(self.on_type_changed)
         self.type_combo.currentIndexChanged.connect(self.update_preview)
         self.thickness_spin.valueChanged.connect(self.update_preview)
         self.dash_length_spin.valueChanged.connect(self.update_preview)
         self.dash_gap_spin.valueChanged.connect(self.update_preview)
+        self.zigzag_count_spin.valueChanged.connect(self.update_preview)
+        self.zigzag_step_spin.valueChanged.connect(self.update_preview)
+        self.wavy_amplitude_spin.valueChanged.connect(self.update_preview)
         
+        # Инициализируем видимость полей
+        self.on_type_changed()
         self.update_preview()
+    
+    def on_type_changed(self):
+        """Обновляет видимость полей в зависимости от типа линии"""
+        line_type = self.type_combo.currentData()
+        
+        # Показываем/скрываем поля в зависимости от типа линии
+        is_broken = line_type == LineType.SOLID_THIN_BROKEN
+        is_wavy = line_type == LineType.SOLID_WAVY
+        
+        self.zigzag_count_label.setVisible(is_broken)
+        self.zigzag_count_spin.setVisible(is_broken)
+        self.zigzag_step_label.setVisible(is_broken)
+        self.zigzag_step_spin.setVisible(is_broken)
+        
+        self.wavy_amplitude_label.setVisible(is_wavy)
+        self.wavy_amplitude_spin.setVisible(is_wavy)
     
     def update_preview(self):
         """Обновляет превью стиля"""
@@ -855,7 +935,10 @@ class StyleEditDialog(QDialog):
             line_type=self.type_combo.currentData(),
             thickness_mm=self.thickness_spin.value(),
             dash_length=self.dash_length_spin.value(),
-            dash_gap=self.dash_gap_spin.value()
+            dash_gap=self.dash_gap_spin.value(),
+            zigzag_count=self.zigzag_count_spin.value(),
+            zigzag_step_mm=self.zigzag_step_spin.value(),
+            wavy_amplitude_mm=self.wavy_amplitude_spin.value()
         )
         self.preview_widget.set_style(temp_style)
     
@@ -876,7 +959,10 @@ class StyleEditDialog(QDialog):
                     thickness_mm=self.thickness_spin.value(),
                     dash_length=self.dash_length_spin.value(),
                     dash_gap=self.dash_gap_spin.value(),
-                    is_gost_base=False
+                    is_gost_base=False,
+                    zigzag_count=self.zigzag_count_spin.value(),
+                    zigzag_step_mm=self.zigzag_step_spin.value(),
+                    wavy_amplitude_mm=self.wavy_amplitude_spin.value()
                 )
                 self.style_manager.add_style(new_style)
             else:
@@ -889,6 +975,9 @@ class StyleEditDialog(QDialog):
                 self.style.thickness_mm = self.thickness_spin.value()
                 self.style.dash_length = self.dash_length_spin.value()
                 self.style.dash_gap = self.dash_gap_spin.value()
+                self.style.zigzag_count = self.zigzag_count_spin.value()
+                self.style.zigzag_step_mm = self.zigzag_step_spin.value()
+                self.style.wavy_amplitude_mm = self.wavy_amplitude_spin.value()
             
             super().accept()
         except ValueError as e:

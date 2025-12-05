@@ -45,9 +45,9 @@ class LineRenderer:
             
             # Для специальных типов линий нужна специальная отрисовка
             if line_type == LineType.SOLID_WAVY:
-                LineRenderer._draw_wavy_line(painter, line.start_point, line.end_point, pen)
+                LineRenderer._draw_wavy_line(painter, line.start_point, line.end_point, pen, line.style)
             elif line_type == LineType.SOLID_THIN_BROKEN:
-                LineRenderer._draw_broken_line(painter, line.start_point, line.end_point, pen)
+                LineRenderer._draw_broken_line(painter, line.start_point, line.end_point, pen, line.style)
             elif line_type == LineType.DASHED:
                 LineRenderer._draw_dashed_line(painter, line.start_point, line.end_point, pen, line.style)
             elif line_type in [LineType.DASH_DOT_THICK, LineType.DASH_DOT_THIN, LineType.DASH_DOT_TWO_DOTS]:
@@ -81,7 +81,7 @@ class LineRenderer:
         painter.setBrush(old_brush)
     
     @staticmethod
-    def _draw_wavy_line(painter: QPainter, start_point: QPointF, end_point: QPointF, pen: QPen):
+    def _draw_wavy_line(painter: QPainter, start_point: QPointF, end_point: QPointF, pen: QPen, style=None):
         """Отрисовывает волнистую линию (плавная синусоида)"""
         dx = end_point.x() - start_point.x()
         dy = end_point.y() - start_point.y()
@@ -91,11 +91,19 @@ class LineRenderer:
         if length < 1:
             return
         
-        # Амплитуда волны согласно ГОСТ
-        main_thickness_mm = 0.8
-        line_thickness_mm = pen.widthF() * 25.4 / 96
-        amplitude_mm = (main_thickness_mm / 2.5) * (line_thickness_mm / 0.4)
-        amplitude_px = (amplitude_mm * 96) / 25.4
+        # Амплитуда волны - используем из стиля, если доступна
+        if style and hasattr(style, 'wavy_amplitude_mm'):
+            amplitude_mm = style.wavy_amplitude_mm
+        else:
+            # Автоматический расчет по ГОСТ
+            main_thickness_mm = 0.8
+            line_thickness_mm = pen.widthF() * 25.4 / 96
+            amplitude_mm = (main_thickness_mm / 2.5) * (line_thickness_mm / 0.4)
+        
+        # Конвертируем миллиметры в пиксели с учетом масштаба
+        scale_factor = 1.0  # Масштаб уже учтен в pen
+        dpi = 96
+        amplitude_px = (amplitude_mm * dpi) / 25.4
         
         wave_length_px = amplitude_px * 5
         num_waves = max(1, int(length / wave_length_px))
@@ -168,7 +176,7 @@ class LineRenderer:
         painter.drawPath(path)
     
     @staticmethod
-    def _draw_broken_line(painter: QPainter, start_point: QPointF, end_point: QPointF, pen: QPen):
+    def _draw_broken_line(painter: QPainter, start_point: QPointF, end_point: QPointF, pen: QPen, style=None):
         """Отрисовывает сплошную линию с изломами (острые углы, зигзаг)"""
         dx = end_point.x() - start_point.x()
         dy = end_point.y() - start_point.y()
@@ -178,16 +186,32 @@ class LineRenderer:
         if length < 1:
             return
         
+        # Количество зигзагов и шаг из стиля
+        zigzag_count = style.zigzag_count if style and hasattr(style, 'zigzag_count') else 1
+        zigzag_count = max(1, int(zigzag_count))  # Минимум 1 зигзаг
+        zigzag_step_mm = style.zigzag_step_mm if style and hasattr(style, 'zigzag_step_mm') else 4.0
+        
         zigzag_height_mm = 3.5
-        zigzag_width_mm = 4.0
+        zigzag_width_mm = 4.0  # Ширина одного зигзага
         dpi = 96
         zigzag_height = (zigzag_height_mm * dpi) / 25.4
-        zigzag_length = (zigzag_width_mm * dpi) / 25.4
+        zigzag_length_single = (zigzag_width_mm * dpi) / 25.4
+        zigzag_step = (zigzag_step_mm * dpi) / 25.4  # Шаг между зигзагами в пикселях
         
-        if zigzag_length > length * 0.8:
-            zigzag_length = length * 0.8
+        # Общая длина области зигзагов: ширина одного зигзага * количество + шаги между ними
+        # Для N зигзагов нужно (N-1) шагов между ними
+        total_zigzag_length = zigzag_length_single * zigzag_count + zigzag_step * (zigzag_count - 1)
         
-        straight_length = (length - zigzag_length) / 2
+        # Ограничиваем общую длину зигзагов, если они не помещаются
+        if total_zigzag_length > length * 0.9:
+            # Уменьшаем шаг пропорционально
+            max_length = length * 0.9
+            if zigzag_count > 1:
+                zigzag_step = (max_length - zigzag_length_single * zigzag_count) / (zigzag_count - 1)
+                zigzag_step = max(zigzag_step, zigzag_length_single * 0.5)  # Минимальный шаг - половина ширины зигзага
+            total_zigzag_length = zigzag_length_single * zigzag_count + zigzag_step * (zigzag_count - 1)
+        
+        straight_length = (length - total_zigzag_length) / 2
         
         cos_angle = math.cos(angle)
         sin_angle = math.sin(angle)
@@ -197,31 +221,50 @@ class LineRenderer:
         path = QPainterPath()
         path.moveTo(start_point)
         
+        # Первый прямой участок
         zigzag_start = QPointF(
             start_point.x() + straight_length * cos_angle,
             start_point.y() + straight_length * sin_angle
         )
         path.lineTo(zigzag_start)
         
-        segment_length_along = zigzag_length / 3
+        # Рисуем все зигзаги с шагом между ними
+        current_pos = zigzag_start
+        for z in range(zigzag_count):
+            segment_length_along = zigzag_length_single / 3
+            
+            # Первый сегмент: вверх на половину высоты
+            point1 = QPointF(
+                current_pos.x() + segment_length_along * cos_angle + (zigzag_height / 2) * perp_cos,
+                current_pos.y() + segment_length_along * sin_angle + (zigzag_height / 2) * perp_sin
+            )
+            path.lineTo(point1)
+            
+            # Второй сегмент: вниз на всю высоту
+            point2 = QPointF(
+                point1.x() + segment_length_along * cos_angle - zigzag_height * perp_cos,
+                point1.y() + segment_length_along * sin_angle - zigzag_height * perp_sin
+            )
+            path.lineTo(point2)
+            
+            # Третий сегмент: вверх на половину высоты (возврат к прямой линии)
+            zigzag_end = QPointF(
+                current_pos.x() + zigzag_length_single * cos_angle,
+                current_pos.y() + zigzag_length_single * sin_angle
+            )
+            path.lineTo(zigzag_end)
+            
+            # Если это не последний зигзаг, добавляем шаг (прямой участок) до следующего зигзага
+            if z < zigzag_count - 1:
+                current_pos = QPointF(
+                    zigzag_end.x() + zigzag_step * cos_angle,
+                    zigzag_end.y() + zigzag_step * sin_angle
+                )
+                path.lineTo(current_pos)
+            else:
+                current_pos = zigzag_end
         
-        point1 = QPointF(
-            zigzag_start.x() + segment_length_along * cos_angle + (zigzag_height / 2) * perp_cos,
-            zigzag_start.y() + segment_length_along * sin_angle + (zigzag_height / 2) * perp_sin
-        )
-        path.lineTo(point1)
-        
-        point2 = QPointF(
-            point1.x() + segment_length_along * cos_angle - zigzag_height * perp_cos,
-            point1.y() + segment_length_along * sin_angle - zigzag_height * perp_sin
-        )
-        path.lineTo(point2)
-        
-        zigzag_end = QPointF(
-            zigzag_start.x() + zigzag_length * cos_angle,
-            zigzag_start.y() + zigzag_length * sin_angle
-        )
-        path.lineTo(zigzag_end)
+        # Второй прямой участок до конца
         path.lineTo(end_point)
         
         painter.setPen(pen)
@@ -409,9 +452,9 @@ class PrimitiveRenderer:
             
             # Для специальных типов линий используем специальную отрисовку
             if line_type == LineType.SOLID_WAVY:
-                PrimitiveRenderer._draw_wavy_circle(painter, circle, pen)
+                PrimitiveRenderer._draw_wavy_circle(painter, circle, pen, circle.style)
             elif line_type == LineType.SOLID_THIN_BROKEN:
-                PrimitiveRenderer._draw_broken_circle(painter, circle, pen)
+                PrimitiveRenderer._draw_broken_circle(painter, circle, pen, circle.style)
             elif line_type == LineType.DASHED:
                 PrimitiveRenderer._draw_dashed_circle(painter, circle, pen, circle.style)
             elif line_type in [LineType.DASH_DOT_THICK, LineType.DASH_DOT_THIN, LineType.DASH_DOT_TWO_DOTS]:
@@ -448,9 +491,9 @@ class PrimitiveRenderer:
             
             # Для специальных типов линий используем специальную отрисовку
             if line_type == LineType.SOLID_WAVY:
-                PrimitiveRenderer._draw_wavy_arc(painter, arc, pen)
+                PrimitiveRenderer._draw_wavy_arc(painter, arc, pen, arc.style)
             elif line_type == LineType.SOLID_THIN_BROKEN:
-                PrimitiveRenderer._draw_broken_arc(painter, arc, pen)
+                PrimitiveRenderer._draw_broken_arc(painter, arc, pen, arc.style)
             elif line_type == LineType.DASHED:
                 PrimitiveRenderer._draw_dashed_arc(painter, arc, pen, arc.style)
             elif line_type in [LineType.DASH_DOT_THICK, LineType.DASH_DOT_THIN, LineType.DASH_DOT_TWO_DOTS]:
@@ -482,9 +525,9 @@ class PrimitiveRenderer:
             # Для специальных типов линий используем специальную отрисовку
             # Эти методы сами обрабатывают скругленные углы
             if line_type == LineType.SOLID_WAVY:
-                PrimitiveRenderer._draw_wavy_rectangle(painter, rectangle, pen)
+                PrimitiveRenderer._draw_wavy_rectangle(painter, rectangle, pen, rectangle.style)
             elif line_type == LineType.SOLID_THIN_BROKEN:
-                PrimitiveRenderer._draw_broken_rectangle(painter, rectangle, pen)
+                PrimitiveRenderer._draw_broken_rectangle(painter, rectangle, pen, rectangle.style)
             elif line_type == LineType.DASHED:
                 PrimitiveRenderer._draw_dashed_rectangle(painter, rectangle, pen, rectangle.style)
             elif line_type in [LineType.DASH_DOT_THICK, LineType.DASH_DOT_THIN, LineType.DASH_DOT_TWO_DOTS]:
@@ -561,9 +604,9 @@ class PrimitiveRenderer:
             
             # Для специальных типов линий используем специальную отрисовку
             if line_type == LineType.SOLID_WAVY:
-                PrimitiveRenderer._draw_wavy_ellipse(painter, ellipse, pen)
+                PrimitiveRenderer._draw_wavy_ellipse(painter, ellipse, pen, ellipse.style)
             elif line_type == LineType.SOLID_THIN_BROKEN:
-                PrimitiveRenderer._draw_broken_ellipse(painter, ellipse, pen)
+                PrimitiveRenderer._draw_broken_ellipse(painter, ellipse, pen, ellipse.style)
             elif line_type == LineType.DASHED:
                 PrimitiveRenderer._draw_dashed_ellipse(painter, ellipse, pen, ellipse.style)
             elif line_type in [LineType.DASH_DOT_THICK, LineType.DASH_DOT_THIN, LineType.DASH_DOT_TWO_DOTS]:
@@ -600,9 +643,9 @@ class PrimitiveRenderer:
             
             # Для специальных типов линий используем специальную отрисовку
             if line_type == LineType.SOLID_WAVY:
-                PrimitiveRenderer._draw_wavy_polygon(painter, polygon, pen)
+                PrimitiveRenderer._draw_wavy_polygon(painter, polygon, pen, polygon.style)
             elif line_type == LineType.SOLID_THIN_BROKEN:
-                PrimitiveRenderer._draw_broken_polygon(painter, polygon, pen)
+                PrimitiveRenderer._draw_broken_polygon(painter, polygon, pen, polygon.style)
             elif line_type == LineType.DASHED:
                 PrimitiveRenderer._draw_dashed_polygon(painter, polygon, pen, polygon.style)
             elif line_type in [LineType.DASH_DOT_THICK, LineType.DASH_DOT_THIN, LineType.DASH_DOT_TWO_DOTS]:
@@ -632,7 +675,7 @@ class PrimitiveRenderer:
     
     # Методы специальной отрисовки для окружностей
     @staticmethod
-    def _draw_wavy_circle(painter: QPainter, circle, pen: QPen):
+    def _draw_wavy_circle(painter: QPainter, circle, pen: QPen, style=None):
         """Отрисовывает волнистую окружность (как отрезок, скрученный в круг)"""
         import math
         from PySide6.QtGui import QPainterPath
@@ -641,11 +684,17 @@ class PrimitiveRenderer:
         if circumference < 1:
             return
         
-        # Используем тот же алгоритм, что и для отрезков
-        main_thickness_mm = 0.8
-        line_thickness_mm = pen.widthF() * 25.4 / 96
-        amplitude_mm = (main_thickness_mm / 2.5) * (line_thickness_mm / 0.4)
-        amplitude_px = (amplitude_mm * 96) / 25.4
+        # Амплитуда волны - используем из стиля, если доступна
+        if style and hasattr(style, 'wavy_amplitude_mm'):
+            amplitude_mm = style.wavy_amplitude_mm
+        else:
+            # Автоматический расчет по ГОСТ
+            main_thickness_mm = 0.8
+            line_thickness_mm = pen.widthF() * 25.4 / 96
+            amplitude_mm = (main_thickness_mm / 2.5) * (line_thickness_mm / 0.4)
+        
+        dpi = 96
+        amplitude_px = (amplitude_mm * dpi) / 25.4
         
         wave_length_px = amplitude_px * 5
         num_waves = max(1, int(circumference / wave_length_px))
@@ -680,8 +729,8 @@ class PrimitiveRenderer:
         painter.drawPath(path)
     
     @staticmethod
-    def _draw_broken_circle(painter: QPainter, circle, pen: QPen):
-        """Отрисовывает окружность с одним зигзагом"""
+    def _draw_broken_circle(painter: QPainter, circle, pen: QPen, style=None):
+        """Отрисовывает окружность с зигзагами"""
         import math
         from PySide6.QtGui import QPainterPath
         
@@ -689,25 +738,43 @@ class PrimitiveRenderer:
         if circumference < 1:
             return
         
-        # Параметры зигзага (как в отрезке)
+        # Количество зигзагов и шаг из стиля
+        zigzag_count = style.zigzag_count if style and hasattr(style, 'zigzag_count') else 1
+        zigzag_count = max(1, int(zigzag_count))
+        zigzag_step_mm = style.zigzag_step_mm if style and hasattr(style, 'zigzag_step_mm') else 4.0
+        
+        # Параметры зигзага
         zigzag_height_mm = 3.5
         zigzag_width_mm = 4.0
         dpi = 96
         zigzag_height = (zigzag_height_mm * dpi) / 25.4
-        zigzag_length = (zigzag_width_mm * dpi) / 25.4
+        zigzag_length_single = (zigzag_width_mm * dpi) / 25.4
+        zigzag_step = (zigzag_step_mm * dpi) / 25.4
         
-        # Конвертируем длину зигзага в угол
-        zigzag_angle = (zigzag_length / circumference) * 2 * math.pi
-        if zigzag_angle > math.pi * 0.8:
-            zigzag_angle = math.pi * 0.8
+        # Общая длина области зигзагов
+        total_zigzag_length = zigzag_length_single * zigzag_count + zigzag_step * (zigzag_count - 1)
         
-        # Угол начала зигзага (в середине окружности)
-        start_zigzag_angle = math.pi - zigzag_angle / 2
-        end_zigzag_angle = math.pi + zigzag_angle / 2
+        # Конвертируем в углы
+        total_zigzag_angle = (total_zigzag_length / circumference) * 2 * math.pi
+        if total_zigzag_angle > math.pi * 0.9:
+            total_zigzag_angle = math.pi * 0.9
+            # Пересчитываем шаг
+            if zigzag_count > 1:
+                max_length = circumference * 0.9
+                zigzag_step = (max_length - zigzag_length_single * zigzag_count) / (zigzag_count - 1)
+                zigzag_step = max(zigzag_step, zigzag_length_single * 0.5)
+                total_zigzag_length = zigzag_length_single * zigzag_count + zigzag_step * (zigzag_count - 1)
+                total_zigzag_angle = (total_zigzag_length / circumference) * 2 * math.pi
+        
+        zigzag_length_single_angle = (zigzag_length_single / circumference) * 2 * math.pi
+        zigzag_step_angle = (zigzag_step / circumference) * 2 * math.pi
+        
+        # Угол начала зигзагов (равномерно распределяем по окружности)
+        start_zigzag_angle = math.pi - total_zigzag_angle / 2
         
         path = QPainterPath()
         
-        # Рисуем первую часть окружности (до зигзага)
+        # Рисуем первую часть окружности (до зигзагов)
         num_points_start = max(20, int(start_zigzag_angle / (2 * math.pi) * 100))
         for i in range(num_points_start + 1):
             angle = 2 * math.pi * i / num_points_start * (start_zigzag_angle / (2 * math.pi))
@@ -718,48 +785,66 @@ class PrimitiveRenderer:
             else:
                 path.lineTo(x, y)
         
-        # Рисуем зигзаг
-        zigzag_start_angle = start_zigzag_angle
-        zigzag_mid1_angle = start_zigzag_angle + zigzag_angle / 3
-        zigzag_mid2_angle = start_zigzag_angle + 2 * zigzag_angle / 3
-        zigzag_end_angle = end_zigzag_angle
-        
-        # Точка начала зигзага
-        p1 = QPointF(
-            circle.center.x() + circle.radius * math.cos(zigzag_start_angle),
-            circle.center.y() + circle.radius * math.sin(zigzag_start_angle)
-        )
-        path.lineTo(p1)
-        
-        # Первая точка зигзага (вверх)
-        p2 = QPointF(
-            circle.center.x() + (circle.radius + zigzag_height / 2) * math.cos(zigzag_mid1_angle),
-            circle.center.y() + (circle.radius + zigzag_height / 2) * math.sin(zigzag_mid1_angle)
-        )
-        path.lineTo(p2)
-        
-        # Вторая точка зигзага (вниз)
-        p3 = QPointF(
-            circle.center.x() + (circle.radius - zigzag_height) * math.cos(zigzag_mid2_angle),
-            circle.center.y() + (circle.radius - zigzag_height) * math.sin(zigzag_mid2_angle)
-        )
-        path.lineTo(p3)
-        
-        # Конец зигзага
-        p4 = QPointF(
-            circle.center.x() + circle.radius * math.cos(zigzag_end_angle),
-            circle.center.y() + circle.radius * math.sin(zigzag_end_angle)
-        )
-        path.lineTo(p4)
+        # Рисуем все зигзаги с шагом между ними
+        current_angle = start_zigzag_angle
+        for z in range(zigzag_count):
+            # Начало зигзага
+            zigzag_start_angle = current_angle
+            zigzag_mid1_angle = current_angle + zigzag_length_single_angle / 3
+            zigzag_mid2_angle = current_angle + 2 * zigzag_length_single_angle / 3
+            zigzag_end_angle = current_angle + zigzag_length_single_angle
+            
+            # Точка начала зигзага
+            p1 = QPointF(
+                circle.center.x() + circle.radius * math.cos(zigzag_start_angle),
+                circle.center.y() + circle.radius * math.sin(zigzag_start_angle)
+            )
+            path.lineTo(p1)
+            
+            # Первая точка зигзага (вверх)
+            p2 = QPointF(
+                circle.center.x() + (circle.radius + zigzag_height / 2) * math.cos(zigzag_mid1_angle),
+                circle.center.y() + (circle.radius + zigzag_height / 2) * math.sin(zigzag_mid1_angle)
+            )
+            path.lineTo(p2)
+            
+            # Вторая точка зигзага (вниз)
+            p3 = QPointF(
+                circle.center.x() + (circle.radius - zigzag_height) * math.cos(zigzag_mid2_angle),
+                circle.center.y() + (circle.radius - zigzag_height) * math.sin(zigzag_mid2_angle)
+            )
+            path.lineTo(p3)
+            
+            # Конец зигзага
+            p4 = QPointF(
+                circle.center.x() + circle.radius * math.cos(zigzag_end_angle),
+                circle.center.y() + circle.radius * math.sin(zigzag_end_angle)
+            )
+            path.lineTo(p4)
+            
+            # Если это не последний зигзаг, добавляем шаг (прямой участок окружности)
+            if z < zigzag_count - 1:
+                current_angle = zigzag_end_angle + zigzag_step_angle
+                # Рисуем прямой участок окружности между зигзагами
+                num_points_step = max(5, int(zigzag_step_angle / (2 * math.pi) * 20))
+                for i in range(1, num_points_step + 1):
+                    angle = zigzag_end_angle + (zigzag_step_angle * i / num_points_step)
+                    x = circle.center.x() + circle.radius * math.cos(angle)
+                    y = circle.center.y() + circle.radius * math.sin(angle)
+                    path.lineTo(x, y)
+            else:
+                current_angle = zigzag_end_angle
         
         # Рисуем оставшуюся часть окружности
+        end_zigzag_angle = current_angle
         remaining_angle = 2 * math.pi - end_zigzag_angle
-        num_points_end = max(20, int(remaining_angle / (2 * math.pi) * 100))
-        for i in range(1, num_points_end + 1):
-            angle = end_zigzag_angle + (remaining_angle * i / num_points_end)
-            x = circle.center.x() + circle.radius * math.cos(angle)
-            y = circle.center.y() + circle.radius * math.sin(angle)
-            path.lineTo(x, y)
+        if remaining_angle > 0:
+            num_points_end = max(20, int(remaining_angle / (2 * math.pi) * 100))
+            for i in range(1, num_points_end + 1):
+                angle = end_zigzag_angle + (remaining_angle * i / num_points_end)
+                x = circle.center.x() + circle.radius * math.cos(angle)
+                y = circle.center.y() + circle.radius * math.sin(angle)
+                path.lineTo(x, y)
         
         painter.setPen(pen)
         painter.setBrush(Qt.NoBrush)
@@ -891,7 +976,7 @@ class PrimitiveRenderer:
     
     # Методы специальной отрисовки для прямоугольников
     @staticmethod
-    def _draw_wavy_rectangle(painter: QPainter, rectangle, pen: QPen):
+    def _draw_wavy_rectangle(painter: QPainter, rectangle, pen: QPen, style=None):
         """Отрисовывает волнистый прямоугольник с непрерывной волной (как у сплайна)"""
         from PySide6.QtGui import QPainterPath
         fillet_radius = getattr(rectangle, 'fillet_radius', 0.0)
@@ -900,11 +985,17 @@ class PrimitiveRenderer:
         h = rect.height()
         r = min(fillet_radius, w / 2, h / 2) if fillet_radius > 0 else 0.0
         
-        # Амплитуда волны согласно ГОСТ
-        main_thickness_mm = 0.8
-        line_thickness_mm = pen.widthF() * 25.4 / 96
-        amplitude_mm = (main_thickness_mm / 2.5) * (line_thickness_mm / 0.4)
-        amplitude_px = (amplitude_mm * 96) / 25.4
+        # Амплитуда волны - используем из стиля, если доступна
+        if style and hasattr(style, 'wavy_amplitude_mm'):
+            amplitude_mm = style.wavy_amplitude_mm
+        else:
+            # Автоматический расчет по ГОСТ
+            main_thickness_mm = 0.8
+            line_thickness_mm = pen.widthF() * 25.4 / 96
+            amplitude_mm = (main_thickness_mm / 2.5) * (line_thickness_mm / 0.4)
+        
+        dpi = 96
+        amplitude_px = (amplitude_mm * dpi) / 25.4
         
         # Сначала генерируем все точки вдоль периметра как единый контур (как у сплайна)
         points = []
@@ -1342,7 +1433,7 @@ class PrimitiveRenderer:
         painter.drawPath(path)
     
     @staticmethod
-    def _draw_broken_rectangle(painter: QPainter, rectangle, pen: QPen):
+    def _draw_broken_rectangle(painter: QPainter, rectangle, pen: QPen, style=None):
         """Отрисовывает прямоугольник с изломами"""
         fillet_radius = getattr(rectangle, 'fillet_radius', 0.0)
         rect = rectangle.get_bounding_box()
@@ -1356,46 +1447,46 @@ class PrimitiveRenderer:
             LineRenderer._draw_broken_line(painter, 
                                          QPointF(rect.x() + r, rect.y()), 
                                          QPointF(rect.x() + w - r, rect.y()), 
-                                         pen)
+                                         pen, style)
             # Верхний правый угол (дуга) - центр в (w - r, r)
             if r > 0:
                 PrimitiveRenderer._draw_broken_arc_segment(painter, 
                     QPointF(rect.x() + w - r, rect.y()), 
                     QPointF(rect.x() + w, rect.y() + r), 
-                    QPointF(rect.x() + w - r, rect.y() + r), r, pen)
+                    QPointF(rect.x() + w - r, rect.y() + r), r, pen, style)
             # Правая сторона
             LineRenderer._draw_broken_line(painter, 
                                          QPointF(rect.x() + w, rect.y() + r), 
                                          QPointF(rect.x() + w, rect.y() + h - r), 
-                                         pen)
+                                         pen, style)
             # Нижний правый угол (дуга) - центр в (w - r, h - r)
             if r > 0:
                 PrimitiveRenderer._draw_broken_arc_segment(painter, 
                     QPointF(rect.x() + w, rect.y() + h - r), 
                     QPointF(rect.x() + w - r, rect.y() + h), 
-                    QPointF(rect.x() + w - r, rect.y() + h - r), r, pen)
+                    QPointF(rect.x() + w - r, rect.y() + h - r), r, pen, style)
             # Нижняя сторона
             LineRenderer._draw_broken_line(painter, 
                                          QPointF(rect.x() + w - r, rect.y() + h), 
                                          QPointF(rect.x() + r, rect.y() + h), 
-                                         pen)
+                                         pen, style)
             # Нижний левый угол (дуга) - центр в (r, h - r)
             if r > 0:
                 PrimitiveRenderer._draw_broken_arc_segment(painter, 
                     QPointF(rect.x() + r, rect.y() + h), 
                     QPointF(rect.x(), rect.y() + h - r), 
-                    QPointF(rect.x() + r, rect.y() + h - r), r, pen)
+                    QPointF(rect.x() + r, rect.y() + h - r), r, pen, style)
             # Левая сторона
             LineRenderer._draw_broken_line(painter, 
                                          QPointF(rect.x(), rect.y() + h - r), 
                                          QPointF(rect.x(), rect.y() + r), 
-                                         pen)
+                                         pen, style)
             # Верхний левый угол (дуга) - центр в (r, r)
             if r > 0:
                 PrimitiveRenderer._draw_broken_arc_segment(painter, 
                     QPointF(rect.x(), rect.y() + r), 
                     QPointF(rect.x() + r, rect.y()), 
-                    QPointF(rect.x() + r, rect.y() + r), r, pen)
+                    QPointF(rect.x() + r, rect.y() + r), r, pen, style)
         else:
             # Обычный прямоугольник без скругления
             bbox = rectangle.get_bounding_box()
@@ -1410,7 +1501,7 @@ class PrimitiveRenderer:
             for i in range(4):
                 start = corners[i]
                 end = corners[(i + 1) % 4]
-                LineRenderer._draw_broken_line(painter, start, end, pen)
+                LineRenderer._draw_broken_line(painter, start, end, pen, style)
     
     @staticmethod
     def _draw_dashed_rectangle(painter: QPainter, rectangle, pen: QPen, style):
@@ -1802,7 +1893,7 @@ class PrimitiveRenderer:
         return path, first_point_set
     
     @staticmethod
-    def _draw_broken_arc_segment(painter: QPainter, start: QPointF, end: QPointF, center: QPointF, radius: float, pen: QPen):
+    def _draw_broken_arc_segment(painter: QPainter, start: QPointF, end: QPointF, center: QPointF, radius: float, pen: QPen, style=None):
         """Отрисовывает гладкую дугу для ломаного стиля (скругления без заломов)"""
         import math
         from PySide6.QtGui import QPainterPath
@@ -2000,7 +2091,7 @@ class PrimitiveRenderer:
         painter.restore()
     
     @staticmethod
-    def _draw_wavy_ellipse(painter: QPainter, ellipse, pen: QPen):
+    def _draw_wavy_ellipse(painter: QPainter, ellipse, pen: QPen, style=None):
         """Отрисовывает волнистый эллипс (как отрезок, скрученный в эллипс) с учетом поворота"""
         import math
         from PySide6.QtGui import QPainterPath, QTransform
@@ -2033,11 +2124,17 @@ class PrimitiveRenderer:
             painter.restore()
             return
         
-        # Используем тот же алгоритм, что и для отрезков
-        main_thickness_mm = 0.8
-        line_thickness_mm = pen.widthF() * 25.4 / 96
-        amplitude_mm = (main_thickness_mm / 2.5) * (line_thickness_mm / 0.4)
-        amplitude_px = (amplitude_mm * 96) / 25.4
+        # Амплитуда волны - используем из стиля, если доступна
+        if style and hasattr(style, 'wavy_amplitude_mm'):
+            amplitude_mm = style.wavy_amplitude_mm
+        else:
+            # Автоматический расчет по ГОСТ
+            main_thickness_mm = 0.8
+            line_thickness_mm = pen.widthF() * 25.4 / 96
+            amplitude_mm = (main_thickness_mm / 2.5) * (line_thickness_mm / 0.4)
+        
+        dpi = 96
+        amplitude_px = (amplitude_mm * dpi) / 25.4
         
         wave_length_px = amplitude_px * 5
         num_waves = max(1, int(circumference / wave_length_px))
@@ -2086,8 +2183,8 @@ class PrimitiveRenderer:
         painter.restore()
     
     @staticmethod
-    def _draw_broken_ellipse(painter: QPainter, ellipse, pen: QPen):
-        """Отрисовывает эллипс с одним зигзагом с учетом поворота"""
+    def _draw_broken_ellipse(painter: QPainter, ellipse, pen: QPen, style=None):
+        """Отрисовывает эллипс с зигзагами с учетом поворота"""
         import math
         from PySide6.QtGui import QPainterPath, QTransform
         from PySide6.QtCore import QPointF
@@ -2119,21 +2216,38 @@ class PrimitiveRenderer:
             painter.restore()
             return
         
+        # Количество зигзагов и шаг из стиля
+        zigzag_count = style.zigzag_count if style and hasattr(style, 'zigzag_count') else 1
+        zigzag_count = max(1, int(zigzag_count))
+        zigzag_step_mm = style.zigzag_step_mm if style and hasattr(style, 'zigzag_step_mm') else 4.0
+        
         # Параметры зигзага
         zigzag_height_mm = 3.5
         zigzag_width_mm = 4.0
         dpi = 96
         zigzag_height = (zigzag_height_mm * dpi) / 25.4
-        zigzag_length = (zigzag_width_mm * dpi) / 25.4
+        zigzag_length_single = (zigzag_width_mm * dpi) / 25.4
+        zigzag_step = (zigzag_step_mm * dpi) / 25.4
         
-        # Конвертируем длину зигзага в угол
-        zigzag_angle = (zigzag_length / circumference) * 2 * math.pi
-        if zigzag_angle > math.pi * 0.8:
-            zigzag_angle = math.pi * 0.8
+        # Общая длина области зигзагов
+        total_zigzag_length = zigzag_length_single * zigzag_count + zigzag_step * (zigzag_count - 1)
         
-        # Угол начала зигзага (в середине эллипса)
-        start_zigzag_angle = math.pi - zigzag_angle / 2
-        end_zigzag_angle = math.pi + zigzag_angle / 2
+        # Конвертируем в углы
+        total_zigzag_angle = (total_zigzag_length / circumference) * 2 * math.pi
+        if total_zigzag_angle > math.pi * 0.9:
+            total_zigzag_angle = math.pi * 0.9
+            if zigzag_count > 1:
+                max_length = circumference * 0.9
+                zigzag_step = (max_length - zigzag_length_single * zigzag_count) / (zigzag_count - 1)
+                zigzag_step = max(zigzag_step, zigzag_length_single * 0.5)
+                total_zigzag_length = zigzag_length_single * zigzag_count + zigzag_step * (zigzag_count - 1)
+                total_zigzag_angle = (total_zigzag_length / circumference) * 2 * math.pi
+        
+        zigzag_length_single_angle = (zigzag_length_single / circumference) * 2 * math.pi
+        zigzag_step_angle = (zigzag_step / circumference) * 2 * math.pi
+        
+        # Угол начала зигзагов (равномерно распределяем по эллипсу)
+        start_zigzag_angle = math.pi - total_zigzag_angle / 2
         
         path = QPainterPath()
         
@@ -2148,13 +2262,7 @@ class PrimitiveRenderer:
             else:
                 path.lineTo(x, y)
         
-        # Рисуем зигзаг
-        zigzag_start_angle = start_zigzag_angle
-        zigzag_mid1_angle = start_zigzag_angle + zigzag_angle / 3
-        zigzag_mid2_angle = start_zigzag_angle + 2 * zigzag_angle / 3
-        zigzag_end_angle = end_zigzag_angle
-        
-        # Вычисляем нормали для зигзага
+        # Вычисляем нормали для зигзагов
         def get_normal(angle):
             normal_x = b * math.cos(angle)
             normal_y = a * math.sin(angle)
@@ -2163,35 +2271,59 @@ class PrimitiveRenderer:
                 return normal_x / normal_length, normal_y / normal_length
             return math.cos(angle), math.sin(angle)
         
-        # Точка начала зигзага
-        p1 = QPointF(
-            center_offset.x() + ellipse.radius_x * math.cos(zigzag_start_angle),
-            center_offset.y() + ellipse.radius_y * math.sin(zigzag_start_angle)
-        )
-        path.lineTo(p1)
+        # Рисуем все зигзаги с шагом между ними
+        current_angle = start_zigzag_angle
+        for z in range(zigzag_count):
+            # Углы для текущего зигзага
+            zigzag_start_angle = current_angle
+            zigzag_mid1_angle = current_angle + zigzag_length_single_angle / 3
+            zigzag_mid2_angle = current_angle + 2 * zigzag_length_single_angle / 3
+            zigzag_end_angle = current_angle + zigzag_length_single_angle
+            
+            # Точка начала зигзага
+            p1 = QPointF(
+                center_offset.x() + ellipse.radius_x * math.cos(zigzag_start_angle),
+                center_offset.y() + ellipse.radius_y * math.sin(zigzag_start_angle)
+            )
+            path.lineTo(p1)
+            
+            # Первая точка зигзага (вверх)
+            norm1_x, norm1_y = get_normal(zigzag_mid1_angle)
+            p2 = QPointF(
+                center_offset.x() + ellipse.radius_x * math.cos(zigzag_mid1_angle) + (zigzag_height / 2) * norm1_x,
+                center_offset.y() + ellipse.radius_y * math.sin(zigzag_mid1_angle) + (zigzag_height / 2) * norm1_y
+            )
+            path.lineTo(p2)
+            
+            # Вторая точка зигзага (вниз)
+            norm2_x, norm2_y = get_normal(zigzag_mid2_angle)
+            p3 = QPointF(
+                center_offset.x() + ellipse.radius_x * math.cos(zigzag_mid2_angle) - zigzag_height * norm2_x,
+                center_offset.y() + ellipse.radius_y * math.sin(zigzag_mid2_angle) - zigzag_height * norm2_y
+            )
+            path.lineTo(p3)
+            
+            # Конец зигзага
+            p4 = QPointF(
+                center_offset.x() + ellipse.radius_x * math.cos(zigzag_end_angle),
+                center_offset.y() + ellipse.radius_y * math.sin(zigzag_end_angle)
+            )
+            path.lineTo(p4)
+            
+            # Если это не последний зигзаг, добавляем шаг (прямой участок эллипса)
+            if z < zigzag_count - 1:
+                current_angle = zigzag_end_angle + zigzag_step_angle
+                # Рисуем прямой участок эллипса между зигзагами
+                num_points_step = max(5, int(zigzag_step_angle / (2 * math.pi) * 20))
+                for i in range(1, num_points_step + 1):
+                    angle = zigzag_end_angle + (zigzag_step_angle * i / num_points_step)
+                    x = center_offset.x() + ellipse.radius_x * math.cos(angle)
+                    y = center_offset.y() + ellipse.radius_y * math.sin(angle)
+                    path.lineTo(x, y)
+            else:
+                current_angle = zigzag_end_angle
         
-        # Первая точка зигзага (вверх)
-        norm1_x, norm1_y = get_normal(zigzag_mid1_angle)
-        p2 = QPointF(
-            center_offset.x() + ellipse.radius_x * math.cos(zigzag_mid1_angle) + (zigzag_height / 2) * norm1_x,
-            center_offset.y() + ellipse.radius_y * math.sin(zigzag_mid1_angle) + (zigzag_height / 2) * norm1_y
-        )
-        path.lineTo(p2)
-        
-        # Вторая точка зигзага (вниз)
-        norm2_x, norm2_y = get_normal(zigzag_mid2_angle)
-        p3 = QPointF(
-            center_offset.x() + ellipse.radius_x * math.cos(zigzag_mid2_angle) - zigzag_height * norm2_x,
-            center_offset.y() + ellipse.radius_y * math.sin(zigzag_mid2_angle) - zigzag_height * norm2_y
-        )
-        path.lineTo(p3)
-        
-        # Конец зигзага
-        p4 = QPointF(
-            center_offset.x() + ellipse.radius_x * math.cos(zigzag_end_angle),
-            center_offset.y() + ellipse.radius_y * math.sin(zigzag_end_angle)
-        )
-        path.lineTo(p4)
+        end_zigzag_angle = current_angle
         
         # Рисуем оставшуюся часть эллипса
         remaining_angle = 2 * math.pi - end_zigzag_angle
@@ -2389,7 +2521,7 @@ class PrimitiveRenderer:
     
     # Методы специальной отрисовки для дуг
     @staticmethod
-    def _draw_wavy_arc(painter: QPainter, arc, pen: QPen):
+    def _draw_wavy_arc(painter: QPainter, arc, pen: QPen, style=None):
         """Отрисовывает волнистую дугу эллипса с учетом поворота"""
         import math
         from PySide6.QtGui import QPainterPath, QTransform
@@ -2421,11 +2553,17 @@ class PrimitiveRenderer:
             painter.restore()
             return
         
-        # Используем тот же алгоритм, что и для отрезков
-        main_thickness_mm = 0.8
-        line_thickness_mm = pen.widthF() * 25.4 / 96
-        amplitude_mm = (main_thickness_mm / 2.5) * (line_thickness_mm / 0.4)
-        amplitude_px = (amplitude_mm * 96) / 25.4
+        # Амплитуда волны - используем из стиля, если доступна
+        if style and hasattr(style, 'wavy_amplitude_mm'):
+            amplitude_mm = style.wavy_amplitude_mm
+        else:
+            # Автоматический расчет по ГОСТ
+            main_thickness_mm = 0.8
+            line_thickness_mm = pen.widthF() * 25.4 / 96
+            amplitude_mm = (main_thickness_mm / 2.5) * (line_thickness_mm / 0.4)
+        
+        dpi = 96
+        amplitude_px = (amplitude_mm * dpi) / 25.4
         
         wave_length_px = amplitude_px * 5
         num_waves = max(1, int(arc_length / wave_length_px))
@@ -2476,8 +2614,8 @@ class PrimitiveRenderer:
         painter.restore()
     
     @staticmethod
-    def _draw_broken_arc(painter: QPainter, arc, pen: QPen):
-        """Отрисовывает дугу эллипса с одним зигзагом с учетом поворота"""
+    def _draw_broken_arc(painter: QPainter, arc, pen: QPen, style=None):
+        """Отрисовывает дугу эллипса с зигзагами с учетом поворота"""
         import math
         from PySide6.QtGui import QPainterPath, QTransform
         
@@ -2506,26 +2644,41 @@ class PrimitiveRenderer:
             painter.restore()
             return
         
+        # Количество зигзагов и шаг из стиля
+        zigzag_count = style.zigzag_count if style and hasattr(style, 'zigzag_count') else 1
+        zigzag_count = max(1, int(zigzag_count))
+        zigzag_step_mm = style.zigzag_step_mm if style and hasattr(style, 'zigzag_step_mm') else 4.0
+        
         # Параметры зигзага
         zigzag_height_mm = 3.5
         zigzag_width_mm = 4.0
         dpi = 96
         zigzag_height = (zigzag_height_mm * dpi) / 25.4
-        zigzag_length = (zigzag_width_mm * dpi) / 25.4
+        zigzag_length_single = (zigzag_width_mm * dpi) / 25.4
+        zigzag_step = (zigzag_step_mm * dpi) / 25.4
         
-        # Конвертируем длину зигзага в параметрический угол (используем абсолютное значение)
-        zigzag_angle_abs = (zigzag_length / arc_length) * angle_span
-        if zigzag_angle_abs > angle_span * 0.8:
-            zigzag_angle_abs = angle_span * 0.8
+        # Общая длина области зигзагов
+        total_zigzag_length = zigzag_length_single * zigzag_count + zigzag_step * (zigzag_count - 1)
         
-        # Угол начала зигзага (в середине дуги)
-        # Вычисляем середину с учетом направления
-        # Инвертируем направление для ломаной дуги
+        # Ограничиваем общую длину зигзагов
+        if total_zigzag_length > arc_length * 0.9:
+            max_length = arc_length * 0.9
+            if zigzag_count > 1:
+                zigzag_step = (max_length - zigzag_length_single * zigzag_count) / (zigzag_count - 1)
+                zigzag_step = max(zigzag_step, zigzag_length_single * 0.5)
+                total_zigzag_length = zigzag_length_single * zigzag_count + zigzag_step * (zigzag_count - 1)
+        
+        # Конвертируем длину в параметрический угол
+        total_zigzag_angle_abs = (total_zigzag_length / arc_length) * angle_span
+        if total_zigzag_angle_abs > angle_span * 0.9:
+            total_zigzag_angle_abs = angle_span * 0.9
+        
+        zigzag_length_single_angle = (zigzag_length_single / arc_length) * angle_span
+        zigzag_step_angle = (zigzag_step / arc_length) * angle_span
+        
+        # Угол начала зигзагов (в середине дуги)
         mid_angle = arc.start_angle + (-span_angle_deg) / 2
-        # Используем инвертированный span_angle_deg для определения направления зигзага
-        zigzag_angle = (zigzag_angle_abs / angle_span) * (-span_angle_deg) if angle_span > 0 else 0
-        start_zigzag_angle = mid_angle - zigzag_angle / 2
-        end_zigzag_angle = mid_angle + zigzag_angle / 2
+        start_zigzag_angle = mid_angle - (total_zigzag_angle_abs / angle_span) * (-span_angle_deg) / 2
         
         path = QPainterPath()
         
@@ -2545,17 +2698,7 @@ class PrimitiveRenderer:
                 else:
                     path.lineTo(x, y)
         
-        # Рисуем зигзаг
-        zigzag_start_angle = start_zigzag_angle
-        zigzag_mid1_angle = start_zigzag_angle + zigzag_angle / 3
-        zigzag_mid2_angle = start_zigzag_angle + 2 * zigzag_angle / 3
-        zigzag_end_angle = end_zigzag_angle
-        
-        # Вычисляем нормали для зигзага
-        # Используем вектор от центра к точке на эллипсе как направление нормали
-        # Это гарантирует, что нормаль всегда направлена наружу от эллипса
-        zigzag_offset_sign = 1
-        
+        # Вычисляем нормали для зигзагов
         def get_normal(param_angle_rad):
             base_x = arc.radius_x * math.cos(param_angle_rad)
             base_y = arc.radius_y * math.sin(param_angle_rad)
@@ -2566,37 +2709,63 @@ class PrimitiveRenderer:
                 return normal_x, normal_y
             return math.cos(param_angle_rad), math.sin(param_angle_rad)
         
-        # Точка начала зигзага
-        t1 = math.radians(zigzag_start_angle)
-        p1 = QPointF(arc.radius_x * math.cos(t1), arc.radius_y * math.sin(t1))
-        path.lineTo(p1)
+        zigzag_offset_sign = 1
         
-        # Первая точка зигзага (вверх)
-        t2 = math.radians(zigzag_mid1_angle)
-        norm1_x, norm1_y = get_normal(t2)
-        p2 = QPointF(
-            arc.radius_x * math.cos(t2) + (zigzag_height / 2) * norm1_x * zigzag_offset_sign,
-            arc.radius_y * math.sin(t2) + (zigzag_height / 2) * norm1_y * zigzag_offset_sign
-        )
-        path.lineTo(p2)
+        # Рисуем все зигзаги с шагом между ними
+        current_angle = start_zigzag_angle
+        for z in range(zigzag_count):
+            # Углы для текущего зигзага
+            zigzag_start_angle = current_angle
+            zigzag_mid1_angle = current_angle + (zigzag_length_single_angle / angle_span) * (-span_angle_deg) / 3
+            zigzag_mid2_angle = current_angle + 2 * (zigzag_length_single_angle / angle_span) * (-span_angle_deg) / 3
+            zigzag_end_angle = current_angle + (zigzag_length_single_angle / angle_span) * (-span_angle_deg)
+            
+            # Точка начала зигзага
+            t1 = math.radians(zigzag_start_angle)
+            p1 = QPointF(arc.radius_x * math.cos(t1), arc.radius_y * math.sin(t1))
+            path.lineTo(p1)
+            
+            # Первая точка зигзага (вверх)
+            t2 = math.radians(zigzag_mid1_angle)
+            norm1_x, norm1_y = get_normal(t2)
+            p2 = QPointF(
+                arc.radius_x * math.cos(t2) + (zigzag_height / 2) * norm1_x * zigzag_offset_sign,
+                arc.radius_y * math.sin(t2) + (zigzag_height / 2) * norm1_y * zigzag_offset_sign
+            )
+            path.lineTo(p2)
+            
+            # Вторая точка зигзага (вниз)
+            t3 = math.radians(zigzag_mid2_angle)
+            norm2_x, norm2_y = get_normal(t3)
+            p3 = QPointF(
+                arc.radius_x * math.cos(t3) - zigzag_height * norm2_x * zigzag_offset_sign,
+                arc.radius_y * math.sin(t3) - zigzag_height * norm2_y * zigzag_offset_sign
+            )
+            path.lineTo(p3)
+            
+            # Конец зигзага
+            t4 = math.radians(zigzag_end_angle)
+            p4 = QPointF(arc.radius_x * math.cos(t4), arc.radius_y * math.sin(t4))
+            path.lineTo(p4)
+            
+            # Если это не последний зигзаг, добавляем шаг (прямой участок дуги)
+            if z < zigzag_count - 1:
+                current_angle = zigzag_end_angle + (zigzag_step_angle / angle_span) * (-span_angle_deg)
+                # Рисуем прямой участок дуги между зигзагами
+                num_points_step = max(5, int(abs(zigzag_step_angle) / angle_span * 20))
+                for i in range(1, num_points_step + 1):
+                    param_angle_deg = zigzag_end_angle + (zigzag_step_angle / angle_span) * (-span_angle_deg) * i / num_points_step
+                    param_angle_rad = math.radians(param_angle_deg)
+                    x = arc.radius_x * math.cos(param_angle_rad)
+                    y = arc.radius_y * math.sin(param_angle_rad)
+                    path.lineTo(x, y)
+            else:
+                current_angle = zigzag_end_angle
         
-        # Вторая точка зигзага (вниз)
-        t3 = math.radians(zigzag_mid2_angle)
-        norm2_x, norm2_y = get_normal(t3)
-        p3 = QPointF(
-            arc.radius_x * math.cos(t3) - zigzag_height * norm2_x * zigzag_offset_sign,
-            arc.radius_y * math.sin(t3) - zigzag_height * norm2_y * zigzag_offset_sign
-        )
-        path.lineTo(p3)
-        
-        # Конец зигзага
-        t4 = math.radians(zigzag_end_angle)
-        p4 = QPointF(arc.radius_x * math.cos(t4), arc.radius_y * math.sin(t4))
-        path.lineTo(p4)
+        end_zigzag_angle = current_angle
         
         # Рисуем оставшуюся часть дуги
-        # Вычисляем разность углов от конца зигзага до конца дуги
-        # Используем исходное направление (span_angle_deg) для второй части
+        # Вычисляем разность углов от конца зигзагов до конца дуги
         angle_diff = arc.end_angle - end_zigzag_angle
         
         # Нормализуем разность углов
@@ -2846,7 +3015,7 @@ class PrimitiveRenderer:
     
     # Методы специальной отрисовки для многоугольников
     @staticmethod
-    def _draw_wavy_polygon(painter: QPainter, polygon, pen: QPen):
+    def _draw_wavy_polygon(painter: QPainter, polygon, pen: QPen, style=None):
         """Отрисовывает волнистый многоугольник"""
         vertices = polygon.get_vertices()
         if len(vertices) < 3:
@@ -2856,10 +3025,10 @@ class PrimitiveRenderer:
         for i in range(len(vertices)):
             start = vertices[i]
             end = vertices[(i + 1) % len(vertices)]
-            LineRenderer._draw_wavy_line(painter, start, end, pen)
+            LineRenderer._draw_wavy_line(painter, start, end, pen, style)
     
     @staticmethod
-    def _draw_broken_polygon(painter: QPainter, polygon, pen: QPen):
+    def _draw_broken_polygon(painter: QPainter, polygon, pen: QPen, style=None):
         """Отрисовывает многоугольник с изломами"""
         vertices = polygon.get_vertices()
         if len(vertices) < 3:
@@ -2869,7 +3038,7 @@ class PrimitiveRenderer:
         for i in range(len(vertices)):
             start = vertices[i]
             end = vertices[(i + 1) % len(vertices)]
-            LineRenderer._draw_broken_line(painter, start, end, pen)
+            LineRenderer._draw_broken_line(painter, start, end, pen, style)
     
     @staticmethod
     def _draw_dashed_polygon(painter: QPainter, polygon, pen: QPen, style):
@@ -2919,9 +3088,9 @@ class PrimitiveRenderer:
             
             # Для специальных типов линий используем специальную отрисовку
             if line_type == LineType.SOLID_WAVY:
-                PrimitiveRenderer._draw_wavy_spline(painter, spline, pen, scale_factor)
+                PrimitiveRenderer._draw_wavy_spline(painter, spline, pen, scale_factor, spline.style)
             elif line_type == LineType.SOLID_THIN_BROKEN:
-                PrimitiveRenderer._draw_broken_spline(painter, spline, pen)
+                PrimitiveRenderer._draw_broken_spline(painter, spline, pen, spline.style)
             elif line_type == LineType.DASHED:
                 PrimitiveRenderer._draw_dashed_spline(painter, spline, pen, spline.style)
             elif line_type in [LineType.DASH_DOT_THICK, LineType.DASH_DOT_THIN, LineType.DASH_DOT_TWO_DOTS]:
@@ -2959,7 +3128,7 @@ class PrimitiveRenderer:
     
     # Методы специальной отрисовки для сплайнов
     @staticmethod
-    def _draw_wavy_spline(painter: QPainter, spline, pen: QPen, scale_factor: float = 1.0):
+    def _draw_wavy_spline(painter: QPainter, spline, pen: QPen, scale_factor: float = 1.0, style=None):
         """Отрисовывает волнистый сплайн вдоль кривой"""
         import math
         from PySide6.QtGui import QPainterPath
@@ -2967,11 +3136,17 @@ class PrimitiveRenderer:
         if len(spline.control_points) < 2:
             return
         
-        # Параметры волны (вычисляем до расчета точек для правильного масштабирования)
-        main_thickness_mm = 0.8
-        line_thickness_mm = pen.widthF() * 25.4 / 96
-        amplitude_mm = (main_thickness_mm / 2.5) * (line_thickness_mm / 0.4)
-        amplitude_px = (amplitude_mm * 96) / 25.4
+        # Амплитуда волны - используем из стиля, если доступна
+        if style and hasattr(style, 'wavy_amplitude_mm'):
+            amplitude_mm = style.wavy_amplitude_mm
+        else:
+            # Автоматический расчет по ГОСТ
+            main_thickness_mm = 0.8
+            line_thickness_mm = pen.widthF() * 25.4 / 96
+            amplitude_mm = (main_thickness_mm / 2.5) * (line_thickness_mm / 0.4)
+        
+        dpi = 96
+        amplitude_px = (amplitude_mm * dpi) / 25.4
         
         # Используем фиксированную длину волны в пикселях для равномерного распределения
         wave_length_px = amplitude_px * 5
@@ -3089,7 +3264,7 @@ class PrimitiveRenderer:
         painter.drawPath(path)
     
     @staticmethod
-    def _draw_broken_spline(painter: QPainter, spline, pen: QPen):
+    def _draw_broken_spline(painter: QPainter, spline, pen: QPen, style=None):
         """Отрисовывает сплайн с изломами вдоль кривой"""
         import math
         from PySide6.QtGui import QPainterPath
@@ -3121,17 +3296,35 @@ class PrimitiveRenderer:
         if total_length < 1:
             return
         
+        # Количество зигзагов и шаг из стиля
+        zigzag_count = style.zigzag_count if style and hasattr(style, 'zigzag_count') else 1
+        zigzag_count = max(1, int(zigzag_count))
+        zigzag_step_mm = style.zigzag_step_mm if style and hasattr(style, 'zigzag_step_mm') else 4.0
+        
         # Параметры зигзага
         zigzag_height_mm = 3.5
         zigzag_width_mm = 4.0
         dpi = 96
         zigzag_height = (zigzag_height_mm * dpi) / 25.4
-        zigzag_length = (zigzag_width_mm * dpi) / 25.4
+        zigzag_length_single = (zigzag_width_mm * dpi) / 25.4
+        zigzag_step = (zigzag_step_mm * dpi) / 25.4
         
-        if zigzag_length > total_length * 0.8:
-            zigzag_length = total_length * 0.8
+        # Общая длина области зигзагов (в миллиметрах)
+        total_zigzag_length_mm = zigzag_length_single * zigzag_count + zigzag_step * (zigzag_count - 1)
         
-        straight_length = (total_length - zigzag_length) / 2
+        # Конвертируем в единицы дуги сплайна (используем масштаб 1:1 для сплайнов)
+        # Для сплайнов длина уже в мировых координатах, поэтому используем напрямую
+        total_zigzag_length = total_zigzag_length_mm
+        
+        # Ограничиваем общую длину зигзагов
+        if total_zigzag_length > total_length * 0.9:
+            max_length = total_length * 0.9
+            if zigzag_count > 1:
+                zigzag_step = (max_length - zigzag_length_single * zigzag_count) / (zigzag_count - 1)
+                zigzag_step = max(zigzag_step, zigzag_length_single * 0.5)
+                total_zigzag_length = zigzag_length_single * zigzag_count + zigzag_step * (zigzag_count - 1)
+        
+        straight_length = (total_length - total_zigzag_length) / 2
         
         # Строим путь с зигзагом
         path = QPainterPath()
@@ -3155,28 +3348,67 @@ class PrimitiveRenderer:
         for i in range(1, zigzag_start_idx + 1):
             path.lineTo(points[i])
         
-        # Рисуем зигзаг
+        # Рисуем все зигзаги с шагом между ними
         if zigzag_start_idx < zigzag_end_idx:
             zigzag_segment_length = arc_lengths[zigzag_end_idx] - arc_lengths[zigzag_start_idx]
             if zigzag_segment_length > 0:
-                num_zigzag_segments = 3
-                segment_arc_length = zigzag_segment_length / num_zigzag_segments
+                # Используем фактические значения длины зигзага и шага
+                # Они уже в правильных единицах (миллиметры, которые соответствуют единицам дуги)
+                zigzag_length_single_arc = zigzag_length_single
+                zigzag_step_arc = zigzag_step
                 
-                for seg in range(1, num_zigzag_segments + 1):
-                    target_arc = arc_lengths[zigzag_start_idx] + seg * segment_arc_length
+                current_arc_pos = arc_lengths[zigzag_start_idx]
+                
+                for z in range(zigzag_count):
+                    # Начало зигзага
+                    zigzag_start_arc = current_arc_pos
+                    zigzag_mid1_arc = current_arc_pos + zigzag_length_single_arc / 3
+                    zigzag_mid2_arc = current_arc_pos + 2 * zigzag_length_single_arc / 3
+                    zigzag_end_arc = current_arc_pos + zigzag_length_single_arc
                     
-                    # Находим точку на кривой для этого значения дуги
-                    target_idx = zigzag_start_idx
-                    for i in range(zigzag_start_idx, min(zigzag_end_idx + 1, len(arc_lengths))):
-                        if arc_lengths[i] >= target_arc:
-                            target_idx = i
-                            break
+                    # Получаем точки на кривой для зигзага
+                    def get_point_at_arc(arc_pos):
+                        """Находит точку на кривой для заданной длины дуги"""
+                        if arc_pos <= 0:
+                            return points[0]
+                        if arc_pos >= total_length:
+                            return points[-1]
+                        
+                        # Находим индекс точки
+                        idx = 0
+                        for i in range(len(arc_lengths)):
+                            if arc_lengths[i] >= arc_pos:
+                                idx = i
+                                break
+                        
+                        if idx > 0:
+                            # Интерполируем между точками
+                            t = (arc_pos - arc_lengths[idx-1]) / (arc_lengths[idx] - arc_lengths[idx-1]) if arc_lengths[idx] > arc_lengths[idx-1] else 0
+                            return QPointF(
+                                points[idx-1].x() + t * (points[idx].x() - points[idx-1].x()),
+                                points[idx-1].y() + t * (points[idx].y() - points[idx-1].y())
+                            )
+                        return points[idx]
                     
-                    if target_idx < len(points):
-                        # Вычисляем перпендикулярное направление
-                        if target_idx > 0 and target_idx < len(points) - 1:
-                            dx1 = points[target_idx].x() - points[target_idx-1].x()
-                            dy1 = points[target_idx].y() - points[target_idx-1].y()
+                    def get_perpendicular_at_arc(arc_pos):
+                        """Вычисляет перпендикулярное направление в точке на кривой по длине дуги"""
+                        # Находим индекс точки для данной длины дуги
+                        idx = 0
+                        for i in range(len(arc_lengths)):
+                            if arc_lengths[i] >= arc_pos:
+                                idx = i
+                                break
+                        
+                        # Вычисляем направление касательной
+                        if idx > 0 and idx < len(points):
+                            # Используем направление между предыдущей и следующей точками
+                            if idx < len(points) - 1:
+                                dx1 = points[idx+1].x() - points[idx-1].x()
+                                dy1 = points[idx+1].y() - points[idx-1].y()
+                            else:
+                                dx1 = points[idx].x() - points[idx-1].x()
+                                dy1 = points[idx].y() - points[idx-1].y()
+                            
                             len1 = math.sqrt(dx1*dx1 + dy1*dy1)
                             if len1 > 0.001:
                                 perp_cos = -dy1 / len1
@@ -3188,13 +3420,45 @@ class PrimitiveRenderer:
                             perp_cos = 0
                             perp_sin = 1
                         
-                        # Применяем смещение для зигзага
-                        offset = (zigzag_height / 2) if seg % 2 == 1 else (-zigzag_height / 2)
-                        zigzag_point = QPointF(
-                            points[target_idx].x() + offset * perp_cos,
-                            points[target_idx].y() + offset * perp_sin
-                        )
-                        path.lineTo(zigzag_point)
+                        return perp_cos, perp_sin
+                    
+                    # Точка начала зигзага
+                    p1 = get_point_at_arc(zigzag_start_arc)
+                    path.lineTo(p1)
+                    
+                    # Первая точка зигзага (вверх)
+                    p2_base = get_point_at_arc(zigzag_mid1_arc)
+                    perp_cos, perp_sin = get_perpendicular_at_arc(zigzag_mid1_arc)
+                    p2 = QPointF(
+                        p2_base.x() + (zigzag_height / 2) * perp_cos,
+                        p2_base.y() + (zigzag_height / 2) * perp_sin
+                    )
+                    path.lineTo(p2)
+                    
+                    # Вторая точка зигзага (вниз)
+                    p3_base = get_point_at_arc(zigzag_mid2_arc)
+                    perp_cos, perp_sin = get_perpendicular_at_arc(zigzag_mid2_arc)
+                    p3 = QPointF(
+                        p3_base.x() - zigzag_height * perp_cos,
+                        p3_base.y() - zigzag_height * perp_sin
+                    )
+                    path.lineTo(p3)
+                    
+                    # Конец зигзага
+                    p4 = get_point_at_arc(zigzag_end_arc)
+                    path.lineTo(p4)
+                    
+                    # Если это не последний зигзаг, добавляем шаг (прямой участок)
+                    if z < zigzag_count - 1:
+                        current_arc_pos = zigzag_end_arc + zigzag_step_arc
+                        # Рисуем прямой участок между зигзагами
+                        num_step_points = max(5, int(zigzag_step_arc / total_length * 20))
+                        for i in range(1, num_step_points + 1):
+                            step_arc = zigzag_end_arc + (zigzag_step_arc * i / num_step_points)
+                            step_point = get_point_at_arc(step_arc)
+                            path.lineTo(step_point)
+                    else:
+                        current_arc_pos = zigzag_end_arc
         
         # Рисуем от конца зигзага до конца
         for i in range(zigzag_end_idx + 1, len(points)):

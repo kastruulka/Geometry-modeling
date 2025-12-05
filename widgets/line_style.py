@@ -23,7 +23,7 @@ class LineStyle(QObject):
     style_changed = Signal()  # Сигнал при изменении стиля
     
     def __init__(self, name, line_type, thickness_mm=0.8, dash_length=5.0, dash_gap=2.5, 
-                 is_gost_base=False, parent=None):
+                 is_gost_base=False, zigzag_count=1, zigzag_step_mm=4.0, wavy_amplitude_mm=None, parent=None):
         super().__init__(parent)
         self._name = name
         self._line_type = line_type
@@ -32,6 +32,15 @@ class LineStyle(QObject):
         self._dash_gap = dash_gap  # Расстояние между штрихами
         self._is_gost_base = is_gost_base  # Базовый стиль ГОСТ (нельзя удалять/переименовывать)
         self._color = QColor(0, 0, 0)  # Цвет линии
+        self._zigzag_count = zigzag_count  # Количество зигзагов для ломаной линии
+        self._zigzag_step_mm = zigzag_step_mm  # Шаг между зигзагами в миллиметрах
+        # Амплитуда волнистой линии в миллиметрах (None означает автоматический расчет)
+        if wavy_amplitude_mm is None:
+            # Автоматический расчет на основе толщины линии
+            main_thickness_mm = 0.8
+            self._wavy_amplitude_mm = (main_thickness_mm / 2.5) * (thickness_mm / 0.4)
+        else:
+            self._wavy_amplitude_mm = wavy_amplitude_mm
         
         # Объекты, использующие этот стиль
         self._objects = set()
@@ -110,6 +119,45 @@ class LineStyle(QObject):
             self.style_changed.emit()
             self._notify_objects()
     
+    @property
+    def zigzag_count(self):
+        return self._zigzag_count
+    
+    @zigzag_count.setter
+    def zigzag_count(self, value):
+        if value < 1:
+            raise ValueError("Количество зигзагов должно быть не менее 1")
+        if value != self._zigzag_count:
+            self._zigzag_count = value
+            self.style_changed.emit()
+            self._notify_objects()
+    
+    @property
+    def zigzag_step_mm(self):
+        return self._zigzag_step_mm
+    
+    @zigzag_step_mm.setter
+    def zigzag_step_mm(self, value):
+        if value <= 0:
+            raise ValueError("Шаг между зигзагами должен быть больше 0")
+        if value != self._zigzag_step_mm:
+            self._zigzag_step_mm = value
+            self.style_changed.emit()
+            self._notify_objects()
+    
+    @property
+    def wavy_amplitude_mm(self):
+        return self._wavy_amplitude_mm
+    
+    @wavy_amplitude_mm.setter
+    def wavy_amplitude_mm(self, value):
+        if value <= 0:
+            raise ValueError("Амплитуда должна быть больше 0")
+        if value != self._wavy_amplitude_mm:
+            self._wavy_amplitude_mm = value
+            self.style_changed.emit()
+            self._notify_objects()
+    
     def register_object(self, obj):
         """Регистрирует объект, использующий этот стиль"""
         self._objects.add(obj)
@@ -172,7 +220,10 @@ class LineStyle(QObject):
             thickness_mm=self._thickness_mm,
             dash_length=self._dash_length,
             dash_gap=self._dash_gap,
-            is_gost_base=False
+            is_gost_base=False,
+            zigzag_count=self._zigzag_count,
+            zigzag_step_mm=self._zigzag_step_mm,
+            wavy_amplitude_mm=self._wavy_amplitude_mm
         )
 
 
