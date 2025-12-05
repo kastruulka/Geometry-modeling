@@ -168,7 +168,8 @@ class Scene:
     
     def get_objects(self) -> List[GeometricObject]:
         """Возвращает все объекты на сцене"""
-        return self._objects.copy()
+        objects = self._objects.copy()
+        return objects
     
     def get_lines(self) -> List[LineSegment]:
         """Возвращает все отрезки на сцене"""

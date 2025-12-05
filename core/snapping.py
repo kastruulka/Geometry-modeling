@@ -451,6 +451,12 @@ class SnapManager:
         intersection_snap_points = []
         seen_intersections = set()  # Для избежания дубликатов
         
+        # Проверяем, что у нас есть хотя бы 2 объекта
+        if len(objects) < 2:
+            return intersection_snap_points
+        
+        total_intersections_found = 0
+        
         for i, obj1 in enumerate(objects):
             if exclude_object and obj1 is exclude_object:
                 continue
@@ -460,7 +466,12 @@ class SnapManager:
                     continue
                 
                 # Вычисляем пересечения между obj1 и obj2
+                obj1_type = type(obj1).__name__
+                obj2_type = type(obj2).__name__
                 intersections = self._find_object_intersections(obj1, obj2)
+                
+                if intersections:
+                    total_intersections_found += len(intersections)
                 
                 for intersection in intersections:
                     # Проверяем, не дубликат ли это (с учетом небольшой погрешности)
@@ -472,7 +483,6 @@ class SnapManager:
                         intersection_snap_points.append(
                             SnapPoint(intersection, SnapType.INTERSECTION, obj1)
                         )
-        
         return intersection_snap_points
     
     def _find_object_intersections(self, obj1: GeometricObject, 
@@ -520,13 +530,15 @@ class SnapManager:
         
         # Отрезок с эллипсом
         elif isinstance(obj1, LineSegment) and isinstance(obj2, Ellipse):
-            intersections.extend(self._line_ellipse_intersection(
+            line_ellipse_inters = self._line_ellipse_intersection(
                 obj1.start_point, obj1.end_point, obj2
-            ))
+            )
+            intersections.extend(line_ellipse_inters)
         elif isinstance(obj1, Ellipse) and isinstance(obj2, LineSegment):
-            intersections.extend(self._line_ellipse_intersection(
+            ellipse_line_inters = self._line_ellipse_intersection(
                 obj2.start_point, obj2.end_point, obj1
-            ))
+            )
+            intersections.extend(ellipse_line_inters)
         
         # Отрезок с прямоугольником
         elif isinstance(obj1, LineSegment) and isinstance(obj2, Rectangle):
@@ -624,7 +636,19 @@ class SnapManager:
         # Эллипс с эллипсом (приближенно)
         elif isinstance(obj1, (Arc, Ellipse)) and isinstance(obj2, (Arc, Ellipse)):
             # Упрощенный метод: аппроксимируем эллипсы многоугольниками
-            intersections.extend(self._ellipse_ellipse_intersection(obj1, obj2))
+            # Метод _ellipse_ellipse_intersection уже учитывает дуги через _line_arc_intersection
+            ellipse_intersections = self._ellipse_ellipse_intersection(obj1, obj2)
+            # Дополнительная фильтрация для дуг (на случай, если первая дуга не была учтена)
+            for point in ellipse_intersections:
+                is_valid = True
+                if isinstance(obj1, Arc):
+                    if not self._point_on_arc(point, obj1):
+                        is_valid = False
+                if isinstance(obj2, Arc) and is_valid:
+                    if not self._point_on_arc(point, obj2):
+                        is_valid = False
+                if is_valid:
+                    intersections.append(point)
         
         # Прямоугольник с окружностью
         elif isinstance(obj1, Rectangle) and isinstance(obj2, Circle):
@@ -773,9 +797,15 @@ class SnapManager:
             )
             
             # Проверяем пересечение сегмента окружности с эллипсом
-            segment_intersections = self._line_ellipse_intersection(
-                prev_point, curr_point, ellipse
-            )
+            # Если это дуга, используем специальный метод
+            if isinstance(ellipse, Arc):
+                segment_intersections = self._line_arc_intersection(
+                    prev_point, curr_point, ellipse
+                )
+            else:
+                segment_intersections = self._line_ellipse_intersection(
+                    prev_point, curr_point, ellipse
+                )
             
             # Добавляем только уникальные точки
             for point in segment_intersections:
@@ -796,10 +826,27 @@ class SnapManager:
         # Аппроксимируем первый эллипс многоугольником
         num_samples = 128  # Увеличиваем количество точек для лучшей точности
         
+        # Определяем диапазон углов для первого эллипса (если это дуга)
+        if isinstance(ellipse1, Arc):
+            # Для дуги генерируем точки только в диапазоне дуги
+            start_angle_rad = math.radians(ellipse1.start_angle)
+            end_angle_rad = math.radians(ellipse1.end_angle)
+            # Нормализуем углы
+            if end_angle_rad < start_angle_rad:
+                end_angle_rad += 2 * math.pi
+            angle_range = end_angle_rad - start_angle_rad
+            angles = []
+            for i in range(num_samples + 1):
+                t = i / num_samples
+                angle = start_angle_rad + t * angle_range
+                angles.append(angle)
+        else:
+            # Для полного эллипса генерируем точки по всему кругу
+            angles = [2 * math.pi * i / num_samples for i in range(num_samples + 1)]
+        
         # Генерируем точки на первом эллипсе
         ellipse1_points = []
-        for i in range(num_samples):
-            angle = 2 * math.pi * i / num_samples
+        for angle in angles:
             local_x = ellipse1.radius_x * math.cos(angle)
             local_y = ellipse1.radius_y * math.sin(angle)
             
@@ -816,16 +863,28 @@ class SnapManager:
             ellipse1_points.append(QPointF(x, y))
         
         # Проверяем пересечения сегментов первого эллипса со вторым
-        for i in range(len(ellipse1_points)):
+        for i in range(len(ellipse1_points) - 1):
             p1 = ellipse1_points[i]
-            p2 = ellipse1_points[(i + 1) % len(ellipse1_points)]
+            p2 = ellipse1_points[i + 1]
             
-            segment_intersections = self._line_ellipse_intersection(
-                p1, p2, ellipse2
-            )
+            # Если второй объект - дуга, используем специальный метод
+            if isinstance(ellipse2, Arc):
+                segment_intersections = self._line_arc_intersection(
+                    p1, p2, ellipse2
+                )
+            else:
+                segment_intersections = self._line_ellipse_intersection(
+                    p1, p2, ellipse2
+                )
             
             # Добавляем только уникальные точки
+            # Дополнительно проверяем, что точка находится на первой дуге (если это дуга)
             for point in segment_intersections:
+                # Проверяем, что точка находится на первой дуге (если это дуга)
+                if isinstance(ellipse1, Arc):
+                    if not self._point_on_arc(point, ellipse1):
+                        continue
+                
                 point_key = (round(point.x(), 6), round(point.y(), 6))
                 if point_key not in seen_points:
                     seen_points.add(point_key)
@@ -870,16 +929,16 @@ class SnapManager:
         ]
         
         for side_start, side_end in sides:
-            side_intersections = self._line_ellipse_intersection(
-                side_start, side_end, ellipse
-            )
-            # Если это дуга, фильтруем по диапазону
+            # Если это дуга, используем специальный метод
             if isinstance(ellipse, Arc):
-                for point in side_intersections:
-                    if self._point_on_arc(point, ellipse):
-                        intersections.append(point)
+                side_intersections = self._line_arc_intersection(
+                    side_start, side_end, ellipse
+                )
             else:
-                intersections.extend(side_intersections)
+                side_intersections = self._line_ellipse_intersection(
+                    side_start, side_end, ellipse
+                )
+            intersections.extend(side_intersections)
         
         return intersections
     
@@ -910,16 +969,16 @@ class SnapManager:
         for i in range(len(vertices)):
             p1 = vertices[i]
             p2 = vertices[(i + 1) % len(vertices)]
-            side_intersections = self._line_ellipse_intersection(
-                p1, p2, ellipse
-            )
-            # Если это дуга, фильтруем по диапазону
+            # Если это дуга, используем специальный метод
             if isinstance(ellipse, Arc):
-                for point in side_intersections:
-                    if self._point_on_arc(point, ellipse):
-                        intersections.append(point)
+                side_intersections = self._line_arc_intersection(
+                    p1, p2, ellipse
+                )
             else:
-                intersections.extend(side_intersections)
+                side_intersections = self._line_ellipse_intersection(
+                    p1, p2, ellipse
+                )
+            intersections.extend(side_intersections)
         
         return intersections
     
@@ -1023,16 +1082,16 @@ class SnapManager:
             curr_point = spline._get_point_on_spline(t)
             
             # Проверяем пересечение сегмента сплайна с эллипсом
-            segment_intersections = self._line_ellipse_intersection(
-                prev_point, curr_point, ellipse
-            )
-            # Если это дуга, фильтруем по диапазону
+            # Если это дуга, используем специальный метод
             if isinstance(ellipse, Arc):
-                for point in segment_intersections:
-                    if self._point_on_arc(point, ellipse):
-                        intersections.append(point)
+                segment_intersections = self._line_arc_intersection(
+                    prev_point, curr_point, ellipse
+                )
             else:
-                intersections.extend(segment_intersections)
+                segment_intersections = self._line_ellipse_intersection(
+                    prev_point, curr_point, ellipse
+                )
+            intersections.extend(segment_intersections)
             
             prev_point = curr_point
         
@@ -1153,7 +1212,20 @@ class SnapManager:
             return None
         
         # Учитываем масштаб при вычислении tolerance
+        # При увеличении масштаба (scale_factor > 1) tolerance в мировых координатах должен уменьшаться
+        # Но мы работаем в мировых координатах, поэтому нужно преобразовать tolerance из пикселей в мировые координаты
         scaled_tolerance = self.tolerance / scale_factor if scale_factor > 0 else self.tolerance
+        # Убеждаемся, что tolerance не слишком мал, но и не слишком велик
+        # Минимальный tolerance в мировых координатах
+        min_tolerance = 0.5
+        max_tolerance = 100.0
+        if scaled_tolerance < min_tolerance:
+            scaled_tolerance = min_tolerance
+        elif scaled_tolerance > max_tolerance:
+            scaled_tolerance = max_tolerance
+        
+        # Подсчитываем точки пересечения
+        intersection_count = sum(1 for sp in snap_points if sp.snap_type == SnapType.INTERSECTION)
         
         nearest_snap = None
         min_distance = float('inf')
@@ -1320,9 +1392,50 @@ class SnapManager:
         sqrt_disc = math.sqrt(discriminant)
         
         # Две точки пересечения
-        for sign in [-1, 1]:
-            x_norm = (D * dy_norm + sign * (dy_norm if dy_norm >= 0 else -dy_norm) * sqrt_disc) / dr_sq_norm
-            y_norm = (-D * dx_norm + sign * abs(dy_norm) * sqrt_disc) / dr_sq_norm
+        # Используем правильную формулу для пересечения линии с единичной окружностью
+        # Линия: (x, y) = (x1_norm, y1_norm) + t * (dx_norm, dy_norm)
+        # Окружность: x^2 + y^2 = 1
+        # Подставляем: (x1_norm + t*dx_norm)^2 + (y1_norm + t*dy_norm)^2 = 1
+        # t^2*dr_sq_norm + 2*t*(x1_norm*dx_norm + y1_norm*dy_norm) + (x1_norm^2 + y1_norm^2 - 1) = 0
+        
+        dot_product = x1_norm * dx_norm + y1_norm * dy_norm
+        r1_sq = x1_norm * x1_norm + y1_norm * y1_norm
+        c = r1_sq - 1.0
+        
+        # Квадратное уравнение: a*t^2 + b*t + c = 0
+        # где a = dr_sq_norm, b = 2*dot_product, c = r1_sq - 1
+        b_coeff = 2.0 * dot_product
+        disc = b_coeff * b_coeff - 4.0 * dr_sq_norm * c
+        
+        if disc < 0:
+            return intersections
+        
+        sqrt_disc_t = math.sqrt(disc)
+        t1 = (-b_coeff + sqrt_disc_t) / (2.0 * dr_sq_norm)
+        t2 = (-b_coeff - sqrt_disc_t) / (2.0 * dr_sq_norm)
+        
+        # Используем оба решения
+        # Преобразуем t_norm в параметр t для исходной линии
+        # В нормализованном пространстве: точка = (x1_norm, y1_norm) + t_norm * (dx_norm, dy_norm)
+        # В локальных координатах эллипса: точка = (x1_rot, y1_rot) + t_norm * (dx_rot, dy_rot)
+        # где dx_rot = dx_norm * radius_x, dy_rot = dy_norm * radius_y
+        # Но нам нужно найти параметр t для исходной линии в мировых координатах
+        
+        # Вычисляем направление линии в локальных координатах эллипса (до нормализации)
+        dx_rot = (x2_rot - x1_rot)
+        dy_rot = (y2_rot - y1_rot)
+        dr_rot_sq = dx_rot * dx_rot + dy_rot * dy_rot
+        
+        for t_norm in [t1, t2]:
+            # Точка в нормализованном пространстве
+            x_norm = x1_norm + t_norm * dx_norm
+            y_norm = y1_norm + t_norm * dy_norm
+            
+            # Проверяем, что точка на единичной окружности (с небольшой погрешностью)
+            # Увеличиваем допустимую погрешность из-за численных ошибок
+            dist_sq = x_norm * x_norm + y_norm * y_norm
+            if abs(dist_sq - 1.0) > 0.1:
+                continue
             
             # Обратное преобразование к локальным координатам
             x_local = x_norm * ellipse.radius_x
@@ -1341,8 +1454,8 @@ class SnapManager:
             x = x_world + ellipse.center.x()
             y = y_world + ellipse.center.y()
             
-            # Проверяем, что точка на отрезке (используем правильную формулу)
-            # Вычисляем параметр t для точки на линии: P = P1 + t * (P2 - P1)
+            # Проверяем, что точка на отрезке
+            # Вычисляем параметр t для точки на исходной линии: P = P1 + t * (P2 - P1)
             dx_line = line_end.x() - line_start.x()
             dy_line = line_end.y() - line_start.y()
             line_len_sq = dx_line*dx_line + dy_line*dy_line
@@ -1366,7 +1479,7 @@ class SnapManager:
                     
                     # Проверяем уравнение эллипса: (x/a)^2 + (y/b)^2 = 1
                     ellipse_eq = (check_x_rot / ellipse.radius_x)**2 + (check_y_rot / ellipse.radius_y)**2
-                    if abs(ellipse_eq - 1.0) < 0.01:  # Допустимая погрешность
+                    if abs(ellipse_eq - 1.0) < 0.1:  # Увеличиваем допустимую погрешность
                         intersections.append(QPointF(x, y))
         
         return intersections
@@ -1397,24 +1510,76 @@ class SnapManager:
         x_norm = x_rot / arc.radius_x
         y_norm = y_rot / arc.radius_y
         
-        # Вычисляем угол
-        angle_rad = math.atan2(y_norm, x_norm)
+        # Проверяем, что точка находится на эллипсе (с небольшой погрешностью)
+        dist_sq = x_norm * x_norm + y_norm * y_norm
+        
+        # Нормализуем углы дуги
+        # Сохраняем оригинальные значения для проверки
+        orig_start = arc.start_angle
+        orig_end = arc.end_angle
+        
+        # Определяем направление дуги: вверх или вниз
+        # Дуга вверх: start_angle=180, end_angle=360
+        # Дуга вниз: start_angle=180, end_angle=0
+        start_angle_norm = orig_start % 360
+        end_angle_norm = orig_end % 360
+        
+        # Определяем, является ли дуга дугой вниз
+        # Дуга вниз: start_angle=180, end_angle=0 (не 360!)
+        # Дуга вверх: start_angle=180, end_angle=360
+        is_arc_down = False
+        if abs(orig_start - 180.0) < 1.0:  # start_angle точно 180
+            if abs(orig_end - 0.0) < 1.0:  # end_angle точно 0 (не 360!)
+                is_arc_down = True
+            # Если end_angle=360, это дуга вверх, оставляем is_arc_down=False
+        elif start_angle_norm > end_angle_norm and (start_angle_norm - end_angle_norm) > 180:
+            # Дуга идет от большего угла к меньшему через 0°, вероятно вниз
+            # Но только если end_angle не равен 360 (дуга вверх имеет end_angle=360)
+            if abs(orig_end - 360.0) > 1.0 and abs(orig_end - 0.0) < 1.0:  # end_angle точно 0, не 360
+                is_arc_down = True
+        
+        # Вычисляем параметрический угол эллипса
+        # Для эллипса: x = a*cos(t), y = b*sin(t)
+        # Для дуги вверх (180-360): нужно инвертировать Y для системы с Y вниз
+        # Для дуги вниз (180-0): используем обычную формулу
+        if is_arc_down:
+            # Дуга вниз: используем обычную формулу
+            angle_rad = math.atan2(y_norm, x_norm)
+        else:
+            # Дуга вверх: инвертируем Y для системы с Y вниз
+            angle_rad = math.atan2(-y_norm, x_norm)
+        
         angle_deg = math.degrees(angle_rad)
+        
+        # Нормализуем угол в диапазон [0, 360)
         if angle_deg < 0:
             angle_deg += 360
         
-        # Нормализуем углы дуги
-        start_angle = arc.start_angle % 360
-        end_angle = arc.end_angle % 360
-        if end_angle == 0 and arc.end_angle > 0:
-            end_angle = 360
+        # Нормализуем углы в диапазон [0, 360)
+        start_angle = orig_start % 360
+        end_angle = orig_end % 360
+        
+        # Если end_angle был 360 или близок к 360, устанавливаем его в 360
+        if abs(orig_end - 360.0) < 1e-6:
+            end_angle = 360.0
+        elif end_angle == 0 and orig_end > 180:
+            end_angle = 360.0
         
         # Проверяем, попадает ли угол в диапазон
-        if start_angle <= end_angle:
+        if start_angle < end_angle:
+            # Обычный случай: диапазон не пересекает 0°
             return start_angle <= angle_deg <= end_angle
-        else:
-            # Диапазон пересекает 0°
+        elif start_angle > end_angle:
+            # Диапазон пересекает 0° (например, от 270° до 90°)
             return angle_deg >= start_angle or angle_deg <= end_angle
+        else:
+            # start_angle == end_angle (полный круг или точка)
+            if abs(end_angle - 360.0) < 1e-6 and abs(start_angle - 0.0) < 1e-6:
+                # Полный круг
+                return True
+            else:
+                # Точка (нулевая дуга)
+                return abs(angle_deg - start_angle) < 1e-6
     
     def _perpendicular_to_line(self, line_start: QPointF, line_end: QPointF,
                                obj_start: QPointF, obj_end: QPointF) -> Optional[QPointF]:

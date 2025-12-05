@@ -34,7 +34,7 @@ class CoordinateSystemWidget(QWidget):
         self.scene = Scene()
         self.selection_manager = SelectionManager()
         self.renderer = SceneRenderer(self.viewport, self.scene, self.selection_manager)
-        self.snap_manager = SnapManager(tolerance=10.0)
+        self.snap_manager = SnapManager(tolerance=15.0)  # Увеличиваем tolerance для лучшей видимости привязок
         
         # Менеджер стилей
         self.style_manager = style_manager
@@ -630,6 +630,8 @@ class CoordinateSystemWidget(QWidget):
             snap_color = QColor(0, 0, 255)  # Синий для центра
         elif self.current_snap_point.snap_type == SnapType.VERTEX:
             snap_color = QColor(255, 165, 0)  # Оранжевый для вершины
+        elif self.current_snap_point.snap_type == SnapType.INTERSECTION:
+            snap_color = QColor(255, 0, 255)  # Пурпурный для пересечения
         else:
             snap_color = QColor(128, 128, 128)  # Серый по умолчанию
         
@@ -1266,6 +1268,14 @@ class CoordinateSystemWidget(QWidget):
         """Обработчик движения мыши"""
         world_pos = self.viewport.screen_to_world(event.position())
         self.cursor_world_coords = world_pos
+        
+        # Применяем привязку для отображения при наведении (даже без перетаскивания)
+        # Это обновит self.current_snap_point для визуализации
+        self._apply_snapping(world_pos)
+        
+        # Обновляем виджет для отображения точки привязки
+        self.update()
+        
         self.view_changed.emit()
         
         # Обработка перемещения точек в режиме редактирования
