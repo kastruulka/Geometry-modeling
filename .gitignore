@@ -1,0 +1,12 @@
+# Python cache
+__pycache__/
+*.pyc
+
+# IDEs and Editors
+.cursor/
+.vscode/
+.idea/
+
+# Geometry files (если это временные тесты)
+_test_*.dxf
+drawing.dxf
