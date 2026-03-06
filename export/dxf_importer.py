@@ -111,6 +111,27 @@ def _entity_linetype(doc, entity):
     return str(lt).strip() if lt else 'Continuous'
 
 
+def _entity_lineweight_px(doc, entity):
+    """
+    Толщина линии сущности в тех же единицах, что и IMPORT_LINE_WIDTH_PX.
+    DXF lineweight: целое = мм×100 (25=0.25мм, 80=0.8мм); -1=ByLayer, -2=ByBlock, -3=Default(0.25мм).
+    """
+    lw = getattr(entity.dxf, 'lineweight', -3)
+    if lw == -1:  # ByLayer
+        layer_name = _entity_layer_name(entity)
+        try:
+            layer = doc.layers.get(layer_name)
+            lw = getattr(layer.dxf, 'lineweight', -3)
+        except Exception:
+            lw = -3
+    if lw < 0:  # ByBlock, Default или неизвестно → 0.25 мм
+        lw = 25
+    if lw == 0:
+        lw = 25  # «волосная» в DXF — рисуем как тонкую 0.25 мм
+    mm = lw / 100.0
+    return (mm * 96) / 25.4
+
+
 def _entity_qcolor(doc, entity):
     r, g, b = _entity_rgb(doc, entity)
     return QColor(r, g, b)
@@ -131,7 +152,7 @@ def _import_line(doc, entity, **kwargs):
         QPointF(end.x, end.y),
         style=None,
         color=color,
-        width=IMPORT_LINE_WIDTH_PX,
+        width=_entity_lineweight_px(doc, entity),
     )
     line.layer_name = layer_name
     line._from_dxf_import = True
@@ -149,7 +170,7 @@ def _import_circle(doc, entity, **kwargs):
         radius,
         style=None,
         color=color,
-        width=IMPORT_LINE_WIDTH_PX,
+        width=_entity_lineweight_px(doc, entity),
     )
     circle.layer_name = layer_name
     circle._from_dxf_import = True
@@ -172,7 +193,7 @@ def _import_arc(doc, entity, **kwargs):
         end_angle_deg,
         style=None,
         color=color,
-        width=IMPORT_LINE_WIDTH_PX,
+        width=_entity_lineweight_px(doc, entity),
         rotation_angle=0.0,
     )
     arc.layer_name = layer_name
@@ -202,7 +223,7 @@ def _import_ellipse(doc, entity, **kwargs):
             radius_y,
             style=None,
             color=color,
-            width=IMPORT_LINE_WIDTH_PX,
+            width=_entity_lineweight_px(doc, entity),
             rotation_angle=angle_rad,
         )
     ellipse.layer_name = layer_name
@@ -222,7 +243,7 @@ def _import_ellipse(doc, entity, **kwargs):
         end_angle_deg,
         style=None,
         color=color,
-        width=IMPORT_LINE_WIDTH_PX,
+        width=_entity_lineweight_px(doc, entity),
         rotation_angle=math.atan2(major.y, major.x),
     )
     arc.layer_name = layer_name
@@ -231,26 +252,54 @@ def _import_ellipse(doc, entity, **kwargs):
     return arc
 
 
+# Стили, экспортируемые как LWPOLYLINE с геометрией (зигзаг и т.д.).
+# При импорте такие полилинии восстанавливаются как одиночный отрезок,
+# чтобы рендерер рисовал спецэффект динамически с правильными пропорциями.
+_RECONSTRUCTABLE_LAYER_STYLES = {
+    'Сплошная тонкая с изломами',
+}
+
+
 def _import_lwpolyline(doc, entity, **kwargs):
     points = list(entity.get_points('xy'))
     if not points:
         return None
+    layer_name = _entity_layer_name(entity)
+
+    # Ломаная линия при экспорте превращается в LWPOLYLINE с точками зигзага.
+    # Восстанавливаем её как один отрезок (от первой до последней точки),
+    # чтобы стиль «с изломами» нарисовал зигзаг динамически.
+    if layer_name in _RECONSTRUCTABLE_LAYER_STYLES and len(points) >= 2 and not entity.closed:
+        color = _entity_qcolor(doc, entity)
+        width_px = _entity_lineweight_px(doc, entity)
+        line = LineSegment(
+            QPointF(points[0][0], points[0][1]),
+            QPointF(points[-1][0], points[-1][1]),
+            style=None,
+            color=color,
+            width=width_px,
+        )
+        line.layer_name = layer_name
+        line._from_dxf_import = True
+        line._legacy_linetype = _entity_linetype(doc, entity)
+        return line
+
     closed = entity.closed
     color = _entity_qcolor(doc, entity)
-    layer_name = _entity_layer_name(entity)
     qpoints = [QPointF(p[0], p[1]) for p in points]
     qpoints = _decimate_points(qpoints, MAX_POLYLINE_POINTS)
     objs = []
     n = len(qpoints)
     linetype = _entity_linetype(doc, entity)
+    width_px = _entity_lineweight_px(doc, entity)
     for i in range(n - 1):
-        line = LineSegment(qpoints[i], qpoints[i + 1], style=None, color=color, width=IMPORT_LINE_WIDTH_PX)
+        line = LineSegment(qpoints[i], qpoints[i + 1], style=None, color=color, width=width_px)
         line.layer_name = layer_name
         line._from_dxf_import = True
         line._legacy_linetype = linetype
         objs.append(line)
     if closed and n >= 3:
-        line = LineSegment(qpoints[-1], qpoints[0], style=None, color=color, width=IMPORT_LINE_WIDTH_PX)
+        line = LineSegment(qpoints[-1], qpoints[0], style=None, color=color, width=width_px)
         line.layer_name = layer_name
         line._from_dxf_import = True
         line._legacy_linetype = linetype
@@ -283,7 +332,7 @@ def _import_spline(doc, entity, **kwargs):
         return None
     color = _entity_qcolor(doc, entity)
     layer_name = _entity_layer_name(entity)
-    spline = Spline(qpoints, style=None, color=color, width=IMPORT_LINE_WIDTH_PX)
+    spline = Spline(qpoints, style=None, color=color, width=_entity_lineweight_px(doc, entity))
     spline.layer_name = layer_name
     spline._from_dxf_import = True
     spline._legacy_linetype = _entity_linetype(doc, entity)
@@ -342,10 +391,70 @@ def _ensure_layers_from_dxf(doc, layer_manager):
 
 
 # ---------------------------------------------------------------------------
+#  Сопоставление DXF linetype → ГОСТ-стиль
+# ---------------------------------------------------------------------------
+
+_THICK_THRESHOLD_MM = 0.6
+
+# Стили, которые нельзя определить по DXF linetype (они все экспортируются как Continuous),
+# но можно определить по имени слоя, совпадающему с именем стиля.
+_LAYER_NAME_STYLES = {
+    'Сплошная тонкая с изломами',
+    'Сплошная волнистая',
+}
+
+
+def _match_gost_style(obj, style_manager):
+    """
+    Сопоставляет импортированный объект с ГОСТ-стилем из LineStyleManager.
+    Приоритет: имя слоя (для спецстилей) → DXF linetype + толщина.
+    """
+    if style_manager is None:
+        return None
+
+    # Спецстили (волнистая, с изломами) экспортируются как Continuous,
+    # но имя слоя DXF совпадает с именем стиля — используем его.
+    layer_name = getattr(obj, '_layer_name', '0')
+    if layer_name in _LAYER_NAME_STYLES:
+        layer_style = style_manager.get_style(layer_name)
+        if layer_style:
+            return layer_style
+
+    lt = getattr(obj, '_legacy_linetype', 'Continuous') or 'Continuous'
+    lt = str(lt).strip().upper()
+
+    width_px = getattr(obj, '_legacy_width', 0)
+    thickness_mm = (width_px * 25.4) / 96.0
+
+    if lt == 'DASHED':
+        return style_manager.get_style('Штриховая')
+    elif lt == 'DASHDOT':
+        if thickness_mm >= _THICK_THRESHOLD_MM:
+            return style_manager.get_style('Штрихпунктирная утолщенная')
+        return style_manager.get_style('Штрихпунктирная тонкая')
+    elif lt == 'DASHDOT2':
+        return style_manager.get_style('Штрихпунктирная с двумя точками')
+    else:
+        if thickness_mm >= _THICK_THRESHOLD_MM:
+            return style_manager.get_style('Сплошная основная')
+        return style_manager.get_style('Сплошная тонкая')
+
+
+def _apply_gost_style(obj, style_manager):
+    """Назначает ГОСТ-стиль объекту, сохраняя оригинальный цвет из DXF."""
+    if style_manager is None or not hasattr(obj, 'style'):
+        return
+    gost_style = _match_gost_style(obj, style_manager)
+    if gost_style is not None:
+        obj.style = gost_style
+
+
+# ---------------------------------------------------------------------------
 #  Главная функция импорта
 # ---------------------------------------------------------------------------
 
-def import_dxf_from_file(filepath: str, scene, layer_manager=None):
+def import_dxf_from_file(filepath: str, scene, layer_manager=None,
+                         style_manager=None):
     """
     Загружает DXF из файла, создаёт объекты с цветом и слоями, добавляет их на сцену.
 
@@ -356,6 +465,7 @@ def import_dxf_from_file(filepath: str, scene, layer_manager=None):
         filepath: путь к .dxf
         scene: Scene для добавления объектов
         layer_manager: опционально — для создания слоёв из DXF
+        style_manager: опционально — LineStyleManager для назначения ГОСТ-стилей
     Returns:
         Количество добавленных объектов.
     """
@@ -386,5 +496,9 @@ def import_dxf_from_file(filepath: str, scene, layer_manager=None):
                 to_add.append(obj)
         except Exception:
             continue
+
+    for obj in to_add:
+        _apply_gost_style(obj, style_manager)
+
     scene.add_objects(to_add)
     return len(to_add)

@@ -16,12 +16,21 @@ from widgets.line_segment import LineSegment
 from widgets.line_style import LineType
 
 
-class _LegacyLineStyle:
-    """Минимальный «стиль» для отрисовки по _legacy_linetype (импорт из DXF)."""
-    dash_length = 5.0
-    dash_gap = 2.5
-    thickness_mm = 0.8
-    line_type = LineType.DASH_DOT_THIN
+# Паттерн для импортированных штриховых/штрих-пунктирных: база для 0.25 мм, масштаб по толщине линии из DXF.
+_LEGACY_BASE_WIDTH = 0.94   # 0.25 мм в единицах (96/25.4)
+_LEGACY_DASH_LEN = 5.0
+_LEGACY_DASH_GAP = 2.5
+
+
+def _legacy_pattern_style(line_width: float, line_type_enum):
+    """Паттерн масштабируется по толщине линии из DXF — зазоры не съедаются, толщина сохраняется."""
+    k = max(1.0, line_width / _LEGACY_BASE_WIDTH)
+    return type('_LegacyStyle', (), {
+        'dash_length': _LEGACY_DASH_LEN * k,
+        'dash_gap': _LEGACY_DASH_GAP * k,
+        'thickness_mm': 0.8 * k,
+        'line_type': line_type_enum,
+    })()
 
 
 class LineRenderer:
@@ -65,7 +74,7 @@ class LineRenderer:
                 painter.setPen(pen)
                 painter.drawLine(line.start_point, line.end_point)
         else:
-            # Нет стиля: цвет/толщина из объекта; тип линии из _legacy_linetype (импорт DXF) или сплошная
+            # Импорт DXF: толщина и масштаб из lineweight — line.width не ужимаем
             pen = QPen(line.color, line.width)
             if is_selected:
                 pen.setWidthF(pen.widthF() * 1.5)
@@ -73,14 +82,16 @@ class LineRenderer:
             legacy_lt = getattr(line, '_legacy_linetype', 'Continuous') or 'Continuous'
             legacy_lt = str(legacy_lt).strip().upper()
             if legacy_lt == 'DASHED':
-                LineRenderer._draw_dashed_line(painter, line.start_point, line.end_point, pen, _LegacyLineStyle)
+                pen.setCapStyle(Qt.FlatCap)
+                style = _legacy_pattern_style(pen.widthF(), LineType.DASH_DOT_THIN)
+                LineRenderer._draw_dashed_line(painter, line.start_point, line.end_point, pen, style)
             elif legacy_lt in ('DASHDOT', 'DASHDOT2'):
-                if legacy_lt == 'DASHDOT2':
-                    style = type('_LegacyDashDot2', (), {'dash_length': 5.0, 'dash_gap': 2.5, 'thickness_mm': 0.8, 'line_type': LineType.DASH_DOT_TWO_DOTS})()
-                else:
-                    style = _LegacyLineStyle
+                pen.setCapStyle(Qt.FlatCap)
+                lt_enum = LineType.DASH_DOT_TWO_DOTS if legacy_lt == 'DASHDOT2' else LineType.DASH_DOT_THIN
+                style = _legacy_pattern_style(pen.widthF(), lt_enum)
                 LineRenderer._draw_dash_dot_line(painter, line.start_point, line.end_point, pen, style)
             else:
+                pen.setCapStyle(Qt.FlatCap)
                 painter.setPen(pen)
                 painter.drawLine(line.start_point, line.end_point)
         
@@ -477,9 +488,21 @@ class PrimitiveRenderer:
             pen = QPen(circle.color, circle.width)
             if is_selected:
                 pen.setWidthF(pen.widthF() * 1.5)
-            painter.setPen(pen)
-            painter.setBrush(Qt.NoBrush)
-            painter.drawEllipse(circle.center, circle.radius, circle.radius)
+            legacy_lt = getattr(circle, '_legacy_linetype', 'Continuous') or 'Continuous'
+            legacy_lt = str(legacy_lt).strip().upper()
+            if legacy_lt == 'DASHED':
+                pen.setCapStyle(Qt.FlatCap)
+                style = _legacy_pattern_style(pen.widthF(), LineType.DASHED)
+                PrimitiveRenderer._draw_dashed_circle(painter, circle, pen, style)
+            elif legacy_lt in ('DASHDOT', 'DASHDOT2'):
+                pen.setCapStyle(Qt.FlatCap)
+                lt_enum = LineType.DASH_DOT_TWO_DOTS if legacy_lt == 'DASHDOT2' else LineType.DASH_DOT_THIN
+                style = _legacy_pattern_style(pen.widthF(), lt_enum)
+                PrimitiveRenderer._draw_dash_dot_circle(painter, circle, pen, style)
+            else:
+                painter.setPen(pen)
+                painter.setBrush(Qt.NoBrush)
+                painter.drawEllipse(circle.center, circle.radius, circle.radius)
     
     @staticmethod
     def draw_arc(painter: QPainter, arc, scale_factor: float = 1.0, is_selected: bool = False):
@@ -514,7 +537,19 @@ class PrimitiveRenderer:
             pen = QPen(arc.color, arc.width)
             if is_selected:
                 pen.setWidthF(pen.widthF() * 1.5)
-            PrimitiveRenderer._draw_ellipse_arc(painter, arc, pen)
+            legacy_lt = getattr(arc, '_legacy_linetype', 'Continuous') or 'Continuous'
+            legacy_lt = str(legacy_lt).strip().upper()
+            if legacy_lt == 'DASHED':
+                pen.setCapStyle(Qt.FlatCap)
+                style = _legacy_pattern_style(pen.widthF(), LineType.DASHED)
+                PrimitiveRenderer._draw_dashed_arc(painter, arc, pen, style)
+            elif legacy_lt in ('DASHDOT', 'DASHDOT2'):
+                pen.setCapStyle(Qt.FlatCap)
+                lt_enum = LineType.DASH_DOT_TWO_DOTS if legacy_lt == 'DASHDOT2' else LineType.DASH_DOT_THIN
+                style = _legacy_pattern_style(pen.widthF(), lt_enum)
+                PrimitiveRenderer._draw_dash_dot_arc(painter, arc, pen, style)
+            else:
+                PrimitiveRenderer._draw_ellipse_arc(painter, arc, pen)
     
     @staticmethod
     def draw_rectangle(painter: QPainter, rectangle, scale_factor: float = 1.0, is_selected: bool = False):
@@ -627,7 +662,19 @@ class PrimitiveRenderer:
             pen = QPen(ellipse.color, ellipse.width)
             if is_selected:
                 pen.setWidthF(pen.widthF() * 1.5)
-            PrimitiveRenderer._draw_ellipse_with_rotation(painter, ellipse, pen)
+            legacy_lt = getattr(ellipse, '_legacy_linetype', 'Continuous') or 'Continuous'
+            legacy_lt = str(legacy_lt).strip().upper()
+            if legacy_lt == 'DASHED':
+                pen.setCapStyle(Qt.FlatCap)
+                style = _legacy_pattern_style(pen.widthF(), LineType.DASHED)
+                PrimitiveRenderer._draw_dashed_ellipse(painter, ellipse, pen, style)
+            elif legacy_lt in ('DASHDOT', 'DASHDOT2'):
+                pen.setCapStyle(Qt.FlatCap)
+                lt_enum = LineType.DASH_DOT_TWO_DOTS if legacy_lt == 'DASHDOT2' else LineType.DASH_DOT_THIN
+                style = _legacy_pattern_style(pen.widthF(), lt_enum)
+                PrimitiveRenderer._draw_dash_dot_ellipse(painter, ellipse, pen, style)
+            else:
+                PrimitiveRenderer._draw_ellipse_with_rotation(painter, ellipse, pen)
     
     @staticmethod
     def draw_polygon(painter: QPainter, polygon, scale_factor: float = 1.0, is_selected: bool = False):
@@ -3122,18 +3169,30 @@ class PrimitiveRenderer:
             pen = QPen(spline.color, spline.width)
             if is_selected:
                 pen.setWidthF(pen.widthF() * 1.5)
-            path = QPainterPath()
-            num_samples = max(100, len(spline.control_points) * 20)
-            for i in range(num_samples + 1):
-                t = i / num_samples if num_samples > 0 else 0
-                point = spline._get_point_on_spline(t)
-                if i == 0:
-                    path.moveTo(point)
-                else:
-                    path.lineTo(point)
-            painter.setPen(pen)
-            painter.setBrush(Qt.NoBrush)
-            painter.drawPath(path)
+            legacy_lt = getattr(spline, '_legacy_linetype', 'Continuous') or 'Continuous'
+            legacy_lt = str(legacy_lt).strip().upper()
+            if legacy_lt == 'DASHED':
+                pen.setCapStyle(Qt.FlatCap)
+                style = _legacy_pattern_style(pen.widthF(), LineType.DASHED)
+                PrimitiveRenderer._draw_dashed_spline(painter, spline, pen, style)
+            elif legacy_lt in ('DASHDOT', 'DASHDOT2'):
+                pen.setCapStyle(Qt.FlatCap)
+                lt_enum = LineType.DASH_DOT_TWO_DOTS if legacy_lt == 'DASHDOT2' else LineType.DASH_DOT_THIN
+                style = _legacy_pattern_style(pen.widthF(), lt_enum)
+                PrimitiveRenderer._draw_dash_dot_spline(painter, spline, pen, style)
+            else:
+                path = QPainterPath()
+                num_samples = max(100, len(spline.control_points) * 20)
+                for i in range(num_samples + 1):
+                    t = i / num_samples if num_samples > 0 else 0
+                    point = spline._get_point_on_spline(t)
+                    if i == 0:
+                        path.moveTo(point)
+                    else:
+                        path.lineTo(point)
+                painter.setPen(pen)
+                painter.setBrush(Qt.NoBrush)
+                painter.drawPath(path)
     
     # Методы специальной отрисовки для сплайнов
     @staticmethod

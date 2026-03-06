@@ -927,6 +927,7 @@ class MainWindow(QMainWindow):
                 filepath,
                 self.canvas.scene,
                 layer_manager=self.layer_manager,
+                style_manager=self.style_manager,
             )
             self.canvas.update()
             if hasattr(self, 'layer_panel') and self.layer_panel:
