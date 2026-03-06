@@ -182,10 +182,13 @@ def _import_arc(doc, entity, **kwargs):
     center = entity.dxf.center
     radius = float(entity.dxf.radius)
     
-    start_angle_deg = float(entity.dxf.start_angle)
-    end_angle_deg   = float(entity.dxf.end_angle)
+    dxf_start = float(entity.dxf.start_angle)
+    dxf_end   = float(entity.dxf.end_angle)
     
-    # Чтобы в вашей программе дуга нарисовалась правильно (размах > 0)
+    # Обратное отзеркаливание из DXF в Qt
+    start_angle_deg = (360 - dxf_end) % 360
+    end_angle_deg   = (360 - dxf_start) % 360
+    
     if end_angle_deg <= start_angle_deg:
         end_angle_deg += 360
         
@@ -222,7 +225,7 @@ def _import_ellipse(doc, entity, **kwargs):
     linetype = _entity_linetype(doc, entity)
     width = _entity_lineweight_px(doc, entity)
     
-    # Читаем угол КАК ЕСТЬ (без минуса)
+    # Читаем угол напрямую (без минуса!)
     qt_angle_rad = math.atan2(major.y, major.x)
 
     if abs((end_param - start_param) - 2 * math.pi) < 1e-9:
@@ -241,9 +244,12 @@ def _import_ellipse(doc, entity, **kwargs):
         ellipse._legacy_linetype = linetype
         return ellipse
     else:
-        # Дуга эллипса
-        start_angle_deg = math.degrees(start_param)
-        end_angle_deg = math.degrees(end_param)
+        # Дуга эллипса: обратное отзеркаливание параметров
+        dxf_start_deg = math.degrees(start_param)
+        dxf_end_deg = math.degrees(end_param)
+        
+        start_angle_deg = (360 - dxf_end_deg) % 360
+        end_angle_deg = (360 - dxf_start_deg) % 360
         
         if end_angle_deg <= start_angle_deg:
             end_angle_deg += 360

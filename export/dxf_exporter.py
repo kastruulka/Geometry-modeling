@@ -335,37 +335,42 @@ def _export_circle(msp, circle: Circle, style_to_layer, layer_manager=None):
 def _export_arc(msp, arc: Arc, style_to_layer, layer_manager=None):
     is_circular = abs(arc.radius_x - arc.radius_y) < 1e-6 and abs(arc.rotation_angle) < 1e-6
 
-    start_ang = float(arc.start_angle)
-    end_ang = float(arc.end_angle)
+    # 1. Если дуга нарисована по часовой стрелке, делаем её против часовой
+    qt_start = float(arc.start_angle)
+    qt_end = float(arc.end_angle)
+    if qt_end < qt_start:
+        qt_start, qt_end = qt_end, qt_start
 
-    # Защита от направления по часовой стрелке. 
-    # Если конец меньше начала, меняем их местами, чтобы путь остался тем же, 
-    # но рисовался против часовой стрелки (как требует DXF).
-    if end_ang < start_ang:
-        start_ang, end_ang = end_ang, start_ang
+    # 2. Математическое отзеркаливание дуги по вертикали
+    dxf_start = (360 - qt_end) % 360
+    dxf_end = (360 - qt_start) % 360
+    
+    # Гарантируем, что DXF нарисует путь правильно (против часовой)
+    if dxf_end <= dxf_start:
+        dxf_end += 360
 
     if is_circular:
         entity = msp.add_arc(
             center=(arc.center.x(), arc.center.y(), 0),
             radius=arc.radius_x,
-            start_angle=start_ang,
-            end_angle=end_ang,
+            start_angle=dxf_start,
+            end_angle=dxf_end,
         )
     else:
-        # Угол поворота передаем КАК ЕСТЬ, без минусов!
+        # Угол наклона НЕ ИНВЕРТИРУЕМ (вектор major_axis сам компенсирует Y-разворот)
         cos_rot = math.cos(arc.rotation_angle)
         sin_rot = math.sin(arc.rotation_angle)
 
         if arc.radius_x >= arc.radius_y:
             major_axis = (arc.radius_x * cos_rot, arc.radius_x * sin_rot, 0)
             ratio = arc.radius_y / arc.radius_x if arc.radius_x > 0 else 1.0
-            start_param = math.radians(start_ang)
-            end_param = math.radians(end_ang)
+            start_param = math.radians(dxf_start)
+            end_param = math.radians(dxf_end)
         else:
             major_axis = (-arc.radius_y * sin_rot, arc.radius_y * cos_rot, 0)
             ratio = arc.radius_x / arc.radius_y if arc.radius_y > 0 else 1.0
-            start_param = math.radians(start_ang) - math.pi / 2
-            end_param = math.radians(end_ang) - math.pi / 2
+            start_param = math.radians(dxf_start) - math.pi / 2
+            end_param = math.radians(dxf_end) - math.pi / 2
 
         entity = msp.add_ellipse(
             center=(arc.center.x(), arc.center.y(), 0),
