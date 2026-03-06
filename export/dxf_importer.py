@@ -181,8 +181,10 @@ def _import_circle(doc, entity, **kwargs):
 def _import_arc(doc, entity, **kwargs):
     center = entity.dxf.center
     radius = float(entity.dxf.radius)
-    start_angle_deg = math.degrees(float(entity.dxf.start_angle))
-    end_angle_deg = math.degrees(float(entity.dxf.end_angle))
+    dxf_start = float(entity.dxf.start_angle)
+    dxf_end   = float(entity.dxf.end_angle)
+    start_angle_deg = (dxf_end)   % 360
+    end_angle_deg   = (dxf_start) % 360
     color = _entity_qcolor(doc, entity)
     layer_name = _entity_layer_name(entity)
     arc = Arc(
@@ -204,52 +206,60 @@ def _import_arc(doc, entity, **kwargs):
 
 def _import_ellipse(doc, entity, **kwargs):
     center = entity.dxf.center
-    # major_axis — вектор от центра до конца большой оси (в мировых координатах)
     major = entity.dxf.major_axis
-    ratio = float(entity.dxf.ratio)  # minor/major
+    ratio = float(entity.dxf.ratio)
     radius_x = math.hypot(major.x, major.y)
     radius_y = radius_x * ratio
     start_param = getattr(entity.dxf, 'start_param', 0)
     end_param = getattr(entity.dxf, 'end_param', 2 * math.pi)
-    # Эллипс может быть полным или дугой
+    
+    color = _entity_qcolor(doc, entity)
+    layer_name = _entity_layer_name(entity)
+    linetype = _entity_linetype(doc, entity)
+    width = _entity_lineweight_px(doc, entity)
+    
+    # Вычисляем угол и ИНВЕРТИРУЕМ его для Qt
+    dxf_angle_rad = math.atan2(major.y, major.x)
+    qt_angle_rad = dxf_angle_rad
+
     if abs((end_param - start_param) - 2 * math.pi) < 1e-9:
-        # Полный эллипс — создаём как Ellipse
-        angle_rad = math.atan2(major.y, major.x)
-        color = _entity_qcolor(doc, entity)
-        layer_name = _entity_layer_name(entity)
+        # Полный эллипс
         ellipse = Ellipse(
             QPointF(center.x, center.y),
             radius_x,
             radius_y,
             style=None,
             color=color,
-            width=_entity_lineweight_px(doc, entity),
-            rotation_angle=angle_rad,
+            width=width,
+            rotation_angle=qt_angle_rad,
         )
-    ellipse.layer_name = layer_name
-    ellipse._from_dxf_import = True
-    ellipse._legacy_linetype = _entity_linetype(doc, entity)
-    return ellipse
-    # Дуга эллипса — как Arc с радиусами и углами (приближение)
-    start_angle_deg = math.degrees(start_param)
-    end_angle_deg = math.degrees(end_param)
-    color = _entity_qcolor(doc, entity)
-    layer_name = _entity_layer_name(entity)
-    arc = Arc(
-        QPointF(center.x, center.y),
-        radius_x,
-        radius_y,
-        start_angle_deg,
-        end_angle_deg,
-        style=None,
-        color=color,
-        width=_entity_lineweight_px(doc, entity),
-        rotation_angle=math.atan2(major.y, major.x),
-    )
-    arc.layer_name = layer_name
-    arc._from_dxf_import = True
-    arc._legacy_linetype = _entity_linetype(doc, entity)
-    return arc
+        ellipse.layer_name = layer_name
+        ellipse._from_dxf_import = True
+        ellipse._legacy_linetype = linetype
+        return ellipse
+    else:
+        # Дуга эллипса
+        dxf_start_deg = math.degrees(start_param)
+        dxf_end_deg = math.degrees(end_param)
+        
+        start_angle_deg = (dxf_end_deg) % 360
+        end_angle_deg = (dxf_start_deg) % 360
+        
+        arc = Arc(
+            QPointF(center.x, center.y),
+            radius_x,
+            radius_y,
+            start_angle_deg,
+            end_angle_deg,
+            style=None,
+            color=color,
+            width=width,
+            rotation_angle=qt_angle_rad,
+        )
+        arc.layer_name = layer_name
+        arc._from_dxf_import = True
+        arc._legacy_linetype = linetype
+        return arc
 
 
 # Стили, экспортируемые как LWPOLYLINE с геометрией (зигзаг и т.д.).
@@ -310,7 +320,7 @@ def _import_lwpolyline(doc, entity, **kwargs):
 def _spline_point_to_xy(p):
     """Приводит точку из ezdxf (Vec3, numpy, tuple) к (x, y)."""
     if hasattr(p, 'x') and hasattr(p, 'y'):
-        return (float(p.x), float(p.y))
+        return (float(p.x), -float(p.y))
     return (float(p[0]), float(p[1]))
 
 
