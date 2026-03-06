@@ -16,6 +16,14 @@ from widgets.line_segment import LineSegment
 from widgets.line_style import LineType
 
 
+class _LegacyLineStyle:
+    """Минимальный «стиль» для отрисовки по _legacy_linetype (импорт из DXF)."""
+    dash_length = 5.0
+    dash_gap = 2.5
+    thickness_mm = 0.8
+    line_type = LineType.DASH_DOT_THIN
+
+
 class LineRenderer:
     """Класс для отрисовки линий различных типов"""
     
@@ -57,25 +65,26 @@ class LineRenderer:
                 painter.setPen(pen)
                 painter.drawLine(line.start_point, line.end_point)
         else:
-            # Обратная совместимость - используем старый способ
+            # Нет стиля: цвет/толщина из объекта; тип линии из _legacy_linetype (импорт DXF) или сплошная
             pen = QPen(line.color, line.width)
             if is_selected:
                 pen.setWidthF(pen.widthF() * 1.5)
-            painter.setPen(pen)
-            painter.setBrush(Qt.NoBrush)  # Убеждаемся, что brush не мешает
-            painter.drawLine(line.start_point, line.end_point)
+            painter.setBrush(Qt.NoBrush)
+            legacy_lt = getattr(line, '_legacy_linetype', 'Continuous') or 'Continuous'
+            legacy_lt = str(legacy_lt).strip().upper()
+            if legacy_lt == 'DASHED':
+                LineRenderer._draw_dashed_line(painter, line.start_point, line.end_point, pen, _LegacyLineStyle)
+            elif legacy_lt in ('DASHDOT', 'DASHDOT2'):
+                if legacy_lt == 'DASHDOT2':
+                    style = type('_LegacyDashDot2', (), {'dash_length': 5.0, 'dash_gap': 2.5, 'thickness_mm': 0.8, 'line_type': LineType.DASH_DOT_TWO_DOTS})()
+                else:
+                    style = _LegacyLineStyle
+                LineRenderer._draw_dash_dot_line(painter, line.start_point, line.end_point, pen, style)
+            else:
+                painter.setPen(pen)
+                painter.drawLine(line.start_point, line.end_point)
         
-        # Рисуем точки на концах
-        painter.setPen(Qt.NoPen)  # Убираем обводку для точек
-        if is_selected:
-            painter.setBrush(QColor(0, 100, 255))  # Синий для выделенных
-        else:
-            # Используем цвет линии для точек
-            point_color = line.color if hasattr(line, 'color') else QColor(0, 0, 0)
-            painter.setBrush(point_color)
-        point_size = max(2, 4 / scale_factor)  # минимальный размер точки
-        painter.drawEllipse(line.start_point, point_size, point_size)
-        painter.drawEllipse(line.end_point, point_size, point_size)
+        # Кружки на концах отрезка не рисуем (ни при создании, ни после)
         
         # Восстанавливаем brush
         painter.setBrush(old_brush)
@@ -3610,10 +3619,11 @@ class PrimitiveRenderer:
 class SceneRenderer:
     """Класс для отрисовки всей сцены"""
     
-    def __init__(self, viewport, scene, selection_manager):
+    def __init__(self, viewport, scene, selection_manager, layer_manager=None):
         self.viewport = viewport
         self.scene = scene
         self.selection_manager = selection_manager
+        self.layer_manager = layer_manager
         
         # Настройки отрисовки
         self.background_color = QColor(255, 255, 255)
@@ -3642,14 +3652,18 @@ class SceneRenderer:
         # Оси координат
         self._draw_axes(painter)
         
-        # Объекты сцены
+        # Объекты сцены (слой только для видимости, стиль — у каждого объекта свой)
         scale_factor = self.viewport.get_scale()
         for obj in self.scene.get_objects():
+            if self.layer_manager:
+                obj_layer_name = getattr(obj, '_layer_name', '0')
+                if not self.layer_manager.is_layer_visible(obj_layer_name):
+                    continue
+
             is_selected = self.selection_manager.is_selected(obj)
             if isinstance(obj, LineSegment):
                 LineRenderer.draw_line(painter, obj, scale_factor, is_selected)
             elif hasattr(obj, 'draw'):
-                # Используем метод draw объекта, если он есть
                 obj.draw(painter, scale_factor)
         
         # Текущий рисуемый объект
@@ -3752,7 +3766,7 @@ class SceneRenderer:
         painter.drawText(int(zero_pos_screen.x()), int(zero_pos_screen.y()), "0")
         
         painter.setTransform(saved_transform)
-    
+
     def _draw_selection_highlight(self, painter: QPainter, obj):
         """Рисует подсветку выделенного объекта"""
         highlight_pen = QPen(QColor(0, 100, 255), 1, Qt.DashLine)

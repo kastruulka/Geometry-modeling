@@ -1,10 +1,10 @@
 import sys
 import math
-from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
+from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                                QPushButton, QLabel, QComboBox, QDoubleSpinBox, QGroupBox,
                                QGridLayout, QSpinBox, QColorDialog, QMessageBox, QToolBar,
                                QStatusBar, QMenu, QSizePolicy, QSplitter, QScrollArea,
-                               QTableWidget, QTableWidgetItem, QHeaderView)
+                               QTableWidget, QTableWidgetItem, QHeaderView, QFileDialog)
 from PySide6.QtCore import QPointF, Qt, QSize, QRectF
 from PySide6.QtGui import QColor, QAction, QIcon, QKeySequence, QPixmap, QPainter, QPen
 
@@ -12,6 +12,8 @@ from widgets.coordinate_system import CoordinateSystemWidget
 from widgets.line_style import LineStyleManager
 from ui.style_panels import ObjectPropertiesPanel, StyleManagementPanel, StyleComboBox
 from ui.edit_dialog import EditDialog
+from core.layers import LayerManager
+from ui.layer_panel import LayerPanel
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -28,9 +30,13 @@ class MainWindow(QMainWindow):
         
         # Создаем менеджер стилей
         self.style_manager = LineStyleManager()
-        
+
+        # Создаем менеджер слоёв
+        self.layer_manager = LayerManager()
+
         # сначала создаем canvas
         self.canvas = CoordinateSystemWidget(style_manager=self.style_manager)
+        self.canvas.set_layer_manager(self.layer_manager)
         
         # Выделенные объекты
         self.selected_objects = []
@@ -223,7 +229,7 @@ class MainWindow(QMainWindow):
         self.spline_control_points_group.setLayout(spline_cp_layout)
         self.spline_control_points_group.hide()
         tools_layout.addWidget(self.spline_control_points_group)
-        
+
         tools_group.setLayout(tools_layout)
         left_panel.addWidget(tools_group)
         
@@ -706,17 +712,26 @@ class MainWindow(QMainWindow):
         # Панель управления стилями
         self.style_management_panel = StyleManagementPanel(self.style_manager)
         left_panel.addWidget(self.style_management_panel)
-        
+
+        # Панель слоёв
+        self.layer_panel = LayerPanel(self.layer_manager, scene=self.canvas.scene)
+        self.layer_panel.layers_changed.connect(self.canvas.update)
+        self.layer_manager.layer_removed.connect(self._on_layer_removed)
+        left_panel.addWidget(self.layer_panel)
+
         left_panel.addStretch()
         
         # правая часть с рабочей областью и информацией
         right_widget = QWidget()
         right_panel = QVBoxLayout(right_widget)
+        right_panel.setContentsMargins(0, 0, 0, 0)
+        right_panel.setSpacing(4)
         
         # рабочая область
-        right_panel.addWidget(self.canvas)
+        self.canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        right_panel.addWidget(self.canvas, stretch=1)
         
-        # информационная панель
+        # информационная панель (компактная)
         info_group = QGroupBox("Информация об объекте")
         info_layout = QGridLayout()
         
@@ -740,15 +755,24 @@ class MainWindow(QMainWindow):
         self.info_value4 = QLabel("")
         info_layout.addWidget(self.info_label4, 3, 0)
         info_layout.addWidget(self.info_value4, 3, 1)
-        
+
+        self.info_label5 = QLabel("")
+        self.info_value5 = QLabel("")
+        info_layout.addWidget(self.info_label5, 4, 0)
+        info_layout.addWidget(self.info_value5, 4, 1)
+
         info_group.setLayout(info_layout)
-        right_panel.addWidget(info_group)
+        # Ограничиваем высоту информационной панели, чтобы не съедала рабочую область
+        info_group.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
+        info_group.setMaximumHeight(140)
+        right_panel.addWidget(info_group, stretch=0)
         
         # Добавляем виджеты в splitter
         main_splitter.addWidget(scroll_area)
         main_splitter.addWidget(right_widget)
-        main_splitter.setStretchFactor(0, 1)
-        main_splitter.setStretchFactor(1, 3)
+        # Делаем правую (рабочую) часть заметно шире левой
+        main_splitter.setStretchFactor(0, 0)
+        main_splitter.setStretchFactor(1, 1)
         
         main_layout.addWidget(main_splitter)
         
@@ -835,7 +859,20 @@ class MainWindow(QMainWindow):
     
     def create_menus(self):
         menubar = self.menuBar()
-        
+
+        # меню "Файл"
+        file_menu = menubar.addMenu("Файл")
+
+        import_dxf_action = QAction("Импорт из DXF...", self)
+        import_dxf_action.setShortcut("Ctrl+O")
+        import_dxf_action.triggered.connect(self.import_from_dxf)
+        file_menu.addAction(import_dxf_action)
+
+        export_dxf_action = QAction("Экспорт в DXF...", self)
+        export_dxf_action.setShortcut("Ctrl+E")
+        export_dxf_action.triggered.connect(self.export_to_dxf)
+        file_menu.addAction(export_dxf_action)
+
         # меню "Вид"
         view_menu = menubar.addMenu("Вид")
         
@@ -873,7 +910,78 @@ class MainWindow(QMainWindow):
         rotate_right_action.setShortcut("Ctrl+Right")
         rotate_right_action.triggered.connect(self.rotate_right)
         view_menu.addAction(rotate_right_action)
-    
+
+    def import_from_dxf(self):
+        """Импортирует объекты из DXF с переносом цветов (ACI/TrueColor) и слоёв."""
+        filepath, _ = QFileDialog.getOpenFileName(
+            self,
+            "Импорт из DXF",
+            "",
+            "AutoCAD DXF (*.dxf)"
+        )
+        if not filepath:
+            return
+        try:
+            from export.dxf_importer import import_dxf_from_file
+            count = import_dxf_from_file(
+                filepath,
+                self.canvas.scene,
+                layer_manager=self.layer_manager,
+            )
+            self.canvas.update()
+            if hasattr(self, 'layer_panel') and self.layer_panel:
+                self.layer_panel.refresh_list()
+            QMessageBox.information(
+                self,
+                "Импорт из DXF",
+                f"Импортировано объектов: {count}\nФайл:\n{filepath}"
+            )
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Ошибка импорта",
+                f"Не удалось импортировать DXF:\n{e}"
+            )
+
+    def export_to_dxf(self):
+        """Экспортирует все объекты сцены в файл DXF."""
+        objects = self.canvas.scene.get_objects()
+        if not objects:
+            QMessageBox.information(self, "Экспорт в DXF", "Сцена пуста — нечего экспортировать.")
+            return
+
+        filepath, _ = QFileDialog.getSaveFileName(
+            self,
+            "Экспорт в DXF",
+            "drawing.dxf",
+            "AutoCAD DXF (*.dxf)"
+        )
+        if not filepath:
+            return
+
+        try:
+            from export.dxf_exporter import export_scene_to_dxf
+            count = export_scene_to_dxf(objects, filepath, layer_manager=self.layer_manager)
+            QMessageBox.information(
+                self,
+                "Экспорт в DXF",
+                f"Экспортировано объектов: {count}\nФайл сохранён:\n{filepath}"
+            )
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Ошибка экспорта",
+                f"Не удалось экспортировать в DXF:\n{e}"
+            )
+
+    def _on_layer_removed(self, layer_name: str):
+        """Переносит объекты удалённого слоя на слой '0'."""
+        for obj in self.canvas.scene.get_objects():
+            if getattr(obj, '_layer_name', '0') == layer_name:
+                obj.layer_name = '0'
+        self.canvas.update()
+        self.update_info()
+
     def create_toolbar(self):
         # панель инструментов навигации
         toolbar = QToolBar("Навигация")
@@ -1684,7 +1792,7 @@ class MainWindow(QMainWindow):
             "Прямоугольник": "rectangle",
             "Эллипс": "ellipse",
             "Многоугольник": "polygon",
-            "Сплайн": "spline"
+            "Сплайн": "spline",
         }
         primitive_type = primitive_map.get(primitive_name, "line")
         self.canvas.set_primitive_type(primitive_type)
@@ -2493,6 +2601,10 @@ class MainWindow(QMainWindow):
     
     def update_info(self):
         """Обновляет информационную панель в зависимости от типа последнего объекта"""
+        # Обновляем счётчики объектов в панели слоёв
+        if hasattr(self, 'layer_panel'):
+            self.layer_panel.refresh_list()
+
         # Получаем все объекты из сцены
         objects = self.canvas.scene.get_objects()
         
@@ -2601,7 +2713,15 @@ class MainWindow(QMainWindow):
         self.info_value3.setText("")
         self.info_label4.setText("")
         self.info_value4.setText("")
+        self.info_label5.setText("")
+        self.info_value5.setText("")
     
+    def _set_layer_info(self, obj):
+        """Показывает слой объекта в info_label5/info_value5."""
+        layer_name = getattr(obj, '_layer_name', '0')
+        self.info_label5.setText("Слой:")
+        self.info_value5.setText(layer_name)
+
     def _update_line_info(self, line):
         """Обновляет информацию об отрезке"""
         start_x, start_y = line.start_point.x(), line.start_point.y()
@@ -2629,7 +2749,8 @@ class MainWindow(QMainWindow):
         self.info_value3.setText(f"{length:.2f}")
         self.info_label4.setText("Угол наклона:")
         self.info_value4.setText(angle_str)
-    
+        self._set_layer_info(line)
+
     def _update_circle_info(self, circle):
         """Обновляет информацию об окружности"""
         center_x, center_y = circle.center.x(), circle.center.y()
@@ -2648,7 +2769,8 @@ class MainWindow(QMainWindow):
         self.info_value3.setText(f"{perimeter:.2f}")
         self.info_label4.setText("Площадь:")
         self.info_value4.setText(f"{area:.2f}")
-    
+        self._set_layer_info(circle)
+
     def _update_arc_info(self, arc):
         """Обновляет информацию о дуге"""
         center_x, center_y = arc.center.x(), arc.center.y()
@@ -2672,7 +2794,8 @@ class MainWindow(QMainWindow):
         self.info_value3.setText(f"Начало: {start_angle:.2f}°, Конец: {end_angle:.2f}°")
         self.info_label4.setText("Длина дуги:")
         self.info_value4.setText(f"{arc_length:.2f}")
-    
+        self._set_layer_info(arc)
+
     def _update_rectangle_info(self, rectangle):
         """Обновляет информацию о прямоугольнике"""
         bbox = rectangle.get_bounding_box()
@@ -2696,7 +2819,8 @@ class MainWindow(QMainWindow):
         self.info_value3.setText(f"Ширина: {width:.2f}, Высота: {height:.2f}")
         self.info_label4.setText("Площадь:")
         self.info_value4.setText(f"{area:.2f}")
-    
+        self._set_layer_info(rectangle)
+
     def _update_ellipse_info(self, ellipse):
         """Обновляет информацию об эллипсе"""
         center_x, center_y = ellipse.center.x(), ellipse.center.y()
@@ -2717,7 +2841,8 @@ class MainWindow(QMainWindow):
         self.info_value3.setText(f"{perimeter:.2f}")
         self.info_label4.setText("Площадь:")
         self.info_value4.setText(f"{area:.2f}")
-    
+        self._set_layer_info(ellipse)
+
     def _update_polygon_info(self, polygon):
         """Обновляет информацию о многоугольнике"""
         center_x, center_y = polygon.center.x(), polygon.center.y()
@@ -2750,7 +2875,8 @@ class MainWindow(QMainWindow):
         self.info_value3.setText(f"{num_vertices}")
         self.info_label4.setText("Периметр:")
         self.info_value4.setText(f"{perimeter:.2f}")
-    
+        self._set_layer_info(polygon)
+
     def _update_spline_info(self, spline):
         """Обновляет информацию о сплайне"""
         num_points = len(spline.control_points)
@@ -2778,7 +2904,10 @@ class MainWindow(QMainWindow):
         
         self.info_label1.setText("Количество точек:")
         self.info_value1.setText(f"{num_points}")
-    
+        self.info_label2.setText("Длина:")
+        self.info_value2.setText(f"{length:.2f}")
+        self._set_layer_info(spline)
+
     def _create_primitive_icon(self, primitive_name: str) -> QIcon:
         """Создает иконку для типа примитива"""
         size = 24
@@ -2835,7 +2964,6 @@ class MainWindow(QMainWindow):
                 x2 = margin + (width / (num_points - 1)) * (i + 1)
                 y2 = center_y + 3 * math.sin((i + 1) * math.pi / 2)
                 painter.drawLine(int(x1), int(y1), int(x2), int(y2))
-        
         painter.end()
         return QIcon(pixmap)
         self.info_label2.setText("Первая точка:")

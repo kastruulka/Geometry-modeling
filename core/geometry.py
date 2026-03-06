@@ -11,6 +11,17 @@ class GeometricObject(ABC):
     
     def __init__(self):
         self._selected = False
+        self._layer_name = "0"
+
+    @property
+    def layer_name(self):
+        """Возвращает имя слоя объекта"""
+        return self._layer_name
+
+    @layer_name.setter
+    def layer_name(self, value: str):
+        """Устанавливает слой объекта"""
+        self._layer_name = value
     
     @property
     def selected(self):

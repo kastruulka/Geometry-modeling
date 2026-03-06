@@ -25,19 +25,22 @@ class CoordinateSystemWidget(QWidget):
     selection_changed = Signal(list)  # сигнал при изменении выделения
     line_finished = Signal()  # сигнал при завершении рисования отрезка
     rectangle_drawing_started = Signal(str)  # сигнал при начале рисования прямоугольника (передает метод)
-    
+
     def __init__(self, style_manager=None):
         super().__init__()
-        
+
         # Создаем компоненты
         self.viewport = Viewport(self.width(), self.height())
         self.scene = Scene()
         self.selection_manager = SelectionManager()
         self.renderer = SceneRenderer(self.viewport, self.scene, self.selection_manager)
         self.snap_manager = SnapManager(tolerance=15.0)  # Увеличиваем tolerance для лучшей видимости привязок
-        
+
         # Менеджер стилей
         self.style_manager = style_manager
+
+        # Менеджер слоёв
+        self.layer_manager = None
         
         # Текущая точка привязки для визуализации
         self.current_snap_point = None
@@ -86,7 +89,7 @@ class CoordinateSystemWidget(QWidget):
         self.edit_dialog = None  # Ссылка на окно редактирования
         self.dragging_point = None  # 'start' или 'end' - какая точка перемещается
         self.drag_start_pos = None  # Позиция начала перетаскивания
-        
+
         # Подключаем сигналы
         self.selection_manager.selection_changed.connect(self._on_selection_changed)
         
@@ -94,6 +97,11 @@ class CoordinateSystemWidget(QWidget):
         self.setMouseTracking(True)
         self.setContextMenuPolicy(Qt.NoContextMenu)
     
+    def set_layer_manager(self, layer_manager):
+        """Устанавливает менеджер слоёв и обновляет renderer."""
+        self.layer_manager = layer_manager
+        self.renderer.layer_manager = layer_manager
+
     def set_editing_mode(self, enabled, edit_dialog=None):
         """Устанавливает режим редактирования (перемещение точек)"""
         self.editing_mode = enabled
@@ -133,7 +141,7 @@ class CoordinateSystemWidget(QWidget):
         # Рисуем точки редактирования (в режиме редактирования)
         if self.editing_mode:
             self._draw_editing_points(painter)
-        
+
         # В конце рисуем рамку выделения (в экранных координатах)
         if self.is_selecting and self.selection_start and self.selection_end:
             self._draw_selection_rect(painter)
@@ -1016,8 +1024,13 @@ class CoordinateSystemWidget(QWidget):
                 # Проверяем, кликнули ли по существующему объекту (для выделения)
                 # Но только если мы не рисуем новый объект И нет активной точки привязки
                 if not self.scene.is_drawing() and not has_active_snap:
+                    selectable = self.scene.get_objects()
+                    if self.layer_manager:
+                        selectable = [o for o in selectable
+                                      if self.layer_manager.is_layer_visible(getattr(o, '_layer_name', '0'))
+                                      and not self.layer_manager.is_layer_locked(getattr(o, '_layer_name', '0'))]
                     clicked_obj = self.selection_manager.find_object_at_point(
-                        world_pos, self.scene.get_objects()
+                        world_pos, selectable
                     )
                     if clicked_obj:
                         # Клик по объекту - выделяем его
@@ -1057,8 +1070,13 @@ class CoordinateSystemWidget(QWidget):
                     elif self.primitive_type == 'spline':
                         # Для сплайна не нужны дополнительные параметры
                         pass
+                    # Назначаем текущий слой
+                    layer_name = None
+                    if self.layer_manager:
+                        layer_name = self.layer_manager.get_current_layer_name()
                     self.scene.start_drawing(world_pos, drawing_type=self.primitive_type,
-                                            style=style, color=self.line_color, width=self.line_width, **kwargs)
+                                            style=style, color=self.line_color, width=self.line_width,
+                                            layer_name=layer_name, **kwargs)
                     # Эмитируем сигнал о начале рисования прямоугольника (после start_drawing)
                     if self.primitive_type == 'rectangle':
                         self.rectangle_drawing_started.emit(self.rectangle_creation_method)
@@ -2104,16 +2122,22 @@ class CoordinateSystemWidget(QWidget):
             style = self.style_manager.get_current_style()
         
         if apply:
-            new_line = LineSegment(start_point, end_point, style=style, 
+            new_line = LineSegment(start_point, end_point, style=style,
                                   color=self.line_color, width=self.line_width)
             if hasattr(new_line, '_legacy_color'):
                 new_line._legacy_color = self.line_color
+            if self.layer_manager:
+                new_line.layer_name = self.layer_manager.get_current_layer_name()
             self.scene.add_object(new_line)
             self.update()
         else:
+            layer_name = None
+            if self.layer_manager:
+                layer_name = self.layer_manager.get_current_layer_name()
             if not self.scene.is_drawing():
                 self.scene.start_drawing(start_point, drawing_type='line', style=style,
-                                       color=self.line_color, width=self.line_width)
+                                       color=self.line_color, width=self.line_width,
+                                       layer_name=layer_name)
                 current_obj = self.scene.get_current_object()
                 if current_obj:
                     self.scene.update_current_object(end_point)

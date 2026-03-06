@@ -50,6 +50,11 @@ class Scene:
         """Добавляет объект на сцену"""
         if obj not in self._objects:
             self._objects.append(obj)
+
+    def add_objects(self, objects):
+        """Пакетное добавление объектов (без проверки дубликатов). Ускоряет импорт."""
+        for obj in objects:
+            self._objects.append(obj)
     
     def remove_object(self, obj: GeometricObject):
         """Удаляет объект со сцены"""
@@ -175,10 +180,11 @@ class Scene:
         """Возвращает все отрезки на сцене"""
         return [obj for obj in self._objects if isinstance(obj, LineSegment)]
     
-    def start_drawing(self, start_point: QPointF, drawing_type: str = 'line', 
-                     style=None, color=None, width=None, **kwargs):
+    def start_drawing(self, start_point: QPointF, drawing_type: str = 'line',
+                     style=None, color=None, width=None, layer_name=None, **kwargs):
         """Начинает рисование нового объекта"""
         self._drawing_type = drawing_type
+        self._current_layer_name = layer_name
         
         if drawing_type == 'line':
             from widgets.line_segment import LineSegment
@@ -627,6 +633,9 @@ class Scene:
             drawing_type = self._drawing_type
             
             obj = self._current_object
+            # Назначаем слой
+            if hasattr(self, '_current_layer_name') and self._current_layer_name:
+                obj.layer_name = self._current_layer_name
             self.add_object(obj)
             self._current_object = None
             self._is_drawing = False
