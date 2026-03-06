@@ -333,30 +333,39 @@ def _export_circle(msp, circle: Circle, style_to_layer, layer_manager=None):
 
 
 def _export_arc(msp, arc: Arc, style_to_layer, layer_manager=None):
-    """Экспортирует дугу. Круговые дуги → ARC, эллиптические → ELLIPSE."""
     is_circular = abs(arc.radius_x - arc.radius_y) < 1e-6 and abs(arc.rotation_angle) < 1e-6
+
+    start_ang = float(arc.start_angle)
+    end_ang = float(arc.end_angle)
+
+    # Защита от направления по часовой стрелке. 
+    # Если конец меньше начала, меняем их местами, чтобы путь остался тем же, 
+    # но рисовался против часовой стрелки (как требует DXF).
+    if end_ang < start_ang:
+        start_ang, end_ang = end_ang, start_ang
 
     if is_circular:
         entity = msp.add_arc(
             center=(arc.center.x(), arc.center.y(), 0),
             radius=arc.radius_x,
-            start_angle=arc.start_angle,
-            end_angle=arc.end_angle,
+            start_angle=start_ang,
+            end_angle=end_ang,
         )
     else:
+        # Угол поворота передаем КАК ЕСТЬ, без минусов!
         cos_rot = math.cos(arc.rotation_angle)
         sin_rot = math.sin(arc.rotation_angle)
 
         if arc.radius_x >= arc.radius_y:
             major_axis = (arc.radius_x * cos_rot, arc.radius_x * sin_rot, 0)
             ratio = arc.radius_y / arc.radius_x if arc.radius_x > 0 else 1.0
-            start_param = math.radians(arc.start_angle)
-            end_param = math.radians(arc.end_angle)
+            start_param = math.radians(start_ang)
+            end_param = math.radians(end_ang)
         else:
             major_axis = (-arc.radius_y * sin_rot, arc.radius_y * cos_rot, 0)
             ratio = arc.radius_x / arc.radius_y if arc.radius_y > 0 else 1.0
-            start_param = math.radians(arc.start_angle) - math.pi / 2
-            end_param = math.radians(arc.end_angle) - math.pi / 2
+            start_param = math.radians(start_ang) - math.pi / 2
+            end_param = math.radians(end_ang) - math.pi / 2
 
         entity = msp.add_ellipse(
             center=(arc.center.x(), arc.center.y(), 0),
