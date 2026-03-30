@@ -12,6 +12,7 @@ from core.geometry import Point
 from core.layers import Layer
 from widgets.line_segment import LineSegment
 from widgets.primitives import Circle, Arc, Ellipse, Spline, Rectangle, Polygon
+from widgets.line_style import LineStyle, LineType
 
 # Лимиты точек при импорте (редукция при превышении)
 MAX_SPLINE_POINTS = 150
@@ -289,17 +290,44 @@ def _import_ellipse(doc, entity, **kwargs):
         arc._legacy_linetype = _entity_linetype(doc, entity)
         return arc
 
+
+def _parse_xdata_payload(entity):
+    """Читает XData GEO_MODELER и разделяет геометрию и параметры стиля."""
+    if not entity.has_xdata("GEO_MODELER"):
+        return None, [], None, []
+
+    obj_type = None
+    geometry_floats = []
+    style_type = None
+    style_values = []
+    current_section = "geometry"
+
+    for code, value in entity.get_xdata("GEO_MODELER"):
+        if code == 1000:
+            if obj_type is None:
+                obj_type = value
+            elif value == "__STYLE_BROKEN__":
+                style_type = "broken"
+                current_section = "style"
+            elif value == "__STYLE_WAVY__":
+                style_type = "wavy"
+                current_section = "style"
+            else:
+                current_section = "geometry"
+        elif code == 1040:
+            if current_section == "style":
+                style_values.append(float(value))
+            else:
+                geometry_floats.append(float(value))
+
+    return obj_type, geometry_floats, style_type, style_values
+
 def _restore_from_xdata(doc, entity):
     """Универсальный восстановитель любой геометрии из XData (наших скрытых метаданных)."""
     if not entity.has_xdata("GEO_MODELER"):
         return None
     try:
-        xdata = entity.get_xdata("GEO_MODELER")
-        obj_type = None
-        floats = []
-        for code, value in xdata:
-            if code == 1000: obj_type = value
-            elif code == 1040: floats.append(value)
+        obj_type, floats, style_type, style_values = _parse_xdata_payload(entity)
 
         color = _entity_qcolor(doc, entity)
         width_px = _entity_lineweight_px(doc, entity)
@@ -334,6 +362,16 @@ def _restore_from_xdata(doc, entity):
             obj._layer_name = layer_name  
             obj._from_dxf_import = True
             obj._legacy_linetype = linetype
+            if style_type == "broken":
+                obj._xdata_style_type = "broken"
+                if len(style_values) >= 1:
+                    obj._xdata_zigzag_count = max(1, int(round(style_values[0])))
+                if len(style_values) >= 2:
+                    obj._xdata_zigzag_step_mm = float(style_values[1])
+            elif style_type == "wavy":
+                obj._xdata_style_type = "wavy"
+                if len(style_values) >= 1:
+                    obj._xdata_wavy_amplitude_mm = float(style_values[0])
             return obj
     except Exception as e:
         print(f"Ошибка при чтении XData: {e}")
@@ -619,6 +657,16 @@ def _match_gost_style(obj, style_manager):
     if style_manager is None:
         return None
 
+    xdata_style_type = getattr(obj, '_xdata_style_type', None)
+    if xdata_style_type == 'broken':
+        style = style_manager.get_style('Сплошная тонкая с изломами')
+        if style:
+            return style
+    elif xdata_style_type == 'wavy':
+        style = style_manager.get_style('Сплошная волнистая')
+        if style:
+            return style
+
     # Надежно достаем имя слоя (проверяем и скрытый, и публичный атрибут)
     layer_name = getattr(obj, '_layer_name', getattr(obj, 'layer_name', '0'))
     
@@ -650,13 +698,51 @@ def _match_gost_style(obj, style_manager):
         return style_manager.get_style('Сплошная тонкая')
 
 
+def _style_with_imported_overrides(base_style, obj):
+    """Создает копию стиля, если из XData пришли индивидуальные параметры волны/изломов."""
+    if base_style is None:
+        return None
+
+    style_type = getattr(obj, '_xdata_style_type', None)
+    if style_type == 'broken':
+        zigzag_count = max(1, int(getattr(obj, '_xdata_zigzag_count', getattr(base_style, 'zigzag_count', 1))))
+        zigzag_step_mm = float(getattr(obj, '_xdata_zigzag_step_mm', getattr(base_style, 'zigzag_step_mm', 4.0)))
+        if (
+            getattr(base_style, 'line_type', None) == LineType.SOLID_THIN_BROKEN
+            and zigzag_count == getattr(base_style, 'zigzag_count', 1)
+            and abs(zigzag_step_mm - getattr(base_style, 'zigzag_step_mm', 4.0)) < 1e-9
+        ):
+            return base_style
+        cloned = base_style.clone()
+        cloned.name = base_style.name
+        cloned._is_gost_base = True
+        cloned.zigzag_count = zigzag_count
+        cloned.zigzag_step_mm = zigzag_step_mm
+        return cloned
+
+    if style_type == 'wavy':
+        amplitude = float(getattr(obj, '_xdata_wavy_amplitude_mm', getattr(base_style, 'wavy_amplitude_mm', 0.32)))
+        if (
+            getattr(base_style, 'line_type', None) == LineType.SOLID_WAVY
+            and abs(amplitude - getattr(base_style, 'wavy_amplitude_mm', 0.32)) < 1e-9
+        ):
+            return base_style
+        cloned = base_style.clone()
+        cloned.name = base_style.name
+        cloned._is_gost_base = True
+        cloned.wavy_amplitude_mm = amplitude
+        return cloned
+
+    return base_style
+
+
 def _apply_gost_style(obj, style_manager):
     """Назначает ГОСТ-стиль объекту, сохраняя оригинальный цвет из DXF."""
     if style_manager is None or not hasattr(obj, 'style'):
         return
     gost_style = _match_gost_style(obj, style_manager)
     if gost_style is not None:
-        obj.style = gost_style
+        obj.style = _style_with_imported_overrides(gost_style, obj)
 
 
 # ---------------------------------------------------------------------------

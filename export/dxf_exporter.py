@@ -5,7 +5,7 @@
 import math
 import ezdxf
 from ezdxf.colors import aci2rgb
-from PySide6.QtCore import QRectF
+from PySide6.QtCore import QRectF, QPointF
 from PySide6.QtGui import QPainterPath, QTransform
 
 from core.geometry import GeometricObject, Point
@@ -225,7 +225,7 @@ def _apply_entity_style(entity, obj, style_to_layer, layer_manager=None):
             entity.dxf.lineweight = _lineweight_from_mm(0.8)
         entity.dxf.linetype = "Continuous"
 
-def _embed_original_geometry(entity, obj_type: str, floats: list):
+def _embed_original_geometry(entity, obj_type: str, floats: list, style=None):
     """
     Прячет исходные параметры математической фигуры (радиусы, координаты) 
     внутрь сгенерированной волнистой полилинии через DXF XData.
@@ -233,6 +233,15 @@ def _embed_original_geometry(entity, obj_type: str, floats: list):
     xdata = [(1000, obj_type)]  # 1000 - текстовый код (тип фигуры)
     for f in floats:
         xdata.append((1040, float(f)))  # 1040 - код для float значений
+    if style is not None:
+        line_type = getattr(style, 'line_type', None)
+        if line_type == LineType.SOLID_THIN_BROKEN:
+            xdata.append((1000, "__STYLE_BROKEN__"))
+            xdata.append((1040, float(max(1, int(getattr(style, 'zigzag_count', 1) or 1)))))
+            xdata.append((1040, float(getattr(style, 'zigzag_step_mm', 4.0) or 4.0)))
+        elif line_type == LineType.SOLID_WAVY:
+            xdata.append((1000, "__STYLE_WAVY__"))
+            xdata.append((1040, float(getattr(style, 'wavy_amplitude_mm', 0.32) or 0.32)))
     entity.set_xdata("GEO_MODELER", xdata)
 
 # ---------------------------------------------------------------------------
@@ -470,6 +479,544 @@ def _wavy_points_along_polyline(base_points, style):
 
     return points
 
+
+def _broken_points_along_polyline(base_points, style, closed=False):
+    """Накладывает изломы вдоль произвольного контура."""
+    if not base_points or len(base_points) < 2:
+        return base_points or []
+
+    zigzag_count = max(1, int(getattr(style, 'zigzag_count', 1) or 1))
+    zigzag_step = float(getattr(style, 'zigzag_step_mm', 4.0) or 4.0)
+    zigzag_height = 3.5
+    zigzag_length_single = 4.0
+
+    contour_points = list(base_points)
+    if closed and contour_points[0] != contour_points[-1]:
+        contour_points.append(contour_points[0])
+
+    arc_lengths = [0.0]
+    total_length = 0.0
+    for i in range(1, len(contour_points)):
+        x1, y1 = contour_points[i - 1]
+        x2, y2 = contour_points[i]
+        total_length += math.hypot(x2 - x1, y2 - y1)
+        arc_lengths.append(total_length)
+
+    if total_length < 1e-6:
+        return contour_points
+
+    total_zigzag_length = zigzag_length_single * zigzag_count + zigzag_step * (zigzag_count - 1)
+    if total_zigzag_length > total_length * 0.9:
+        total_zigzag_length = total_length * 0.9
+        if zigzag_count > 1:
+            zigzag_step = (total_zigzag_length - zigzag_length_single * zigzag_count) / (zigzag_count - 1)
+            zigzag_step = max(zigzag_step, zigzag_length_single * 0.5)
+        total_zigzag_length = zigzag_length_single * zigzag_count + zigzag_step * (zigzag_count - 1)
+
+    start_dist = (total_length - total_zigzag_length) / 2.0
+    end_dist = start_dist + total_zigzag_length
+    num_points = max(120, zigzag_count * 18)
+
+    def sample_point(distance):
+        if distance <= 0.0:
+            return contour_points[0]
+        if distance >= total_length:
+            return contour_points[-1]
+        for i in range(1, len(arc_lengths)):
+            if arc_lengths[i] >= distance:
+                prev_len = arc_lengths[i - 1]
+                seg_len = arc_lengths[i] - prev_len
+                x1, y1 = contour_points[i - 1]
+                x2, y2 = contour_points[i]
+                t = (distance - prev_len) / seg_len if seg_len > 1e-9 else 0.0
+                return (x1 + (x2 - x1) * t, y1 + (y2 - y1) * t)
+        return contour_points[-1]
+
+    def sample_normal(distance, sample_step):
+        prev_pt = sample_point(max(0.0, distance - sample_step))
+        next_pt = sample_point(min(total_length, distance + sample_step))
+        tx = next_pt[0] - prev_pt[0]
+        ty = next_pt[1] - prev_pt[1]
+        mag = math.hypot(tx, ty)
+        if mag < 1e-9:
+            return (0.0, 0.0)
+        return (-ty / mag, tx / mag)
+
+    def broken_offset(distance):
+        if distance < start_dist or distance > end_dist:
+            return 0.0
+        local = distance - start_dist
+        block = zigzag_length_single + zigzag_step
+        if zigzag_count == 1:
+            block = zigzag_length_single
+        idx = min(zigzag_count - 1, int(local / block)) if block > 1e-9 else 0
+        within = local - idx * block
+        if within > zigzag_length_single:
+            return 0.0
+        third = zigzag_length_single / 3.0
+        if within <= third:
+            return (within / third) * (zigzag_height / 2.0)
+        if within <= 2.0 * third:
+            t = (within - third) / third
+            return (zigzag_height / 2.0) - t * (zigzag_height * 1.5)
+        t = (within - 2.0 * third) / third
+        return (-zigzag_height) + t * zigzag_height
+
+    result = []
+    sample_step = total_length / num_points
+    for i in range(num_points + 1):
+        dist = min(total_length, i * sample_step)
+        px, py = sample_point(dist)
+        nx, ny = sample_normal(dist, sample_step)
+        offset = broken_offset(dist)
+        result.append((px + nx * offset, py + ny * offset))
+
+    if closed and result and result[0] != result[-1]:
+        result[-1] = result[0]
+    return result
+
+
+def _rotate_translate_points(points, cx, cy, rotation_angle_rad):
+    if abs(rotation_angle_rad) < 1e-9:
+        return [(cx + x, cy + y) for x, y in points]
+    cos_r = math.cos(rotation_angle_rad)
+    sin_r = math.sin(rotation_angle_rad)
+    result = []
+    for x, y in points:
+        result.append((cx + x * cos_r - y * sin_r, cy + x * sin_r + y * cos_r))
+    return result
+
+
+def _broken_circle_polyline_points(circle: Circle, style):
+    circumference = 2 * math.pi * circle.radius
+    if circumference < 1:
+        return []
+
+    zigzag_count = max(1, int(getattr(style, 'zigzag_count', 1) or 1))
+    zigzag_step = float(getattr(style, 'zigzag_step_mm', 4.0) or 4.0)
+    zigzag_height = 3.5
+    zigzag_length_single = 4.0
+
+    total_zigzag_length = zigzag_length_single * zigzag_count + zigzag_step * (zigzag_count - 1)
+    total_zigzag_angle = (total_zigzag_length / circumference) * 2 * math.pi
+    if total_zigzag_angle > math.pi * 0.9:
+        total_zigzag_angle = math.pi * 0.9
+        if zigzag_count > 1:
+            max_length = circumference * 0.9
+            zigzag_step = (max_length - zigzag_length_single * zigzag_count) / (zigzag_count - 1)
+            zigzag_step = max(zigzag_step, zigzag_length_single * 0.5)
+            total_zigzag_length = zigzag_length_single * zigzag_count + zigzag_step * (zigzag_count - 1)
+            total_zigzag_angle = (total_zigzag_length / circumference) * 2 * math.pi
+
+    zigzag_length_single_angle = (zigzag_length_single / circumference) * 2 * math.pi
+    zigzag_step_angle = (zigzag_step / circumference) * 2 * math.pi
+    start_zigzag_angle = math.pi - total_zigzag_angle / 2
+
+    points = []
+    num_points_start = max(20, int(start_zigzag_angle / (2 * math.pi) * 100))
+    for i in range(num_points_start + 1):
+        angle = 2 * math.pi * i / num_points_start * (start_zigzag_angle / (2 * math.pi))
+        points.append((circle.center.x() + circle.radius * math.cos(angle), circle.center.y() + circle.radius * math.sin(angle)))
+
+    current_angle = start_zigzag_angle
+    for z in range(zigzag_count):
+        zigzag_mid1_angle = current_angle + zigzag_length_single_angle / 3
+        zigzag_mid2_angle = current_angle + 2 * zigzag_length_single_angle / 3
+        zigzag_end_angle = current_angle + zigzag_length_single_angle
+        points.append((circle.center.x() + circle.radius * math.cos(current_angle), circle.center.y() + circle.radius * math.sin(current_angle)))
+        points.append((circle.center.x() + (circle.radius + zigzag_height / 2) * math.cos(zigzag_mid1_angle), circle.center.y() + (circle.radius + zigzag_height / 2) * math.sin(zigzag_mid1_angle)))
+        points.append((circle.center.x() + (circle.radius - zigzag_height) * math.cos(zigzag_mid2_angle), circle.center.y() + (circle.radius - zigzag_height) * math.sin(zigzag_mid2_angle)))
+        points.append((circle.center.x() + circle.radius * math.cos(zigzag_end_angle), circle.center.y() + circle.radius * math.sin(zigzag_end_angle)))
+        if z < zigzag_count - 1:
+            next_angle = zigzag_end_angle + zigzag_step_angle
+            num_points_step = max(5, int(zigzag_step_angle / (2 * math.pi) * 20))
+            for i in range(1, num_points_step + 1):
+                angle = zigzag_end_angle + (zigzag_step_angle * i / num_points_step)
+                points.append((circle.center.x() + circle.radius * math.cos(angle), circle.center.y() + circle.radius * math.sin(angle)))
+            current_angle = next_angle
+        else:
+            current_angle = zigzag_end_angle
+
+    end_zigzag_angle = current_angle
+    remaining_angle = 2 * math.pi - end_zigzag_angle
+    if remaining_angle > 0:
+        num_points_end = max(20, int(remaining_angle / (2 * math.pi) * 100))
+        for i in range(1, num_points_end + 1):
+            angle = end_zigzag_angle + (remaining_angle * i / num_points_end)
+            points.append((circle.center.x() + circle.radius * math.cos(angle), circle.center.y() + circle.radius * math.sin(angle)))
+    if points and points[0] != points[-1]:
+        points.append(points[0])
+    return points
+
+
+def _broken_ellipse_polyline_points(ellipse: Ellipse, style):
+    a = ellipse.radius_x
+    b = ellipse.radius_y
+    if (a + b) <= 0 or a <= 0 or b <= 0:
+        return []
+    h = ((a - b) / (a + b)) ** 2
+    circumference = math.pi * (a + b) * (1 + (3 * h) / (10 + math.sqrt(4 - 3 * h)))
+    if circumference < 1:
+        return []
+
+    zigzag_count = max(1, int(getattr(style, 'zigzag_count', 1) or 1))
+    zigzag_step = float(getattr(style, 'zigzag_step_mm', 4.0) or 4.0)
+    zigzag_height = 3.5
+    zigzag_length_single = 4.0
+
+    total_zigzag_length = zigzag_length_single * zigzag_count + zigzag_step * (zigzag_count - 1)
+    total_zigzag_angle = (total_zigzag_length / circumference) * 2 * math.pi
+    if total_zigzag_angle > math.pi * 0.9:
+        total_zigzag_angle = math.pi * 0.9
+        if zigzag_count > 1:
+            max_length = circumference * 0.9
+            zigzag_step = (max_length - zigzag_length_single * zigzag_count) / (zigzag_count - 1)
+            zigzag_step = max(zigzag_step, zigzag_length_single * 0.5)
+            total_zigzag_length = zigzag_length_single * zigzag_count + zigzag_step * (zigzag_count - 1)
+            total_zigzag_angle = (total_zigzag_length / circumference) * 2 * math.pi
+
+    zigzag_length_single_angle = (zigzag_length_single / circumference) * 2 * math.pi
+    zigzag_step_angle = (zigzag_step / circumference) * 2 * math.pi
+    start_zigzag_angle = math.pi - total_zigzag_angle / 2
+
+    def get_normal(angle):
+        normal_x = b * math.cos(angle)
+        normal_y = a * math.sin(angle)
+        normal_length = math.hypot(normal_x, normal_y)
+        if normal_length > 0:
+            return normal_x / normal_length, normal_y / normal_length
+        return math.cos(angle), math.sin(angle)
+
+    local_points = []
+    num_points_start = max(20, int(start_zigzag_angle / (2 * math.pi) * 100))
+    for i in range(num_points_start + 1):
+        angle = 2 * math.pi * i / num_points_start * (start_zigzag_angle / (2 * math.pi))
+        local_points.append((a * math.cos(angle), b * math.sin(angle)))
+
+    current_angle = start_zigzag_angle
+    for z in range(zigzag_count):
+        zigzag_mid1_angle = current_angle + zigzag_length_single_angle / 3
+        zigzag_mid2_angle = current_angle + 2 * zigzag_length_single_angle / 3
+        zigzag_end_angle = current_angle + zigzag_length_single_angle
+        local_points.append((a * math.cos(current_angle), b * math.sin(current_angle)))
+        n1x, n1y = get_normal(zigzag_mid1_angle)
+        local_points.append((a * math.cos(zigzag_mid1_angle) + (zigzag_height / 2) * n1x, b * math.sin(zigzag_mid1_angle) + (zigzag_height / 2) * n1y))
+        n2x, n2y = get_normal(zigzag_mid2_angle)
+        local_points.append((a * math.cos(zigzag_mid2_angle) - zigzag_height * n2x, b * math.sin(zigzag_mid2_angle) - zigzag_height * n2y))
+        local_points.append((a * math.cos(zigzag_end_angle), b * math.sin(zigzag_end_angle)))
+        if z < zigzag_count - 1:
+            next_angle = zigzag_end_angle + zigzag_step_angle
+            num_points_step = max(5, int(zigzag_step_angle / (2 * math.pi) * 20))
+            for i in range(1, num_points_step + 1):
+                angle = zigzag_end_angle + (zigzag_step_angle * i / num_points_step)
+                local_points.append((a * math.cos(angle), b * math.sin(angle)))
+            current_angle = next_angle
+        else:
+            current_angle = zigzag_end_angle
+
+    remaining_angle = 2 * math.pi - current_angle
+    num_points_end = max(20, int(remaining_angle / (2 * math.pi) * 100))
+    for i in range(1, num_points_end + 1):
+        angle = current_angle + (remaining_angle * i / num_points_end)
+        local_points.append((a * math.cos(angle), b * math.sin(angle)))
+
+    world_points = _rotate_translate_points(local_points, ellipse.center.x(), ellipse.center.y(), ellipse.rotation_angle)
+    if world_points and world_points[0] != world_points[-1]:
+        world_points.append(world_points[0])
+    return world_points
+
+
+def _broken_arc_polyline_points(arc: Arc, style):
+    span_angle_deg = arc.end_angle - arc.start_angle
+    if span_angle_deg < -180:
+        span_angle_deg += 360
+    elif span_angle_deg > 180:
+        span_angle_deg -= 360
+    angle_span = abs(span_angle_deg)
+    avg_radius = (arc.radius_x + arc.radius_y) / 2
+    arc_length = math.radians(angle_span) * avg_radius
+    if arc_length < 1:
+        return []
+
+    zigzag_count = max(1, int(getattr(style, 'zigzag_count', 1) or 1))
+    zigzag_step = float(getattr(style, 'zigzag_step_mm', 4.0) or 4.0)
+    zigzag_height = 3.5
+    zigzag_length_single = 4.0
+
+    total_zigzag_length = zigzag_length_single * zigzag_count + zigzag_step * (zigzag_count - 1)
+    if total_zigzag_length > arc_length * 0.9:
+        max_length = arc_length * 0.9
+        if zigzag_count > 1:
+            zigzag_step = (max_length - zigzag_length_single * zigzag_count) / (zigzag_count - 1)
+            zigzag_step = max(zigzag_step, zigzag_length_single * 0.5)
+            total_zigzag_length = zigzag_length_single * zigzag_count + zigzag_step * (zigzag_count - 1)
+
+    total_zigzag_angle_abs = (total_zigzag_length / arc_length) * angle_span
+    if total_zigzag_angle_abs > angle_span * 0.9:
+        total_zigzag_angle_abs = angle_span * 0.9
+
+    zigzag_length_single_angle = (zigzag_length_single / arc_length) * angle_span
+    zigzag_step_angle = (zigzag_step / arc_length) * angle_span
+    mid_angle = arc.start_angle + (-span_angle_deg) / 2
+    start_zigzag_angle = mid_angle - (total_zigzag_angle_abs / angle_span) * (-span_angle_deg) / 2
+
+    def get_normal(param_angle_rad):
+        base_x = arc.radius_x * math.cos(param_angle_rad)
+        base_y = arc.radius_y * math.sin(param_angle_rad)
+        normal_length = math.hypot(base_x, base_y)
+        if normal_length > 0:
+            return base_x / normal_length, base_y / normal_length
+        return math.cos(param_angle_rad), math.sin(param_angle_rad)
+
+    local_points = []
+    inverted_span = -span_angle_deg
+    if (inverted_span >= 0 and start_zigzag_angle > arc.start_angle) or (inverted_span < 0 and start_zigzag_angle < arc.start_angle):
+        num_points_start = max(10, int(abs(start_zigzag_angle - arc.start_angle) / angle_span * 50))
+        for i in range(num_points_start + 1):
+            param_angle_deg = arc.start_angle + (start_zigzag_angle - arc.start_angle) * i / num_points_start
+            t = math.radians(param_angle_deg)
+            local_points.append((arc.radius_x * math.cos(t), arc.radius_y * math.sin(t)))
+
+    current_angle = start_zigzag_angle
+    for z in range(zigzag_count):
+        zigzag_mid1_angle = current_angle + (zigzag_length_single_angle / angle_span) * (-span_angle_deg) / 3
+        zigzag_mid2_angle = current_angle + 2 * (zigzag_length_single_angle / angle_span) * (-span_angle_deg) / 3
+        zigzag_end_angle = current_angle + (zigzag_length_single_angle / angle_span) * (-span_angle_deg)
+        t1 = math.radians(current_angle)
+        local_points.append((arc.radius_x * math.cos(t1), arc.radius_y * math.sin(t1)))
+        t2 = math.radians(zigzag_mid1_angle)
+        n1x, n1y = get_normal(t2)
+        local_points.append((arc.radius_x * math.cos(t2) + (zigzag_height / 2) * n1x, arc.radius_y * math.sin(t2) + (zigzag_height / 2) * n1y))
+        t3 = math.radians(zigzag_mid2_angle)
+        n2x, n2y = get_normal(t3)
+        local_points.append((arc.radius_x * math.cos(t3) - zigzag_height * n2x, arc.radius_y * math.sin(t3) - zigzag_height * n2y))
+        t4 = math.radians(zigzag_end_angle)
+        local_points.append((arc.radius_x * math.cos(t4), arc.radius_y * math.sin(t4)))
+        if z < zigzag_count - 1:
+            next_angle = zigzag_end_angle + (zigzag_step_angle / angle_span) * (-span_angle_deg)
+            num_points_step = max(5, int(abs(zigzag_step_angle) / angle_span * 20))
+            for i in range(1, num_points_step + 1):
+                param_angle_deg = zigzag_end_angle + (zigzag_step_angle / angle_span) * (-span_angle_deg) * i / num_points_step
+                param_angle_rad = math.radians(param_angle_deg)
+                local_points.append((arc.radius_x * math.cos(param_angle_rad), arc.radius_y * math.sin(param_angle_rad)))
+            current_angle = next_angle
+        else:
+            current_angle = zigzag_end_angle
+
+    angle_diff = arc.end_angle - current_angle
+    if angle_diff > 180:
+        angle_diff -= 360
+    elif angle_diff < -180:
+        angle_diff += 360
+    if abs(angle_diff) > 0.1:
+        num_points_end = max(10, int(abs(angle_diff) / angle_span * 50))
+        for i in range(1, num_points_end + 1):
+            param_angle_deg = current_angle + angle_diff * i / num_points_end
+            param_angle_rad = math.radians(param_angle_deg)
+            local_points.append((arc.radius_x * math.cos(param_angle_rad), arc.radius_y * math.sin(param_angle_rad)))
+
+    return _rotate_translate_points(local_points, arc.center.x(), arc.center.y(), arc.rotation_angle)
+
+
+def _broken_spline_polyline_points(spline: Spline, style):
+    if len(spline.control_points) < 2:
+        return []
+
+    num_samples = max(200, len(spline.control_points) * 40)
+    points = []
+    arc_lengths = [0.0]
+    total_length = 0.0
+
+    prev_point = spline._get_point_on_spline(0)
+    points.append(prev_point)
+    for i in range(1, num_samples + 1):
+        t = i / num_samples if num_samples > 0 else 0
+        curr_point = spline._get_point_on_spline(t)
+        points.append(curr_point)
+        total_length += math.hypot(curr_point.x() - prev_point.x(), curr_point.y() - prev_point.y())
+        arc_lengths.append(total_length)
+        prev_point = curr_point
+
+    if total_length < 1:
+        return []
+
+    zigzag_count = max(1, int(getattr(style, 'zigzag_count', 1) or 1))
+    zigzag_step = float(getattr(style, 'zigzag_step_mm', 4.0) or 4.0)
+    zigzag_height = 3.5
+    zigzag_length_single = 4.0
+    total_zigzag_length = zigzag_length_single * zigzag_count + zigzag_step * (zigzag_count - 1)
+    if total_zigzag_length > total_length * 0.9:
+        max_length = total_length * 0.9
+        if zigzag_count > 1:
+            zigzag_step = (max_length - zigzag_length_single * zigzag_count) / (zigzag_count - 1)
+            zigzag_step = max(zigzag_step, zigzag_length_single * 0.5)
+            total_zigzag_length = zigzag_length_single * zigzag_count + zigzag_step * (zigzag_count - 1)
+
+    straight_length = (total_length - total_zigzag_length) / 2
+    result = [(points[0].x(), points[0].y())]
+
+    zigzag_start_idx = 0
+    zigzag_end_idx = len(points) - 1
+    for i in range(len(arc_lengths)):
+        if arc_lengths[i] >= straight_length:
+            zigzag_start_idx = i
+            break
+    for i in range(len(arc_lengths) - 1, -1, -1):
+        if arc_lengths[i] <= total_length - straight_length:
+            zigzag_end_idx = i
+            break
+
+    for i in range(1, zigzag_start_idx + 1):
+        result.append((points[i].x(), points[i].y()))
+
+    def get_point_at_arc(arc_pos):
+        if arc_pos <= 0:
+            return points[0]
+        if arc_pos >= total_length:
+            return points[-1]
+        idx = 0
+        for i in range(len(arc_lengths)):
+            if arc_lengths[i] >= arc_pos:
+                idx = i
+                break
+        if idx > 0:
+            span = arc_lengths[idx] - arc_lengths[idx - 1]
+            t = (arc_pos - arc_lengths[idx - 1]) / span if span > 1e-9 else 0.0
+            return QPointF(points[idx - 1].x() + t * (points[idx].x() - points[idx - 1].x()), points[idx - 1].y() + t * (points[idx].y() - points[idx - 1].y()))
+        return points[idx]
+
+    def get_perpendicular_at_arc(arc_pos):
+        idx = 0
+        for i in range(len(arc_lengths)):
+            if arc_lengths[i] >= arc_pos:
+                idx = i
+                break
+        if idx > 0 and idx < len(points):
+            if idx < len(points) - 1:
+                dx1 = points[idx + 1].x() - points[idx - 1].x()
+                dy1 = points[idx + 1].y() - points[idx - 1].y()
+            else:
+                dx1 = points[idx].x() - points[idx - 1].x()
+                dy1 = points[idx].y() - points[idx - 1].y()
+            len1 = math.hypot(dx1, dy1)
+            if len1 > 0.001:
+                return (-dy1 / len1, dx1 / len1)
+        return (0.0, 1.0)
+
+    if zigzag_start_idx < zigzag_end_idx:
+        current_arc_pos = arc_lengths[zigzag_start_idx]
+        for z in range(zigzag_count):
+            zigzag_start_arc = current_arc_pos
+            zigzag_mid1_arc = current_arc_pos + zigzag_length_single / 3
+            zigzag_mid2_arc = current_arc_pos + 2 * zigzag_length_single / 3
+            zigzag_end_arc = current_arc_pos + zigzag_length_single
+
+            p1 = get_point_at_arc(zigzag_start_arc)
+            result.append((p1.x(), p1.y()))
+            p2_base = get_point_at_arc(zigzag_mid1_arc)
+            perp_cos, perp_sin = get_perpendicular_at_arc(zigzag_mid1_arc)
+            result.append((p2_base.x() + (zigzag_height / 2) * perp_cos, p2_base.y() + (zigzag_height / 2) * perp_sin))
+            p3_base = get_point_at_arc(zigzag_mid2_arc)
+            perp_cos, perp_sin = get_perpendicular_at_arc(zigzag_mid2_arc)
+            result.append((p3_base.x() - zigzag_height * perp_cos, p3_base.y() - zigzag_height * perp_sin))
+            p4 = get_point_at_arc(zigzag_end_arc)
+            result.append((p4.x(), p4.y()))
+
+            if z < zigzag_count - 1:
+                current_arc_pos = zigzag_end_arc + zigzag_step
+                num_step_points = max(5, int(zigzag_step / total_length * 20))
+                for i in range(1, num_step_points + 1):
+                    step_arc = zigzag_end_arc + (zigzag_step * i / num_step_points)
+                    step_point = get_point_at_arc(step_arc)
+                    result.append((step_point.x(), step_point.y()))
+            else:
+                current_arc_pos = zigzag_end_arc
+
+    for i in range(zigzag_end_idx + 1, len(points)):
+        result.append((points[i].x(), points[i].y()))
+    return result
+
+
+def _append_points(target, points):
+    if not points:
+        return
+    if target and points:
+        if target[-1] == points[0]:
+            target.extend(points[1:])
+        else:
+            target.extend(points)
+    else:
+        target.extend(points)
+
+
+def _smooth_arc_segment_points(start: QPointF, end: QPointF, center: QPointF, radius: float):
+    start_angle = math.atan2(start.y() - center.y(), start.x() - center.x())
+    end_angle = math.atan2(end.y() - center.y(), end.x() - center.x())
+    if end_angle < start_angle:
+        end_angle += 2 * math.pi
+    arc_length = radius * (end_angle - start_angle)
+    if arc_length < 1:
+        return [(start.x(), start.y()), (end.x(), end.y())]
+    num_points = max(50, int(arc_length))
+    points = []
+    for i in range(num_points + 1):
+        t = i / num_points
+        angle = start_angle + t * (end_angle - start_angle)
+        points.append((center.x() + radius * math.cos(angle), center.y() + radius * math.sin(angle)))
+    return points
+
+
+def _broken_rectangle_polyline_points(rect: Rectangle, style):
+    fillet_radius = getattr(rect, 'fillet_radius', 0.0)
+    bbox = rect.get_bounding_box()
+    w = bbox.width()
+    h = bbox.height()
+    r = min(fillet_radius, w / 2, h / 2) if fillet_radius > 0 else 0.0
+    points = []
+
+    if r > 0:
+        segments = [
+            _broken_line_polyline_points(LineSegment(QPointF(bbox.x() + r, bbox.y()), QPointF(bbox.x() + w - r, bbox.y()), style=style)),
+            _smooth_arc_segment_points(QPointF(bbox.x() + w - r, bbox.y()), QPointF(bbox.x() + w, bbox.y() + r), QPointF(bbox.x() + w - r, bbox.y() + r), r),
+            _broken_line_polyline_points(LineSegment(QPointF(bbox.x() + w, bbox.y() + r), QPointF(bbox.x() + w, bbox.y() + h - r), style=style)),
+            _smooth_arc_segment_points(QPointF(bbox.x() + w, bbox.y() + h - r), QPointF(bbox.x() + w - r, bbox.y() + h), QPointF(bbox.x() + w - r, bbox.y() + h - r), r),
+            _broken_line_polyline_points(LineSegment(QPointF(bbox.x() + w - r, bbox.y() + h), QPointF(bbox.x() + r, bbox.y() + h), style=style)),
+            _smooth_arc_segment_points(QPointF(bbox.x() + r, bbox.y() + h), QPointF(bbox.x(), bbox.y() + h - r), QPointF(bbox.x() + r, bbox.y() + h - r), r),
+            _broken_line_polyline_points(LineSegment(QPointF(bbox.x(), bbox.y() + h - r), QPointF(bbox.x(), bbox.y() + r), style=style)),
+            _smooth_arc_segment_points(QPointF(bbox.x(), bbox.y() + r), QPointF(bbox.x() + r, bbox.y()), QPointF(bbox.x() + r, bbox.y() + r), r),
+        ]
+        for seg in segments:
+            _append_points(points, seg)
+    else:
+        corners = [
+            QPointF(bbox.left(), bbox.top()),
+            QPointF(bbox.right(), bbox.top()),
+            QPointF(bbox.right(), bbox.bottom()),
+            QPointF(bbox.left(), bbox.bottom()),
+        ]
+        for i in range(4):
+            start = corners[i]
+            end = corners[(i + 1) % 4]
+            _append_points(points, _broken_line_polyline_points(LineSegment(start, end, style=style)))
+
+    if points and points[0] != points[-1]:
+        points.append(points[0])
+    return points
+
+
+def _broken_polygon_polyline_points(polygon: Polygon, style):
+    vertices = polygon.get_vertices()
+    if len(vertices) < 3:
+        return []
+    points = []
+    for i in range(len(vertices)):
+        start = vertices[i]
+        end = vertices[(i + 1) % len(vertices)]
+        _append_points(points, _broken_line_polyline_points(LineSegment(start, end, style=style)))
+    if points and points[0] != points[-1]:
+        points.append(points[0])
+    return points
+
 def _wavy_parametric_curve_points(cx, cy, rx, ry, rotation_angle_rad, start_param, end_param, style):
     """Генерирует идеально гладкую волну вокруг окружностей, дуг и эллипсов."""
     dpi = 96
@@ -664,11 +1211,11 @@ def _export_line(msp, line: LineSegment, style_to_layer, layer_manager=None):
     if is_broken:
         pts = _broken_line_polyline_points(line)
         entity = msp.add_lwpolyline(pts, close=False)
-        _embed_original_geometry(entity, "Line", [line.start_point.x(), line.start_point.y(), line.end_point.x(), line.end_point.y()])
+        _embed_original_geometry(entity, "Line", [line.start_point.x(), line.start_point.y(), line.end_point.x(), line.end_point.y()], style)
     elif is_wavy:
         pts = _wavy_line_polyline_points(line, style)
         entity = msp.add_lwpolyline(pts, close=False)
-        _embed_original_geometry(entity, "Line", [line.start_point.x(), line.start_point.y(), line.end_point.x(), line.end_point.y()])
+        _embed_original_geometry(entity, "Line", [line.start_point.x(), line.start_point.y(), line.end_point.x(), line.end_point.y()], style)
     else:
         entity = msp.add_line(
             start=(line.start_point.x(), line.start_point.y(), 0),
@@ -679,16 +1226,21 @@ def _export_line(msp, line: LineSegment, style_to_layer, layer_manager=None):
 
 def _export_circle(msp, circle: Circle, style_to_layer, layer_manager=None):
     style = getattr(circle, '_style', None)
+    is_broken = (style is not None and getattr(style, 'line_type', None) == LineType.SOLID_THIN_BROKEN)
     is_wavy = (style is not None and getattr(style, 'line_type', None) == LineType.SOLID_WAVY)
 
-    if is_wavy:
+    if is_broken:
+        pts = _broken_circle_polyline_points(circle, style)
+        entity = msp.add_lwpolyline(pts, close=True)
+        _embed_original_geometry(entity, "Circle", [circle.center.x(), circle.center.y(), circle.radius], style)
+    elif is_wavy:
         pts = _wavy_parametric_curve_points(
             circle.center.x(), circle.center.y(), 
             circle.radius, circle.radius, 0.0, 
             0, math.tau, style
         )
         entity = msp.add_lwpolyline(pts, close=True)
-        _embed_original_geometry(entity, "Circle", [circle.center.x(), circle.center.y(), circle.radius])
+        _embed_original_geometry(entity, "Circle", [circle.center.x(), circle.center.y(), circle.radius], style)
     else:
         entity = msp.add_circle(
             center=(circle.center.x(), circle.center.y(), 0),
@@ -802,19 +1354,27 @@ def _export_arc(msp, arc: Arc, style_to_layer, layer_manager=None):
     dxf_rot = float(arc.rotation_angle)
 
     style = getattr(arc, '_style', None)
+    is_broken = (style is not None and getattr(style, 'line_type', None) == LineType.SOLID_THIN_BROKEN)
     is_wavy = (style is not None and getattr(style, 'line_type', None) == LineType.SOLID_WAVY)
     is_circular = abs(arc.radius_x - arc.radius_y) < 1e-6
+
+    if is_broken:
+        pts = _broken_arc_polyline_points(arc, style)
+        entity = msp.add_lwpolyline(pts, close=False)
+        _embed_original_geometry(entity, "Arc", [arc.center.x(), arc.center.y(), arc.radius_x, arc.radius_y, float(arc.start_angle), float(arc.end_angle), float(arc.rotation_angle)], style)
+        _apply_entity_style(entity, arc, style_to_layer, layer_manager)
+        return
 
     if is_wavy:
         pts = _wavy_points_along_polyline(_arc_polyline_points(arc), style)
         entity = msp.add_lwpolyline(pts, close=False)
-        _embed_original_geometry(entity, "Arc", [arc.center.x(), arc.center.y(), arc.radius_x, arc.radius_y, float(arc.start_angle), float(arc.end_angle), float(arc.rotation_angle)])
+        _embed_original_geometry(entity, "Arc", [arc.center.x(), arc.center.y(), arc.radius_x, arc.radius_y, float(arc.start_angle), float(arc.end_angle), float(arc.rotation_angle)], style)
         _apply_entity_style(entity, arc, style_to_layer, layer_manager)
         return
 
     pts = _arc_polyline_points(arc)
     entity = msp.add_lwpolyline(pts, close=False)
-    _embed_original_geometry(entity, "Arc", [arc.center.x(), arc.center.y(), arc.radius_x, arc.radius_y, float(arc.start_angle), float(arc.end_angle), float(arc.rotation_angle)])
+    _embed_original_geometry(entity, "Arc", [arc.center.x(), arc.center.y(), arc.radius_x, arc.radius_y, float(arc.start_angle), float(arc.end_angle), float(arc.rotation_angle)], style)
     _apply_entity_style(entity, arc, style_to_layer, layer_manager)
 
 
@@ -878,9 +1438,15 @@ def _export_rectangle(msp, rect: Rectangle, style_to_layer, layer_manager=None):
         return
         
     style = getattr(rect, '_style', None)
+    is_broken = (style is not None and getattr(style, 'line_type', None) == LineType.SOLID_THIN_BROKEN)
     is_wavy = (style is not None and getattr(style, 'line_type', None) == LineType.SOLID_WAVY)
 
-    if is_wavy:
+    if is_broken:
+        entity = msp.add_lwpolyline(_broken_rectangle_polyline_points(rect, style), close=True)
+        fillet = getattr(rect, 'fillet_radius', 0.0)
+        _embed_original_geometry(entity, "Rectangle", [rect.top_left.x(), rect.top_left.y(), rect.bottom_right.x(), rect.bottom_right.y(), fillet], style)
+        _apply_entity_style(entity, rect, style_to_layer, layer_manager)
+    elif is_wavy:
         all_wavy_points = []
         n = len(pts)
         for i in range(n):
@@ -893,7 +1459,7 @@ def _export_rectangle(msp, rect: Rectangle, style_to_layer, layer_manager=None):
             
         entity = msp.add_lwpolyline(all_wavy_points, close=True)
         fillet = getattr(rect, 'fillet_radius', 0.0)
-        _embed_original_geometry(entity, "Rectangle", [rect.top_left.x(), rect.top_left.y(), rect.bottom_right.x(), rect.bottom_right.y(), fillet])
+        _embed_original_geometry(entity, "Rectangle", [rect.top_left.x(), rect.top_left.y(), rect.bottom_right.x(), rect.bottom_right.y(), fillet], style)
         _apply_entity_style(entity, rect, style_to_layer, layer_manager)
     else:
         n = len(pts)
@@ -908,7 +1474,15 @@ def _export_rectangle(msp, rect: Rectangle, style_to_layer, layer_manager=None):
 
 def _export_ellipse(msp, ellipse: Ellipse, style_to_layer, layer_manager=None):
     style = getattr(ellipse, '_style', None)
+    is_broken = (style is not None and getattr(style, 'line_type', None) == LineType.SOLID_THIN_BROKEN)
     is_wavy = (style is not None and getattr(style, 'line_type', None) == LineType.SOLID_WAVY)
+
+    if is_broken:
+        pts = _broken_ellipse_polyline_points(ellipse, style)
+        entity = msp.add_lwpolyline(pts, close=True)
+        _embed_original_geometry(entity, "Ellipse", [ellipse.center.x(), ellipse.center.y(), ellipse.radius_x, ellipse.radius_y, ellipse.rotation_angle], style)
+        _apply_entity_style(entity, ellipse, style_to_layer, layer_manager)
+        return
 
     if is_wavy:
         pts = _wavy_parametric_curve_points(
@@ -918,7 +1492,7 @@ def _export_ellipse(msp, ellipse: Ellipse, style_to_layer, layer_manager=None):
             0, math.tau, style
         )
         entity = msp.add_lwpolyline(pts, close=True)
-        _embed_original_geometry(entity, "Ellipse", [ellipse.center.x(), ellipse.center.y(), ellipse.radius_x, ellipse.radius_y, ellipse.rotation_angle])
+        _embed_original_geometry(entity, "Ellipse", [ellipse.center.x(), ellipse.center.y(), ellipse.radius_x, ellipse.radius_y, ellipse.rotation_angle], style)
         _apply_entity_style(entity, ellipse, style_to_layer, layer_manager)
         return
 
@@ -946,10 +1520,20 @@ def _export_polygon(msp, polygon: Polygon, style_to_layer, layer_manager=None):
         return
         
     style = getattr(polygon, '_style', None)
+    is_broken = (style is not None and getattr(style, 'line_type', None) == LineType.SOLID_THIN_BROKEN)
     is_wavy = (style is not None and getattr(style, 'line_type', None) == LineType.SOLID_WAVY)
 
     n = len(vertices)
-    if is_wavy:
+    if is_broken:
+        entity = msp.add_lwpolyline(_broken_polygon_polyline_points(polygon, style), close=True)
+        cx = polygon.center.x()
+        cy = polygon.center.y()
+        radius = polygon.radius
+        num_vertices = polygon.num_vertices
+        start_angle = getattr(polygon, 'start_angle', -math.pi / 2)
+        _embed_original_geometry(entity, "Polygon", [cx, cy, radius, num_vertices, start_angle], style)
+        _apply_entity_style(entity, polygon, style_to_layer, layer_manager)
+    elif is_wavy:
         all_wavy_points = []
         for i in range(n):
             start = vertices[i]
@@ -970,7 +1554,7 @@ def _export_polygon(msp, polygon: Polygon, style_to_layer, layer_manager=None):
         # Берем именно start_angle, который использует твой класс!
         start_angle = getattr(polygon, 'start_angle', -math.pi / 2)
             
-        _embed_original_geometry(entity, "Polygon", [cx, cy, radius, num_vertices, start_angle])
+        _embed_original_geometry(entity, "Polygon", [cx, cy, radius, num_vertices, start_angle], style)
         # ----------------------------------------------------
         
         _apply_entity_style(entity, polygon, style_to_layer, layer_manager)
@@ -990,13 +1574,17 @@ def _export_spline(msp, spline: Spline, style_to_layer, layer_manager=None):
         return
 
     style = getattr(spline, '_style', None)
+    is_broken = (style is not None and getattr(style, 'line_type', None) == LineType.SOLID_THIN_BROKEN)
     is_wavy = (style is not None and getattr(style, 'line_type', None) == LineType.SOLID_WAVY)
 
     # Если сплайн выродился в прямую линию
     if len(spline.control_points) == 2:
         p1 = spline.control_points[0]
         p2 = spline.control_points[1]
-        if is_wavy:
+        if is_broken:
+            pts = _broken_points_along_polyline([(p1.x(), p1.y()), (p2.x(), p2.y())], style, closed=False)
+            entity = msp.add_lwpolyline(pts, close=False)
+        elif is_wavy:
             pts = _get_wavy_segment_points(p1.x(), p1.y(), p2.x(), p2.y(), style)
             entity = msp.add_lwpolyline(pts, close=False)
         else:
@@ -1008,6 +1596,17 @@ def _export_spline(msp, spline: Spline, style_to_layer, layer_manager=None):
         return
 
     # Экспорт волнистого сплайна
+    if is_broken:
+        pts = _broken_spline_polyline_points(spline, style)
+        if pts:
+            entity = msp.add_lwpolyline(pts, close=False)
+            coords = []
+            for p in spline.control_points:
+                coords.extend([p.x(), p.y()])
+            _embed_original_geometry(entity, "Spline", coords, style)
+            _apply_entity_style(entity, spline, style_to_layer, layer_manager)
+        return
+
     if is_wavy:
         pts = _wavy_spline_polyline_points(spline, style)
         if pts:
@@ -1015,7 +1614,7 @@ def _export_spline(msp, spline: Spline, style_to_layer, layer_manager=None):
             coords = []
             for p in spline.control_points:
                 coords.extend([p.x(), p.y()])
-            _embed_original_geometry(entity, "Spline", coords)
+            _embed_original_geometry(entity, "Spline", coords, style)
             _apply_entity_style(entity, spline, style_to_layer, layer_manager)
         return
 
