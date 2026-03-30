@@ -5,6 +5,8 @@
 import math
 import ezdxf
 from ezdxf.colors import aci2rgb
+from PySide6.QtCore import QRectF
+from PySide6.QtGui import QPainterPath, QTransform
 
 from core.geometry import GeometricObject, Point
 from widgets.line_segment import LineSegment
@@ -397,6 +399,77 @@ def _wavy_line_polyline_points(line: LineSegment, style):
         style
     )
 
+def _wavy_points_along_polyline(base_points, style):
+    """Накладывает гладкую волну на уже построенную полилинию."""
+    if not base_points or len(base_points) < 2:
+        return base_points or []
+
+    dpi = 96
+    if style is not None and hasattr(style, 'wavy_amplitude_mm') and style.wavy_amplitude_mm is not None:
+        amplitude_mm = float(style.wavy_amplitude_mm)
+    else:
+        thickness_mm = float(getattr(style, 'thickness_mm', 0.8) or 0.8)
+        amplitude_mm = (0.8 / 2.5) * (thickness_mm / 0.4)
+
+    amplitude_px = (amplitude_mm * dpi) / 25.4
+    wave_length_px = max(1.0, amplitude_px * 5.0)
+
+    arc_lengths = [0.0]
+    total_length = 0.0
+    for i in range(1, len(base_points)):
+        x1, y1 = base_points[i - 1]
+        x2, y2 = base_points[i]
+        total_length += math.hypot(x2 - x1, y2 - y1)
+        arc_lengths.append(total_length)
+
+    if total_length < 1e-6:
+        return base_points
+
+    num_waves = max(1, int(total_length / wave_length_px))
+    actual_wave_length = total_length / num_waves if num_waves > 0 else total_length
+    points_per_wave = 30
+    num_points = max(100, num_waves * points_per_wave)
+
+    def sample_point(distance):
+        if distance <= 0.0:
+            return base_points[0]
+        if distance >= total_length:
+            return base_points[-1]
+
+        for i in range(1, len(arc_lengths)):
+            if arc_lengths[i] >= distance:
+                prev_len = arc_lengths[i - 1]
+                seg_len = arc_lengths[i] - prev_len
+                x1, y1 = base_points[i - 1]
+                x2, y2 = base_points[i]
+                t = (distance - prev_len) / seg_len if seg_len > 1e-9 else 0.0
+                return (x1 + (x2 - x1) * t, y1 + (y2 - y1) * t)
+        return base_points[-1]
+
+    points = []
+    sample_step = total_length / num_points
+    for i in range(num_points + 1):
+        dist = min(total_length, i * sample_step)
+        px, py = sample_point(dist)
+
+        prev_dist = max(0.0, dist - sample_step)
+        next_dist = min(total_length, dist + sample_step)
+        prev_pt = sample_point(prev_dist)
+        next_pt = sample_point(next_dist)
+        tx = next_pt[0] - prev_pt[0]
+        ty = next_pt[1] - prev_pt[1]
+        mag = math.hypot(tx, ty)
+        if mag < 1e-9:
+            nx, ny = 0.0, 0.0
+        else:
+            nx, ny = -ty / mag, tx / mag
+
+        wave_phase = (dist / actual_wave_length) * 2.0 * math.pi
+        wave_offset = amplitude_px * math.sin(wave_phase)
+        points.append((px + nx * wave_offset, py + ny * wave_offset))
+
+    return points
+
 def _wavy_parametric_curve_points(cx, cy, rx, ry, rotation_angle_rad, start_param, end_param, style):
     """Генерирует идеально гладкую волну вокруг окружностей, дуг и эллипсов."""
     dpi = 96
@@ -624,65 +697,124 @@ def _export_circle(msp, circle: Circle, style_to_layer, layer_manager=None):
     _apply_entity_style(entity, circle, style_to_layer, layer_manager)
 
 
+def _arc_to_dxf_ccw_angles(start_angle: float, end_angle: float) -> tuple[float, float]:
+    """
+    Переводит внутренние углы дуги в CCW-углы DXF так, чтобы сохранить саму
+    геометрию дуги, даже если внутри приложения она задана по часовой стрелке.
+    """
+    start = float(start_angle) % 360.0
+    end = float(end_angle) % 360.0
+
+    span = end - start
+    if span < -180.0:
+        span += 360.0
+    elif span > 180.0:
+        span -= 360.0
+
+    if span >= 0.0:
+        dxf_start = start
+        dxf_end = start + span
+    elif math.isclose(abs(span), 180.0, abs_tol=1e-9):
+        dxf_start = start
+        dxf_end = start + 180.0
+    else:
+        dxf_start = end
+        dxf_end = start
+
+    return dxf_start % 360.0, dxf_end % 360.0
+
+
+def _point_to_dxf_angle(center: Point | object, point) -> float:
+    dx = float(point.x()) - float(center.x())
+    # Во внутренней геометрии приложения ось Y направлена вниз.
+    # Для DXF/CAD угол должен вычисляться в системе, где Y направлена вверх.
+    dy = float(center.y()) - float(point.y())
+    return math.degrees(math.atan2(dy, dx)) % 360.0
+
+
+def _angle_is_on_ccw_arc(start_angle: float, end_angle: float, test_angle: float) -> bool:
+    start = start_angle % 360.0
+    end = end_angle % 360.0
+    test = test_angle % 360.0
+
+    if end < start:
+        end += 360.0
+    if test < start:
+        test += 360.0
+
+    return start <= test <= end
+
+
+def _circular_arc_to_dxf_angles(arc: Arc) -> tuple[float, float]:
+    start_point = arc.get_point_at_angle(float(arc.start_angle))
+    end_point = arc.get_point_at_angle(float(arc.end_angle))
+    through_point = getattr(arc, "_original_vertex_point", None) or arc.get_vertex_point()
+
+    start_angle = _point_to_dxf_angle(arc.center, start_point)
+    end_angle = _point_to_dxf_angle(arc.center, end_point)
+    through_angle = _point_to_dxf_angle(arc.center, through_point)
+
+    if _angle_is_on_ccw_arc(start_angle, end_angle, through_angle):
+        return start_angle, end_angle
+    return end_angle, start_angle
+
+
+def _arc_polyline_points(arc: Arc, min_samples: int = 48) -> list[tuple[float, float]]:
+    start_angle_deg = float(arc.start_angle)
+    end_angle_deg = float(arc.end_angle)
+    span_angle_deg = end_angle_deg - start_angle_deg
+
+    if span_angle_deg < -180.0:
+        span_angle_deg += 360.0
+
+    if abs(span_angle_deg) < 0.1:
+        return []
+
+    rect = QRectF(
+        -arc.radius_x,
+        -arc.radius_y,
+        arc.radius_x * 2,
+        arc.radius_y * 2,
+    )
+
+    path = QPainterPath()
+    path.arcMoveTo(rect, start_angle_deg)
+    path.arcTo(rect, start_angle_deg, span_angle_deg)
+
+    transform = QTransform()
+    transform.translate(arc.center.x(), arc.center.y())
+    transform.rotate(math.degrees(arc.rotation_angle))
+    path = transform.map(path)
+
+    sample_count = max(min_samples, int(abs(span_angle_deg) / 4.0) + 1)
+    points = []
+    for i in range(sample_count + 1):
+        point = path.pointAtPercent(i / sample_count if sample_count > 0 else 0.0)
+        points.append((point.x(), point.y()))
+    return points
+
+
 def _export_arc(msp, arc: Arc, style_to_layer, layer_manager=None):
     qt_start = float(arc.start_angle)
     qt_end = float(arc.end_angle)
-    if qt_end < qt_start:
-        qt_start, qt_end = qt_end, qt_start
 
-    dxf_start = (360 - qt_end) % 360
-    dxf_end = (360 - qt_start) % 360
-    if dxf_end <= dxf_start:
-        dxf_end += 360
+    dxf_start, dxf_end = _arc_to_dxf_ccw_angles(qt_start, qt_end)
+    dxf_rot = float(arc.rotation_angle)
 
     style = getattr(arc, '_style', None)
     is_wavy = (style is not None and getattr(style, 'line_type', None) == LineType.SOLID_WAVY)
-    is_circular = abs(arc.radius_x - arc.radius_y) < 1e-6 and abs(arc.rotation_angle) < 1e-6
+    is_circular = abs(arc.radius_x - arc.radius_y) < 1e-6
 
     if is_wavy:
-        start_param = math.radians(dxf_start)
-        end_param = math.radians(dxf_end)
-        if not is_circular:
-            if arc.radius_y > arc.radius_x:
-                 start_param -= math.pi / 2
-                 end_param -= math.pi / 2
-        
-        pts = _wavy_parametric_curve_points(
-            arc.center.x(), arc.center.y(),
-            arc.radius_x, arc.radius_y,
-            arc.rotation_angle,
-            start_param, end_param, style
-        )
+        pts = _wavy_points_along_polyline(_arc_polyline_points(arc), style)
         entity = msp.add_lwpolyline(pts, close=False)
-        _embed_original_geometry(entity, "Arc", [arc.center.x(), arc.center.y(), arc.radius_x, arc.radius_y, float(arc.start_angle), float(arc.end_angle), arc.rotation_angle])
+        _embed_original_geometry(entity, "Arc", [arc.center.x(), arc.center.y(), arc.radius_x, arc.radius_y, float(arc.start_angle), float(arc.end_angle), float(arc.rotation_angle)])
         _apply_entity_style(entity, arc, style_to_layer, layer_manager)
         return
 
-    if is_circular:
-        entity = msp.add_arc(
-            center=(arc.center.x(), arc.center.y(), 0),
-            radius=arc.radius_x, start_angle=dxf_start, end_angle=dxf_end,
-        )
-    else:
-        cos_rot = math.cos(arc.rotation_angle)
-        sin_rot = math.sin(arc.rotation_angle)
-
-        if arc.radius_x >= arc.radius_y:
-            major_axis = (arc.radius_x * cos_rot, arc.radius_x * sin_rot, 0)
-            ratio = arc.radius_y / arc.radius_x if arc.radius_x > 0 else 1.0
-            start_param = math.radians(dxf_start)
-            end_param = math.radians(dxf_end)
-        else:
-            major_axis = (-arc.radius_y * sin_rot, arc.radius_y * cos_rot, 0)
-            ratio = arc.radius_x / arc.radius_y if arc.radius_y > 0 else 1.0
-            start_param = math.radians(dxf_start) - math.pi / 2
-            end_param = math.radians(dxf_end) - math.pi / 2
-
-        entity = msp.add_ellipse(
-            center=(arc.center.x(), arc.center.y(), 0),
-            major_axis=major_axis, ratio=ratio,
-            start_param=start_param, end_param=end_param,
-        )
+    pts = _arc_polyline_points(arc)
+    entity = msp.add_lwpolyline(pts, close=False)
+    _embed_original_geometry(entity, "Arc", [arc.center.x(), arc.center.y(), arc.radius_x, arc.radius_y, float(arc.start_angle), float(arc.end_angle), float(arc.rotation_angle)])
     _apply_entity_style(entity, arc, style_to_layer, layer_manager)
 
 

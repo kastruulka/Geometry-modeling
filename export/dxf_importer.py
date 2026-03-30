@@ -195,25 +195,56 @@ def _import_arc(doc, entity, **kwargs):
 
     dxf_start = float(entity.dxf.start_angle)
     dxf_end = float(entity.dxf.end_angle)
-    
-    start_angle_deg = (-dxf_end) % 360
-    end_angle_deg = (-dxf_start) % 360
+
+    start_angle_rad = math.radians(dxf_start)
+    end_angle_rad = math.radians(dxf_end)
+    span_deg = (dxf_end - dxf_start) % 360.0
+    mid_angle_rad = math.radians((dxf_start + span_deg / 2.0) % 360.0)
+
+    start_point = QPointF(
+        center.x + radius * math.cos(start_angle_rad),
+        center.y + radius * math.sin(start_angle_rad),
+    )
+    end_point = QPointF(
+        center.x + radius * math.cos(end_angle_rad),
+        center.y + radius * math.sin(end_angle_rad),
+    )
+    mid_point = QPointF(
+        center.x + radius * math.cos(mid_angle_rad),
+        center.y + radius * math.sin(mid_angle_rad),
+    )
+
+    from core.scene import Scene
+    scene_helper = Scene()
+    calc_center, radius_x, radius_y, start_angle_deg, end_angle_deg, rotation_angle = (
+        scene_helper._calculate_ellipse_arc_from_three_points(start_point, end_point, mid_point)
+    )
+
+    if calc_center is None or radius_x <= 0 or radius_y <= 0:
+        calc_center = QPointF(center.x, center.y)
+        radius_x = radius
+        radius_y = radius
+        start_angle_deg = dxf_start % 360
+        end_angle_deg = dxf_end % 360
+        rotation_angle = 0.0
     
     color = _entity_qcolor(doc, entity)
     layer_name = _entity_layer_name(entity)
     arc = Arc(
-        QPointF(center.x, center.y),
-        radius, radius,
+        calc_center,
+        radius_x, radius_y,
         start_angle_deg, end_angle_deg,
         style=None, color=color,
         width=_entity_lineweight_px(doc, entity),
-        rotation_angle=0.0,
+        rotation_angle=rotation_angle,
     )
+    arc._start_point = start_point
+    arc._end_point = end_point
+    arc._original_vertex_point = mid_point
     arc.layer_name = layer_name
     arc._from_dxf_import = True
     arc._legacy_linetype = _entity_linetype(doc, entity)
     return arc
-
 
 def _import_ellipse(doc, entity, **kwargs):
     center = entity.dxf.center
@@ -241,9 +272,9 @@ def _import_ellipse(doc, entity, **kwargs):
         ellipse._legacy_linetype = _entity_linetype(doc, entity)
         return ellipse
     else:
-        # ИСПОЛЬЗУЕМ ЧИСТЫЕ УГЛЫ!
-        start_angle_deg = math.degrees(start_param)
-        end_angle_deg = math.degrees(end_param)
+        # ПРЯМОЙ ПЕРЕНОС: убрали инверсию параметрических углов
+        start_angle_deg = math.degrees(start_param) % 360
+        end_angle_deg = math.degrees(end_param) % 360
         
         arc = Arc(
             QPointF(center.x, center.y),
@@ -417,6 +448,72 @@ def _spline_point_to_xy(p):
     return (float(p[0]), float(p[1]))
 
 
+def _polyline_vertices(entity):
+    """Возвращает вершины обычной DXF POLYLINE как список (x, y)."""
+    points = []
+    try:
+        for vertex in entity.vertices:
+            loc = getattr(vertex.dxf, 'location', None)
+            if loc is not None:
+                points.append((float(loc.x), float(loc.y)))
+    except Exception:
+        pass
+    return points
+
+
+def _import_polyline(doc, entity, **kwargs):
+    """
+    Импорт старой DXF POLYLINE.
+    Во внешних CAD "сплайны" нередко сохраняются как 2D POLYLINE с большим числом вершин.
+    """
+    layer_name = _entity_layer_name(entity)
+    color = _entity_qcolor(doc, entity)
+    width_px = _entity_lineweight_px(doc, entity)
+    linetype = _entity_linetype(doc, entity)
+
+    points = _polyline_vertices(entity)
+    if not points:
+        return None
+
+    closed = bool(getattr(entity, 'is_closed', False))
+    qpoints = [QPointF(x, y) for x, y in points]
+    qpoints = _decimate_points(qpoints, MAX_POLYLINE_POINTS)
+
+    if layer_name in _RECONSTRUCTABLE_LAYER_STYLES and len(qpoints) >= 2 and not closed:
+        line = LineSegment(qpoints[0], qpoints[-1], style=None, color=color, width=width_px)
+        line.layer_name = layer_name
+        line._layer_name = layer_name
+        line._from_dxf_import = True
+        line._legacy_linetype = linetype
+        return line
+
+    if not closed and len(qpoints) >= 3:
+        spline = Spline(qpoints, style=None, color=color, width=width_px)
+        spline.layer_name = layer_name
+        spline._layer_name = layer_name
+        spline._from_dxf_import = True
+        spline._legacy_linetype = linetype
+        return spline
+
+    objs = []
+    n = len(qpoints)
+    for i in range(n - 1):
+        line = LineSegment(qpoints[i], qpoints[i + 1], style=None, color=color, width=width_px)
+        line.layer_name = layer_name
+        line._layer_name = layer_name
+        line._from_dxf_import = True
+        line._legacy_linetype = linetype
+        objs.append(line)
+    if closed and n >= 3:
+        line = LineSegment(qpoints[-1], qpoints[0], style=None, color=color, width=width_px)
+        line.layer_name = layer_name
+        line._layer_name = layer_name
+        line._from_dxf_import = True
+        line._legacy_linetype = linetype
+        objs.append(line)
+    return objs if objs else None
+
+
 def _import_spline(doc, entity, **kwargs):
     """Импорт SPLINE: используются fit_points, при отсутствии — control_points."""
     pts = []
@@ -507,6 +604,13 @@ _LAYER_NAME_STYLES = {
 }
 
 
+def _normalized_linetype_name(linetype):
+    lt = str(linetype or 'Continuous').strip().upper()
+    if not lt:
+        return 'CONTINUOUS'
+    return lt
+
+
 def _match_gost_style(obj, style_manager):
     """
     Сопоставляет импортированный объект с ГОСТ-стилем из LineStyleManager.
@@ -525,20 +629,21 @@ def _match_gost_style(obj, style_manager):
         if layer_style:
             return layer_style
 
-    lt = getattr(obj, '_legacy_linetype', 'Continuous') or 'Continuous'
-    lt = str(lt).strip().upper()
+    lt = _normalized_linetype_name(getattr(obj, '_legacy_linetype', 'Continuous'))
 
     width_px = getattr(obj, '_legacy_width', 0)
     thickness_mm = (width_px * 25.4) / 96.0
 
-    if lt == 'DASHED':
+    if lt == 'DASHED' or 'HIDDEN' in lt:
         return style_manager.get_style('Штриховая')
-    elif lt == 'DASHDOT':
+    elif lt == 'DASHDOT' or 'CENTER' in lt:
         if thickness_mm >= _THICK_THRESHOLD_MM:
             return style_manager.get_style('Штрихпунктирная утолщенная')
         return style_manager.get_style('Штрихпунктирная тонкая')
-    elif lt == 'DASHDOT2':
+    elif lt == 'DASHDOT2' or 'PHANTOM' in lt:
         return style_manager.get_style('Штрихпунктирная с двумя точками')
+    elif 'ZIGZAG' in lt:
+        return style_manager.get_style('Сплошная тонкая с изломами')
     else:
         if thickness_mm >= _THICK_THRESHOLD_MM:
             return style_manager.get_style('Сплошная основная')
@@ -568,6 +673,7 @@ def import_dxf_from_file(filepath: str, scene, layer_manager=None, style_manager
         'CIRCLE': _import_circle,
         'ARC': _import_arc,
         'ELLIPSE': _import_ellipse,
+        'POLYLINE': _import_polyline,
         'LWPOLYLINE': _import_lwpolyline,
         'SPLINE': _import_spline,
         'POINT': _import_point,
