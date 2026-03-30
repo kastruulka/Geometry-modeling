@@ -18,8 +18,17 @@ MAX_SPLINE_POINTS = 150
 MAX_POLYLINE_POINTS = 250
 
 # Толщина линии при импорте: как у базовой "Сплошная основная" (0.8 мм) в пикселях при 96 DPI
+# Толщина линии при импорте: как у базовой "Сплошная основная" (0.8 мм) в пикселях при 96 DPI
 IMPORT_THICKNESS_MM = 0.8
 IMPORT_LINE_WIDTH_PX = (IMPORT_THICKNESS_MM * 96) / 25.4
+
+# Стили слоёв, которые при экспорте превращаются в сложные полилинии (изломы, волны),
+# но при отсутствии XData (например, файл пересохранен в другом CAD) 
+# должны восстанавливаться как простой прямой отрезок по первой и последней точке.
+_RECONSTRUCTABLE_LAYER_STYLES = {
+    'Сплошная тонкая с изломами',
+    'Сплошная волнистая',
+}
 
 
 def _decimate_points(points, max_points):
@@ -183,13 +192,12 @@ def _import_circle(doc, entity, **kwargs):
 def _import_arc(doc, entity, **kwargs):
     center = entity.dxf.center
     radius = float(entity.dxf.radius)
-    
+
     dxf_start = float(entity.dxf.start_angle)
     dxf_end = float(entity.dxf.end_angle)
     
-    # Инвертируем углы, потому что в DXF ось Y смотрит вверх, а в Qt — вниз!
-    start_angle_deg = (360 - dxf_end) % 360
-    end_angle_deg = (360 - dxf_start) % 360
+    start_angle_deg = (-dxf_end) % 360
+    end_angle_deg = (-dxf_start) % 360
     
     color = _entity_qcolor(doc, entity)
     layer_name = _entity_layer_name(entity)
@@ -233,12 +241,9 @@ def _import_ellipse(doc, entity, **kwargs):
         ellipse._legacy_linetype = _entity_linetype(doc, entity)
         return ellipse
     else:
-        dxf_start = math.degrees(start_param)
-        dxf_end = math.degrees(end_param)
-        
-        # Инвертируем углы дуги эллипса
-        start_angle_deg = (360 - dxf_end) % 360
-        end_angle_deg = (360 - dxf_start) % 360
+        # ИСПОЛЬЗУЕМ ЧИСТЫЕ УГЛЫ!
+        start_angle_deg = math.degrees(start_param)
+        end_angle_deg = math.degrees(end_param)
         
         arc = Arc(
             QPointF(center.x, center.y),
@@ -252,6 +257,56 @@ def _import_ellipse(doc, entity, **kwargs):
         arc._from_dxf_import = True
         arc._legacy_linetype = _entity_linetype(doc, entity)
         return arc
+
+def _restore_from_xdata(doc, entity):
+    """Универсальный восстановитель любой геометрии из XData (наших скрытых метаданных)."""
+    if not entity.has_xdata("GEO_MODELER"):
+        return None
+    try:
+        xdata = entity.get_xdata("GEO_MODELER")
+        obj_type = None
+        floats = []
+        for code, value in xdata:
+            if code == 1000: obj_type = value
+            elif code == 1040: floats.append(value)
+
+        color = _entity_qcolor(doc, entity)
+        width_px = _entity_lineweight_px(doc, entity)
+        layer_name = _entity_layer_name(entity)
+        linetype = _entity_linetype(doc, entity)
+
+        obj = None
+        if obj_type == "Circle" and len(floats) >= 3:
+            obj = Circle(QPointF(floats[0], floats[1]), floats[2], style=None, color=color, width=width_px)
+        elif obj_type == "Arc" and len(floats) >= 7:
+            obj = Arc(QPointF(floats[0], floats[1]), floats[2], floats[3], floats[4], floats[5], style=None, color=color, width=width_px, rotation_angle=floats[6])
+        elif obj_type == "Ellipse" and len(floats) >= 5:
+            obj = Ellipse(QPointF(floats[0], floats[1]), floats[2], floats[3], style=None, color=color, width=width_px, rotation_angle=floats[4])
+        elif obj_type == "Rectangle" and len(floats) >= 5:
+            obj = Rectangle(QPointF(floats[0], floats[1]), QPointF(floats[2], floats[3]), style=None, color=color, width=width_px)
+            obj.fillet_radius = floats[4]
+        elif obj_type == "Polygon" and len(floats) >= 4:
+            import math
+            cx, cy = floats[0], floats[1]
+            radius = floats[2]
+            num_vertices = int(floats[3])
+            start_angle = floats[4] if len(floats) >= 5 else -math.pi / 2
+            obj = Polygon(QPointF(cx, cy), radius, num_vertices, style=None, color=color, width=width_px, start_angle=start_angle)
+        elif obj_type == "Spline" and len(floats) >= 4:
+            qpts = [QPointF(floats[i], floats[i+1]) for i in range(0, len(floats)-1, 2)]
+            obj = Spline(qpts, style=None, color=color, width=width_px)
+        elif obj_type == "Line" and len(floats) >= 4:
+            obj = LineSegment(QPointF(floats[0], floats[1]), QPointF(floats[2], floats[3]), style=None, color=color, width=width_px)
+
+        if obj is not None:
+            obj.layer_name = layer_name
+            obj._layer_name = layer_name  
+            obj._from_dxf_import = True
+            obj._legacy_linetype = linetype
+            return obj
+    except Exception as e:
+        print(f"Ошибка при чтении XData: {e}")
+    return None
 
 def _import_lwpolyline(doc, entity, **kwargs):
     layer_name = _entity_layer_name(entity)
@@ -522,40 +577,30 @@ def import_dxf_from_file(filepath: str, scene, layer_manager=None, style_manager
     def process_entity(entity):
         if entity.dxftype() == 'INSERT':
             try:
-                # Распознаем прямоугольник от T-FLEX (4 линии внутри блока)
                 block = doc.blocks.get(entity.dxf.name)
                 b_entities = list(block)
-                
                 if len(b_entities) == 4 and all(e.dxftype() == 'LINE' for e in b_entities):
                     xs, ys = [], []
                     for e in b_entities:
                         xs.extend([e.dxf.start.x, e.dxf.end.x])
                         ys.extend([e.dxf.start.y, e.dxf.end.y])
-                    
                     ins = entity.dxf.insert
                     sx, sy = entity.dxf.xscale, entity.dxf.yscale
-                    
                     real_min_x = ins.x + min(xs) * sx
                     real_max_x = ins.x + max(xs) * sx
                     real_min_y = ins.y + min(ys) * sy
                     real_max_y = ins.y + max(ys) * sy
-                    
                     color = _entity_qcolor(doc, b_entities[0])
                     layer = _entity_layer_name(b_entities[0])
-                    if layer == '0':
-                        layer = _entity_layer_name(entity)
-                        
+                    if layer == '0': layer = _entity_layer_name(entity)
                     rect = Rectangle(
-                        QPointF(real_min_x, real_min_y),
-                        QPointF(real_max_x, real_max_y),
-                        style=None, color=color, 
-                        width=_entity_lineweight_px(doc, b_entities[0])
+                        QPointF(real_min_x, real_min_y), QPointF(real_max_x, real_max_y),
+                        style=None, color=color, width=_entity_lineweight_px(doc, b_entities[0])
                     )
                     rect.layer_name = layer
                     rect._from_dxf_import = True
                     return [rect]
                 
-                # Если это обычный блок, достаем из него геометрию как есть
                 objs = []
                 for sub_entity in entity.virtual_entities():
                     res = process_entity(sub_entity)
@@ -567,7 +612,15 @@ def import_dxf_from_file(filepath: str, scene, layer_manager=None, style_manager
                 print(f"Ошибка чтения блока: {e}")
                 return None
         
-        elif entity.dxftype() in handlers:
+        # --- УНИВЕРСАЛЬНАЯ ЗАЩИТА (МАГИЯ XDATA) ---
+        # Ловит твои идеальные фигуры до того, как они попадут в кривые обработчики DXF
+        xdata_obj = _restore_from_xdata(doc, entity)
+        if xdata_obj is not None:
+            return xdata_obj
+            
+        # --- ОБЫЧНЫЙ ИМПОРТ ---
+        # Для чужих файлов (T-FLEX, AutoCAD и т.д.)
+        if entity.dxftype() in handlers:
             return handlers[entity.dxftype()](doc, entity)
         return None
 
