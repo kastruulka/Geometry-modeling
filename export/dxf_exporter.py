@@ -136,24 +136,19 @@ def _setup_layers(doc, objects):
 
         layer_name = _sanitize_layer_name(style.name)
 
-        # Уникальность имени
-        base_name = layer_name
-        counter = 1
-        while layer_name in layers and layer_name not in style_to_layer.values():
-            layer_name = f"{base_name}_{counter}"
-            counter += 1
-
-        # Цвет слоя (ACI)
-        color = style.color
-        aci = _nearest_aci_color(color.red(), color.green(), color.blue())
-
-        # Тип линии слоя
-        lt_name = _get_linetype_name(style.line_type)
-
-        # Толщина линии слоя
-        lw = _lineweight_from_mm(style.thickness_mm)
-
+        # Если слой уже существует (например, был создан из layer_manager), 
+        # мы просто привязываемся к нему, а не создаем дубликаты вида _1, _2
         if layer_name not in layers:
+            # Цвет слоя (ACI)
+            color = style.color
+            aci = _nearest_aci_color(color.red(), color.green(), color.blue())
+
+            # Тип линии слоя
+            lt_name = _get_linetype_name(style.line_type)
+
+            # Толщина линии слоя
+            lw = _lineweight_from_mm(style.thickness_mm)
+
             layers.add(
                 name=layer_name,
                 color=aci,
@@ -228,6 +223,15 @@ def _apply_entity_style(entity, obj, style_to_layer, layer_manager=None):
             entity.dxf.lineweight = _lineweight_from_mm(0.8)
         entity.dxf.linetype = "Continuous"
 
+def _embed_original_geometry(entity, obj_type: str, floats: list):
+    """
+    Прячет исходные параметры математической фигуры (радиусы, координаты) 
+    внутрь сгенерированной волнистой полилинии через DXF XData.
+    """
+    xdata = [(1000, obj_type)]  # 1000 - текстовый код (тип фигуры)
+    for f in floats:
+        xdata.append((1040, float(f)))  # 1040 - код для float значений
+    entity.set_xdata("GEO_MODELER", xdata)
 
 # ---------------------------------------------------------------------------
 #  Экспорт каждого типа примитива
@@ -305,16 +309,293 @@ def _broken_line_polyline_points(line: LineSegment, num_samples_per_zigzag: int 
     return points
 
 
+def _get_wavy_segment_points(sx: float, sy: float, ex: float, ey: float, style):
+    """Генерирует точки волны между двумя координатами (универсальная функция)."""
+    dx = ex - sx
+    dy = ey - sy
+    length = math.hypot(dx, dy)
+    if length < 1e-6:
+        return [(sx, sy), (ex, ey)]
+
+    angle = math.atan2(dy, dx)
+    cos_angle = math.cos(angle)
+    sin_angle = math.sin(angle)
+    perp_cos = -sin_angle
+    perp_sin = cos_angle
+
+    dpi = 96
+    if style is not None and hasattr(style, 'wavy_amplitude_mm') and style.wavy_amplitude_mm is not None:
+        amplitude_mm = float(style.wavy_amplitude_mm)
+    else:
+        thickness_mm = float(getattr(style, 'thickness_mm', 0.8) or 0.8)
+        amplitude_mm = (0.8 / 2.5) * (thickness_mm / 0.4)
+
+    amplitude_px = (amplitude_mm * dpi) / 25.4
+    wave_length_px = max(1.0, amplitude_px * 5.0)
+
+    num_waves = max(1, int(length / wave_length_px))
+    actual_wave_length = length / num_waves if num_waves > 0 else length
+
+    num_points = max(20, int(length / 2))
+    points = []
+    for i in range(num_points + 1):
+        t = i / num_points
+        along_line = t * length
+        wave_phase = (along_line / actual_wave_length) * 2.0 * math.pi
+        wave_offset = amplitude_px * math.sin(wave_phase)
+        x = sx + along_line * cos_angle + wave_offset * perp_cos
+        y = sy + along_line * sin_angle + wave_offset * perp_sin
+        points.append((x, y))
+    return points
+
+def _get_wavy_segment_points(sx: float, sy: float, ex: float, ey: float, style):
+    """Генерирует идеально гладкую прямую волну."""
+    dx = ex - sx
+    dy = ey - sy
+    length = math.hypot(dx, dy)
+    if length < 1e-6:
+        return [(sx, sy), (ex, ey)]
+
+    angle = math.atan2(dy, dx)
+    cos_angle = math.cos(angle)
+    sin_angle = math.sin(angle)
+    perp_cos = -sin_angle
+    perp_sin = cos_angle
+
+    dpi = 96
+    if style is not None and hasattr(style, 'wavy_amplitude_mm') and style.wavy_amplitude_mm is not None:
+        amplitude_mm = float(style.wavy_amplitude_mm)
+    else:
+        thickness_mm = float(getattr(style, 'thickness_mm', 0.8) or 0.8)
+        amplitude_mm = (0.8 / 2.5) * (thickness_mm / 0.4)
+
+    amplitude_px = (amplitude_mm * dpi) / 25.4
+    wave_length_px = max(1.0, amplitude_px * 5.0)
+
+    num_waves = max(1, int(length / wave_length_px))
+    actual_wave_length = length / num_waves if num_waves > 0 else length
+
+    # 30 точек на одну волну делают её идеально гладкой
+    points_per_wave = 30
+    num_points = max(50, num_waves * points_per_wave)
+
+    points = []
+    for i in range(num_points + 1):
+        t = i / num_points
+        along_line = t * length
+        wave_phase = (along_line / actual_wave_length) * 2.0 * math.pi
+        wave_offset = amplitude_px * math.sin(wave_phase)
+        x = sx + along_line * cos_angle + wave_offset * perp_cos
+        y = sy + along_line * sin_angle + wave_offset * perp_sin
+        points.append((x, y))
+    return points
+
+def _wavy_line_polyline_points(line: LineSegment, style):
+    return _get_wavy_segment_points(
+        line.start_point.x(), line.start_point.y(),
+        line.end_point.x(), line.end_point.y(),
+        style
+    )
+
+def _wavy_parametric_curve_points(cx, cy, rx, ry, rotation_angle_rad, start_param, end_param, style):
+    """Генерирует идеально гладкую волну вокруг окружностей, дуг и эллипсов."""
+    dpi = 96
+    if style is not None and hasattr(style, 'wavy_amplitude_mm') and style.wavy_amplitude_mm is not None:
+        amplitude_mm = float(style.wavy_amplitude_mm)
+    else:
+        thickness_mm = float(getattr(style, 'thickness_mm', 0.8) or 0.8)
+        amplitude_mm = (0.8 / 2.5) * (thickness_mm / 0.4)
+
+    amplitude_px = (amplitude_mm * dpi) / 25.4
+    wave_length_px = max(1.0, amplitude_px * 5.0)
+
+    cos_rot = math.cos(rotation_angle_rad)
+    sin_rot = math.sin(rotation_angle_rad)
+
+    def get_pt(t):
+        x0 = rx * math.cos(t)
+        y0 = ry * math.sin(t)
+        return cx + x0 * cos_rot - y0 * sin_rot, cy + x0 * sin_rot + y0 * cos_rot
+        
+    def get_normal(t):
+        dx0 = -rx * math.sin(t)
+        dy0 = ry * math.cos(t)
+        dx = dx0 * cos_rot - dy0 * sin_rot
+        dy = dx0 * sin_rot + dy0 * cos_rot
+        mag = math.hypot(dx, dy)
+        if mag < 1e-9: return 0, 0
+        return -dy/mag, dx/mag # Нормаль к касательной
+
+    # Измеряем длину дуги/эллипса
+    num_len_samples = 100
+    length = 0.0
+    prev_x, prev_y = None, None
+    dt = (end_param - start_param) / num_len_samples
+    for i in range(num_len_samples + 1):
+        px, py = get_pt(start_param + i * dt)
+        if prev_x is not None:
+            length += math.hypot(px - prev_x, py - prev_y)
+        prev_x, prev_y = px, py
+
+    if length < 1e-6: return []
+
+    num_waves = max(1, int(length / wave_length_px))
+    actual_wave_length = length / num_waves if num_waves > 0 else length
+    
+    points_per_wave = 30
+    num_points = max(100, num_waves * points_per_wave)
+
+    points = []
+    current_len = 0.0
+    prev_x, prev_y = get_pt(start_param)
+    dt = (end_param - start_param) / num_points
+    
+    for i in range(num_points + 1):
+        t = start_param + i * dt
+        px, py = get_pt(t)
+        
+        if i > 0:
+            current_len += math.hypot(px - prev_x, py - prev_y)
+        prev_x, prev_y = px, py
+        
+        wave_phase = (current_len / actual_wave_length) * 2.0 * math.pi
+        wave_offset = amplitude_px * math.sin(wave_phase)
+        
+        nx, ny = get_normal(t)
+        points.append((px + nx * wave_offset, py + ny * wave_offset))
+        
+    return points
+
+def _wavy_spline_polyline_points(spline: Spline, style):
+    """Генерирует волнистую полилинию по сплайну, вычисляя нормали через смещение."""
+    dpi = 96
+    if style is not None and hasattr(style, 'wavy_amplitude_mm') and style.wavy_amplitude_mm is not None:
+        amplitude_mm = float(style.wavy_amplitude_mm)
+    else:
+        thickness_mm = float(getattr(style, 'thickness_mm', 0.8) or 0.8)
+        amplitude_mm = (0.8 / 2.5) * (thickness_mm / 0.4)
+
+    amplitude_px = (amplitude_mm * dpi) / 25.4
+    wave_length_px = max(1.0, amplitude_px * 5.0)
+
+    # Шаг 1: Измеряем примерную длину сплайна
+    num_len_samples = max(100, len(spline.control_points) * 20)
+    length = 0.0
+    prev_pt = spline._get_point_on_spline(0.0)
+    for i in range(1, num_len_samples + 1):
+        t = i / num_len_samples
+        pt = spline._get_point_on_spline(t)
+        length += math.hypot(pt.x() - prev_pt.x(), pt.y() - prev_pt.y())
+        prev_pt = pt
+
+    if length < 1e-6:
+        return []
+
+    num_waves = max(1, int(length / wave_length_px))
+    actual_wave_length = length / num_waves if num_waves > 0 else length
+    
+    points_per_wave = 30
+    num_points = max(100, num_waves * points_per_wave)
+
+    points = []
+    current_len = 0.0
+    eps = 1e-5 # Малое смещение для поиска нормали
+    
+    prev_x = spline._get_point_on_spline(0.0).x()
+    prev_y = spline._get_point_on_spline(0.0).y()
+    
+    # Шаг 2: Генерируем точки с учетом нормали
+    for i in range(num_points + 1):
+        t = i / num_points
+        pt = spline._get_point_on_spline(t)
+        px, py = pt.x(), pt.y()
+        
+        if i > 0:
+            current_len += math.hypot(px - prev_x, py - prev_y)
+        
+        # Ищем вектор касательной для расчета нормали
+        t_next = min(1.0, t + eps)
+        if t >= 1.0 - eps:
+            t_prev = max(0.0, t - eps)
+            pt_prev = spline._get_point_on_spline(t_prev)
+            dx = px - pt_prev.x()
+            dy = py - pt_prev.y()
+        else:
+            pt_next = spline._get_point_on_spline(t_next)
+            dx = pt_next.x() - px
+            dy = pt_next.y() - py
+            
+        mag = math.hypot(dx, dy)
+        if mag < 1e-9:
+            nx, ny = 0, 0
+        else:
+            nx, ny = -dy / mag, dx / mag # Вектор нормали
+            
+        wave_phase = (current_len / actual_wave_length) * 2.0 * math.pi
+        wave_offset = amplitude_px * math.sin(wave_phase)
+        
+        points.append((px + nx * wave_offset, py + ny * wave_offset))
+        prev_x, prev_y = px, py
+        
+    return points
+
+def _wavy_arc_polyline_points(cx: float, cy: float, radius: float, start_angle_deg: float, end_angle_deg: float, style):
+    """Генерирует точки волны по дуге/окружности."""
+    dpi = 96
+    if style is not None and hasattr(style, 'wavy_amplitude_mm') and style.wavy_amplitude_mm is not None:
+        amplitude_mm = float(style.wavy_amplitude_mm)
+    else:
+        thickness_mm = float(getattr(style, 'thickness_mm', 0.8) or 0.8)
+        amplitude_mm = (0.8 / 2.5) * (thickness_mm / 0.4)
+
+    amplitude_px = (amplitude_mm * dpi) / 25.4
+    wave_length_px = max(1.0, amplitude_px * 5.0)
+
+    start_rad = math.radians(start_angle_deg)
+    end_rad = math.radians(end_angle_deg)
+    if end_rad <= start_rad:
+        end_rad += 2 * math.pi
+
+    arc_length = radius * (end_rad - start_rad)
+    if arc_length < 1e-6:
+        return []
+
+    num_waves = max(1, int(arc_length / wave_length_px))
+    actual_wave_length = arc_length / num_waves if num_waves > 0 else arc_length
+    num_points = max(50, int(arc_length / 2))
+    
+    points = []
+    for i in range(num_points + 1):
+        t = i / num_points
+        current_angle = start_rad + t * (end_rad - start_rad)
+        along_line = t * arc_length
+        wave_phase = (along_line / actual_wave_length) * 2.0 * math.pi
+        wave_offset = amplitude_px * math.sin(wave_phase)
+        
+        r = radius + wave_offset
+        points.append((cx + r * math.cos(current_angle), cy + r * math.sin(current_angle)))
+    return points
+
+
 def _export_line(msp, line: LineSegment, style_to_layer, layer_manager=None):
-    """Экспортирует отрезок: обычная линия — LINE, линия с изломом — LWPOLYLINE."""
+    """Экспортирует отрезок: обычная линия — LINE, излом/волна — LWPOLYLINE (как геометрию)."""
     style = getattr(line, '_style', None)
     is_broken = (
         style is not None
         and getattr(style, 'line_type', None) == LineType.SOLID_THIN_BROKEN
     )
+    is_wavy = (
+        style is not None
+        and getattr(style, 'line_type', None) == LineType.SOLID_WAVY
+    )
     if is_broken:
         pts = _broken_line_polyline_points(line)
         entity = msp.add_lwpolyline(pts, close=False)
+        _embed_original_geometry(entity, "Line", [line.start_point.x(), line.start_point.y(), line.end_point.x(), line.end_point.y()])
+    elif is_wavy:
+        pts = _wavy_line_polyline_points(line, style)
+        entity = msp.add_lwpolyline(pts, close=False)
+        _embed_original_geometry(entity, "Line", [line.start_point.x(), line.start_point.y(), line.end_point.x(), line.end_point.y()])
     else:
         entity = msp.add_line(
             start=(line.start_point.x(), line.start_point.y(), 0),
@@ -324,40 +605,65 @@ def _export_line(msp, line: LineSegment, style_to_layer, layer_manager=None):
 
 
 def _export_circle(msp, circle: Circle, style_to_layer, layer_manager=None):
-    """Экспортирует окружность как CIRCLE."""
-    entity = msp.add_circle(
-        center=(circle.center.x(), circle.center.y(), 0),
-        radius=circle.radius,
-    )
+    style = getattr(circle, '_style', None)
+    is_wavy = (style is not None and getattr(style, 'line_type', None) == LineType.SOLID_WAVY)
+
+    if is_wavy:
+        pts = _wavy_parametric_curve_points(
+            circle.center.x(), circle.center.y(), 
+            circle.radius, circle.radius, 0.0, 
+            0, math.tau, style
+        )
+        entity = msp.add_lwpolyline(pts, close=True)
+        _embed_original_geometry(entity, "Circle", [circle.center.x(), circle.center.y(), circle.radius])
+    else:
+        entity = msp.add_circle(
+            center=(circle.center.x(), circle.center.y(), 0),
+            radius=circle.radius,
+        )
     _apply_entity_style(entity, circle, style_to_layer, layer_manager)
 
 
 def _export_arc(msp, arc: Arc, style_to_layer, layer_manager=None):
-    is_circular = abs(arc.radius_x - arc.radius_y) < 1e-6 and abs(arc.rotation_angle) < 1e-6
-
-    # 1. Если дуга нарисована по часовой стрелке, делаем её против часовой
     qt_start = float(arc.start_angle)
     qt_end = float(arc.end_angle)
     if qt_end < qt_start:
         qt_start, qt_end = qt_end, qt_start
 
-    # 2. Математическое отзеркаливание дуги по вертикали
     dxf_start = (360 - qt_end) % 360
     dxf_end = (360 - qt_start) % 360
-    
-    # Гарантируем, что DXF нарисует путь правильно (против часовой)
     if dxf_end <= dxf_start:
         dxf_end += 360
+
+    style = getattr(arc, '_style', None)
+    is_wavy = (style is not None and getattr(style, 'line_type', None) == LineType.SOLID_WAVY)
+    is_circular = abs(arc.radius_x - arc.radius_y) < 1e-6 and abs(arc.rotation_angle) < 1e-6
+
+    if is_wavy:
+        start_param = math.radians(dxf_start)
+        end_param = math.radians(dxf_end)
+        if not is_circular:
+            if arc.radius_y > arc.radius_x:
+                 start_param -= math.pi / 2
+                 end_param -= math.pi / 2
+        
+        pts = _wavy_parametric_curve_points(
+            arc.center.x(), arc.center.y(),
+            arc.radius_x, arc.radius_y,
+            arc.rotation_angle,
+            start_param, end_param, style
+        )
+        entity = msp.add_lwpolyline(pts, close=False)
+        _embed_original_geometry(entity, "Arc", [arc.center.x(), arc.center.y(), arc.radius_x, arc.radius_y, float(arc.start_angle), float(arc.end_angle), arc.rotation_angle])
+        _apply_entity_style(entity, arc, style_to_layer, layer_manager)
+        return
 
     if is_circular:
         entity = msp.add_arc(
             center=(arc.center.x(), arc.center.y(), 0),
-            radius=arc.radius_x,
-            start_angle=dxf_start,
-            end_angle=dxf_end,
+            radius=arc.radius_x, start_angle=dxf_start, end_angle=dxf_end,
         )
     else:
-        # Угол наклона НЕ ИНВЕРТИРУЕМ (вектор major_axis сам компенсирует Y-разворот)
         cos_rot = math.cos(arc.rotation_angle)
         sin_rot = math.sin(arc.rotation_angle)
 
@@ -374,12 +680,9 @@ def _export_arc(msp, arc: Arc, style_to_layer, layer_manager=None):
 
         entity = msp.add_ellipse(
             center=(arc.center.x(), arc.center.y(), 0),
-            major_axis=major_axis,
-            ratio=ratio,
-            start_param=start_param,
-            end_param=end_param,
+            major_axis=major_axis, ratio=ratio,
+            start_param=start_param, end_param=end_param,
         )
-
     _apply_entity_style(entity, arc, style_to_layer, layer_manager)
 
 
@@ -438,24 +741,55 @@ def _rectangle_fillet_polyline_points(rect: Rectangle, num_arc_samples: int = 12
 
 
 def _export_rectangle(msp, rect: Rectangle, style_to_layer, layer_manager=None):
-    """Экспортирует прямоугольник как цепочку LINE (каждая сторона/сегмент — отдельный отрезок).
-    Так в сторонних программах можно измерять углы между сторонами."""
     pts = _rectangle_fillet_polyline_points(rect)
     if len(pts) < 2:
         return
-    n = len(pts)
-    for i in range(n):
-        start = pts[i]
-        end = pts[(i + 1) % n]
-        entity = msp.add_line(
-            start=(start[0], start[1], 0),
-            end=(end[0], end[1], 0),
-        )
+        
+    style = getattr(rect, '_style', None)
+    is_wavy = (style is not None and getattr(style, 'line_type', None) == LineType.SOLID_WAVY)
+
+    if is_wavy:
+        all_wavy_points = []
+        n = len(pts)
+        for i in range(n):
+            start = pts[i]
+            end = pts[(i + 1) % n]
+            wavy_segment = _get_wavy_segment_points(start[0], start[1], end[0], end[1], style)
+            if i > 0:
+                wavy_segment = wavy_segment[1:] # Убираем дублирование точек на углах
+            all_wavy_points.extend(wavy_segment)
+            
+        entity = msp.add_lwpolyline(all_wavy_points, close=True)
+        fillet = getattr(rect, 'fillet_radius', 0.0)
+        _embed_original_geometry(entity, "Rectangle", [rect.top_left.x(), rect.top_left.y(), rect.bottom_right.x(), rect.bottom_right.y(), fillet])
         _apply_entity_style(entity, rect, style_to_layer, layer_manager)
+    else:
+        n = len(pts)
+        for i in range(n):
+            start = pts[i]
+            end = pts[(i + 1) % n]
+            entity = msp.add_line(
+                start=(start[0], start[1], 0), end=(end[0], end[1], 0),
+            )
+            _apply_entity_style(entity, rect, style_to_layer, layer_manager)
 
 
 def _export_ellipse(msp, ellipse: Ellipse, style_to_layer, layer_manager=None):
-    """Экспортирует эллипс как ELLIPSE (полный, 0–2π)."""
+    style = getattr(ellipse, '_style', None)
+    is_wavy = (style is not None and getattr(style, 'line_type', None) == LineType.SOLID_WAVY)
+
+    if is_wavy:
+        pts = _wavy_parametric_curve_points(
+            ellipse.center.x(), ellipse.center.y(),
+            ellipse.radius_x, ellipse.radius_y,
+            ellipse.rotation_angle,
+            0, math.tau, style
+        )
+        entity = msp.add_lwpolyline(pts, close=True)
+        _embed_original_geometry(entity, "Ellipse", [ellipse.center.x(), ellipse.center.y(), ellipse.radius_x, ellipse.radius_y, ellipse.rotation_angle])
+        _apply_entity_style(entity, ellipse, style_to_layer, layer_manager)
+        return
+
     cos_rot = math.cos(ellipse.rotation_angle)
     sin_rot = math.sin(ellipse.rotation_angle)
 
@@ -468,46 +802,92 @@ def _export_ellipse(msp, ellipse: Ellipse, style_to_layer, layer_manager=None):
 
     entity = msp.add_ellipse(
         center=(ellipse.center.x(), ellipse.center.y(), 0),
-        major_axis=major_axis,
-        ratio=ratio,
-        start_param=0,
-        end_param=math.tau,
+        major_axis=major_axis, ratio=ratio,
+        start_param=0, end_param=math.tau,
     )
     _apply_entity_style(entity, ellipse, style_to_layer, layer_manager)
 
 
 def _export_polygon(msp, polygon: Polygon, style_to_layer, layer_manager=None):
-    """Экспортирует многоугольник как цепочку LINE (каждая сторона — отдельный отрезок).
-    Так в сторонних программах можно измерять углы между сторонами."""
     vertices = polygon.get_vertices()
     if len(vertices) < 2:
         return
+        
+    style = getattr(polygon, '_style', None)
+    is_wavy = (style is not None and getattr(style, 'line_type', None) == LineType.SOLID_WAVY)
+
     n = len(vertices)
-    for i in range(n):
-        start = vertices[i]
-        end = vertices[(i + 1) % n]
-        entity = msp.add_line(
-            start=(start.x(), start.y(), 0),
-            end=(end.x(), end.y(), 0),
-        )
+    if is_wavy:
+        all_wavy_points = []
+        for i in range(n):
+            start = vertices[i]
+            end = vertices[(i + 1) % n]
+            wavy_segment = _get_wavy_segment_points(start.x(), start.y(), end.x(), end.y(), style)
+            if i > 0:
+                wavy_segment = wavy_segment[1:]
+            all_wavy_points.extend(wavy_segment)
+            
+        entity = msp.add_lwpolyline(all_wavy_points, close=True)
+        
+        # --- Прячем правильные параметры многоугольника ---
+        cx = polygon.center.x()
+        cy = polygon.center.y()
+        radius = polygon.radius
+        num_vertices = polygon.num_vertices
+        
+        # Берем именно start_angle, который использует твой класс!
+        start_angle = getattr(polygon, 'start_angle', -math.pi / 2)
+            
+        _embed_original_geometry(entity, "Polygon", [cx, cy, radius, num_vertices, start_angle])
+        # ----------------------------------------------------
+        
         _apply_entity_style(entity, polygon, style_to_layer, layer_manager)
+    else:
+        for i in range(n):
+            start = vertices[i]
+            end = vertices[(i + 1) % n]
+            entity = msp.add_line(
+                start=(start.x(), start.y(), 0), end=(end.x(), end.y(), 0),
+            )
+            _apply_entity_style(entity, polygon, style_to_layer, layer_manager)
 
 
 def _export_spline(msp, spline: Spline, style_to_layer, layer_manager=None):
-    """Экспортирует сплайн как SPLINE (аппроксимация по fit-точкам)."""
+    """Экспортирует сплайн как SPLINE (аппроксимация по fit-точкам) или LWPOLYLINE (волнистый)."""
     if len(spline.control_points) < 2:
         return
 
+    style = getattr(spline, '_style', None)
+    is_wavy = (style is not None and getattr(style, 'line_type', None) == LineType.SOLID_WAVY)
+
+    # Если сплайн выродился в прямую линию
     if len(spline.control_points) == 2:
         p1 = spline.control_points[0]
         p2 = spline.control_points[1]
-        entity = msp.add_line(
-            start=(p1.x(), p1.y(), 0),
-            end=(p2.x(), p2.y(), 0),
-        )
+        if is_wavy:
+            pts = _get_wavy_segment_points(p1.x(), p1.y(), p2.x(), p2.y(), style)
+            entity = msp.add_lwpolyline(pts, close=False)
+        else:
+            entity = msp.add_line(
+                start=(p1.x(), p1.y(), 0),
+                end=(p2.x(), p2.y(), 0),
+            )
         _apply_entity_style(entity, spline, style_to_layer, layer_manager)
         return
 
+    # Экспорт волнистого сплайна
+    if is_wavy:
+        pts = _wavy_spline_polyline_points(spline, style)
+        if pts:
+            entity = msp.add_lwpolyline(pts, close=False)
+            coords = []
+            for p in spline.control_points:
+                coords.extend([p.x(), p.y()])
+            _embed_original_geometry(entity, "Spline", coords)
+            _apply_entity_style(entity, spline, style_to_layer, layer_manager)
+        return
+
+    # Экспорт обычного сплайна
     num_samples = max(50, len(spline.control_points) * 20)
     fit_points = []
     for i in range(num_samples + 1):
@@ -542,6 +922,10 @@ def export_scene_to_dxf(objects, filepath: str, dxf_version: str = "R2010",
     doc.header['$MEASUREMENT'] = 1    # 1 = метрическая система
     doc.header['$LUNITS'] = 2         # 2 = десятичные единицы
     doc.header['$LUPREC'] = 4         # точность — 4 знака после запятой
+
+    # --- Регистрация приложения для XData ---
+    if "GEO_MODELER" not in doc.appids:
+        doc.appids.add("GEO_MODELER")
 
     # --- 2. Регистрация линотипов ---
     _setup_linetypes(doc)

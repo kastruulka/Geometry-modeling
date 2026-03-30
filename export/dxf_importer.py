@@ -11,7 +11,7 @@ from PySide6.QtGui import QColor
 from core.geometry import Point
 from core.layers import Layer
 from widgets.line_segment import LineSegment
-from widgets.primitives import Circle, Arc, Ellipse, Spline
+from widgets.primitives import Circle, Arc, Ellipse, Spline, Rectangle, Polygon
 
 # Лимиты точек при импорте (редукция при превышении)
 MAX_SPLINE_POINTS = 150
@@ -134,6 +134,8 @@ def _entity_lineweight_px(doc, entity):
 
 def _entity_qcolor(doc, entity):
     r, g, b = _entity_rgb(doc, entity)
+    if r == 255 and g == 255 and b == 255:
+        r, g, b = 0, 0, 0
     return QColor(r, g, b)
 
 
@@ -183,25 +185,19 @@ def _import_arc(doc, entity, **kwargs):
     radius = float(entity.dxf.radius)
     
     dxf_start = float(entity.dxf.start_angle)
-    dxf_end   = float(entity.dxf.end_angle)
+    dxf_end = float(entity.dxf.end_angle)
     
-    # Обратное отзеркаливание из DXF в Qt
+    # Инвертируем углы, потому что в DXF ось Y смотрит вверх, а в Qt — вниз!
     start_angle_deg = (360 - dxf_end) % 360
-    end_angle_deg   = (360 - dxf_start) % 360
+    end_angle_deg = (360 - dxf_start) % 360
     
-    if end_angle_deg <= start_angle_deg:
-        end_angle_deg += 360
-        
     color = _entity_qcolor(doc, entity)
     layer_name = _entity_layer_name(entity)
     arc = Arc(
         QPointF(center.x, center.y),
-        radius,
-        radius,
-        start_angle_deg,
-        end_angle_deg,
-        style=None,
-        color=color,
+        radius, radius,
+        start_angle_deg, end_angle_deg,
+        style=None, color=color,
         width=_entity_lineweight_px(doc, entity),
         rotation_angle=0.0,
     )
@@ -222,104 +218,137 @@ def _import_ellipse(doc, entity, **kwargs):
     
     color = _entity_qcolor(doc, entity)
     layer_name = _entity_layer_name(entity)
-    linetype = _entity_linetype(doc, entity)
-    width = _entity_lineweight_px(doc, entity)
-    
-    # Читаем угол напрямую (без минуса!)
-    qt_angle_rad = math.atan2(major.y, major.x)
 
     if abs((end_param - start_param) - 2 * math.pi) < 1e-9:
-        # Полный эллипс
+        angle_rad = math.atan2(major.y, major.x)
         ellipse = Ellipse(
             QPointF(center.x, center.y),
-            radius_x,
-            radius_y,
-            style=None,
-            color=color,
-            width=width,
-            rotation_angle=qt_angle_rad,
+            radius_x, radius_y,
+            style=None, color=color,
+            width=_entity_lineweight_px(doc, entity),
+            rotation_angle=angle_rad,
         )
         ellipse.layer_name = layer_name
         ellipse._from_dxf_import = True
-        ellipse._legacy_linetype = linetype
+        ellipse._legacy_linetype = _entity_linetype(doc, entity)
         return ellipse
     else:
-        # Дуга эллипса: обратное отзеркаливание параметров
-        dxf_start_deg = math.degrees(start_param)
-        dxf_end_deg = math.degrees(end_param)
+        dxf_start = math.degrees(start_param)
+        dxf_end = math.degrees(end_param)
         
-        start_angle_deg = (360 - dxf_end_deg) % 360
-        end_angle_deg = (360 - dxf_start_deg) % 360
-        
-        if end_angle_deg <= start_angle_deg:
-            end_angle_deg += 360
+        # Инвертируем углы дуги эллипса
+        start_angle_deg = (360 - dxf_end) % 360
+        end_angle_deg = (360 - dxf_start) % 360
         
         arc = Arc(
             QPointF(center.x, center.y),
-            radius_x,
-            radius_y,
-            start_angle_deg,
-            end_angle_deg,
-            style=None,
-            color=color,
-            width=width,
-            rotation_angle=qt_angle_rad,
+            radius_x, radius_y,
+            start_angle_deg, end_angle_deg,
+            style=None, color=color,
+            width=_entity_lineweight_px(doc, entity),
+            rotation_angle=math.atan2(major.y, major.x),
         )
         arc.layer_name = layer_name
         arc._from_dxf_import = True
-        arc._legacy_linetype = linetype
+        arc._legacy_linetype = _entity_linetype(doc, entity)
         return arc
 
-
-# Стили, экспортируемые как LWPOLYLINE с геометрией (зигзаг и т.д.).
-# При импорте такие полилинии восстанавливаются как одиночный отрезок,
-# чтобы рендерер рисовал спецэффект динамически с правильными пропорциями.
-_RECONSTRUCTABLE_LAYER_STYLES = {
-    'Сплошная тонкая с изломами',
-}
-
-
 def _import_lwpolyline(doc, entity, **kwargs):
+    layer_name = _entity_layer_name(entity)
+    color = _entity_qcolor(doc, entity)
+    width_px = _entity_lineweight_px(doc, entity)
+    linetype = _entity_linetype(doc, entity)
+
+    # --- 1. Пытаемся восстановить оригинальную фигуру из XData ---
+    if entity.has_xdata("GEO_MODELER"):
+        try:
+            xdata = entity.get_xdata("GEO_MODELER")
+            obj_type = None
+            floats = []
+            for code, value in xdata:
+                if code == 1000:
+                    obj_type = value
+                elif code == 1040:
+                    floats.append(value)
+
+            obj = None
+            if obj_type == "Circle" and len(floats) >= 3:
+                obj = Circle(QPointF(floats[0], floats[1]), floats[2], style=None, color=color, width=width_px)
+            
+            elif obj_type == "Arc" and len(floats) >= 7:
+                obj = Arc(QPointF(floats[0], floats[1]), floats[2], floats[3], floats[4], floats[5], style=None, color=color, width=width_px, rotation_angle=floats[6])
+            
+            elif obj_type == "Ellipse" and len(floats) >= 5:
+                obj = Ellipse(QPointF(floats[0], floats[1]), floats[2], floats[3], style=None, color=color, width=width_px, rotation_angle=floats[4])
+            
+            elif obj_type == "Rectangle" and len(floats) >= 5:
+                obj = Rectangle(QPointF(floats[0], floats[1]), QPointF(floats[2], floats[3]), style=None, color=color, width=width_px)
+                obj.fillet_radius = floats[4]
+            
+            elif obj_type == "Spline" and len(floats) >= 4:
+                qpts = [QPointF(floats[i], floats[i+1]) for i in range(0, len(floats)-1, 2)]
+                obj = Spline(qpts, style=None, color=color, width=width_px)
+            
+            elif obj_type == "Line" and len(floats) >= 4:
+                obj = LineSegment(QPointF(floats[0], floats[1]), QPointF(floats[2], floats[3]), style=None, color=color, width=width_px)
+                
+            elif obj_type == "Polygon" and len(floats) >= 4:
+                import math
+                cx, cy = floats[0], floats[1]
+                radius = floats[2]
+                num_vertices = int(floats[3])
+                # Читаем сохраненный угол (если файла старый, ставим дефолтный -pi/2)
+                start_angle = floats[4] if len(floats) >= 5 else -math.pi / 2
+                
+                # Создаем Polygon с передачей start_angle!
+                obj = Polygon(
+                    QPointF(cx, cy), 
+                    radius, 
+                    num_vertices, 
+                    style=None, 
+                    color=color, 
+                    width=width_px, 
+                    start_angle=start_angle
+                )
+
+            if obj is not None:
+                obj.layer_name = layer_name
+                obj._layer_name = layer_name  
+                obj._from_dxf_import = True
+                obj._legacy_linetype = linetype
+                return obj
+        except Exception as e:
+            print(f"Ошибка при чтении XData: {e}")
+
+    # --- 2. Стандартный импорт полилинии (запасной план) ---
     points = list(entity.get_points('xy'))
     if not points:
         return None
-    layer_name = _entity_layer_name(entity)
 
-    # Ломаная линия при экспорте превращается в LWPOLYLINE с точками зигзага.
-    # Восстанавливаем её как один отрезок (от первой до последней точки),
-    # чтобы стиль «с изломами» нарисовал зигзаг динамически.
     if layer_name in _RECONSTRUCTABLE_LAYER_STYLES and len(points) >= 2 and not entity.closed:
-        color = _entity_qcolor(doc, entity)
-        width_px = _entity_lineweight_px(doc, entity)
-        line = LineSegment(
-            QPointF(points[0][0], points[0][1]),
-            QPointF(points[-1][0], points[-1][1]),
-            style=None,
-            color=color,
-            width=width_px,
-        )
+        line = LineSegment(QPointF(points[0][0], points[0][1]), QPointF(points[-1][0], points[-1][1]), style=None, color=color, width=width_px)
         line.layer_name = layer_name
+        line._layer_name = layer_name 
         line._from_dxf_import = True
-        line._legacy_linetype = _entity_linetype(doc, entity)
+        line._legacy_linetype = linetype
         return line
 
     closed = entity.closed
-    color = _entity_qcolor(doc, entity)
     qpoints = [QPointF(p[0], p[1]) for p in points]
     qpoints = _decimate_points(qpoints, MAX_POLYLINE_POINTS)
     objs = []
     n = len(qpoints)
-    linetype = _entity_linetype(doc, entity)
-    width_px = _entity_lineweight_px(doc, entity)
     for i in range(n - 1):
         line = LineSegment(qpoints[i], qpoints[i + 1], style=None, color=color, width=width_px)
         line.layer_name = layer_name
+        line._layer_name = layer_name
         line._from_dxf_import = True
         line._legacy_linetype = linetype
         objs.append(line)
     if closed and n >= 3:
         line = LineSegment(qpoints[-1], qpoints[0], style=None, color=color, width=width_px)
         line.layer_name = layer_name
+        line._layer_name = layer_name
         line._from_dxf_import = True
         line._legacy_linetype = linetype
         objs.append(line)
@@ -329,7 +358,7 @@ def _import_lwpolyline(doc, entity, **kwargs):
 def _spline_point_to_xy(p):
     """Приводит точку из ezdxf (Vec3, numpy, tuple) к (x, y)."""
     if hasattr(p, 'x') and hasattr(p, 'y'):
-        return (float(p.x), -float(p.y))
+        return (float(p.x), float(p.y))
     return (float(p[0]), float(p[1]))
 
 
@@ -431,9 +460,11 @@ def _match_gost_style(obj, style_manager):
     if style_manager is None:
         return None
 
+    # Надежно достаем имя слоя (проверяем и скрытый, и публичный атрибут)
+    layer_name = getattr(obj, '_layer_name', getattr(obj, 'layer_name', '0'))
+    
     # Спецстили (волнистая, с изломами) экспортируются как Continuous,
     # но имя слоя DXF совпадает с именем стиля — используем его.
-    layer_name = getattr(obj, '_layer_name', '0')
     if layer_name in _LAYER_NAME_STYLES:
         layer_style = style_manager.get_style(layer_name)
         if layer_style:
@@ -472,22 +503,7 @@ def _apply_gost_style(obj, style_manager):
 #  Главная функция импорта
 # ---------------------------------------------------------------------------
 
-def import_dxf_from_file(filepath: str, scene, layer_manager=None,
-                         style_manager=None):
-    """
-    Загружает DXF из файла, создаёт объекты с цветом и слоями, добавляет их на сцену.
-
-    Поддерживаются: LINE, CIRCLE, ARC, ELLIPSE, LWPOLYLINE, SPLINE, POINT.
-    Цвет берётся из TrueColor (group 420), иначе из ACI (256 = BYLAYER → цвет слоя).
-
-    Args:
-        filepath: путь к .dxf
-        scene: Scene для добавления объектов
-        layer_manager: опционально — для создания слоёв из DXF
-        style_manager: опционально — LineStyleManager для назначения ГОСТ-стилей
-    Returns:
-        Количество добавленных объектов.
-    """
+def import_dxf_from_file(filepath: str, scene, layer_manager=None, style_manager=None):
     doc = ezdxf.readfile(filepath)
     msp = doc.modelspace()
     _ensure_layers_from_dxf(doc, layer_manager)
@@ -502,11 +518,62 @@ def import_dxf_from_file(filepath: str, scene, layer_manager=None,
         'POINT': _import_point,
     }
     to_add = []
+
+    def process_entity(entity):
+        if entity.dxftype() == 'INSERT':
+            try:
+                # Распознаем прямоугольник от T-FLEX (4 линии внутри блока)
+                block = doc.blocks.get(entity.dxf.name)
+                b_entities = list(block)
+                
+                if len(b_entities) == 4 and all(e.dxftype() == 'LINE' for e in b_entities):
+                    xs, ys = [], []
+                    for e in b_entities:
+                        xs.extend([e.dxf.start.x, e.dxf.end.x])
+                        ys.extend([e.dxf.start.y, e.dxf.end.y])
+                    
+                    ins = entity.dxf.insert
+                    sx, sy = entity.dxf.xscale, entity.dxf.yscale
+                    
+                    real_min_x = ins.x + min(xs) * sx
+                    real_max_x = ins.x + max(xs) * sx
+                    real_min_y = ins.y + min(ys) * sy
+                    real_max_y = ins.y + max(ys) * sy
+                    
+                    color = _entity_qcolor(doc, b_entities[0])
+                    layer = _entity_layer_name(b_entities[0])
+                    if layer == '0':
+                        layer = _entity_layer_name(entity)
+                        
+                    rect = Rectangle(
+                        QPointF(real_min_x, real_min_y),
+                        QPointF(real_max_x, real_max_y),
+                        style=None, color=color, 
+                        width=_entity_lineweight_px(doc, b_entities[0])
+                    )
+                    rect.layer_name = layer
+                    rect._from_dxf_import = True
+                    return [rect]
+                
+                # Если это обычный блок, достаем из него геометрию как есть
+                objs = []
+                for sub_entity in entity.virtual_entities():
+                    res = process_entity(sub_entity)
+                    if res:
+                        if isinstance(res, list): objs.extend(res)
+                        else: objs.append(res)
+                return objs
+            except Exception as e:
+                print(f"Ошибка чтения блока: {e}")
+                return None
+        
+        elif entity.dxftype() in handlers:
+            return handlers[entity.dxftype()](doc, entity)
+        return None
+
     for entity in msp:
-        if entity.dxftype() not in handlers:
-            continue
         try:
-            obj = handlers[entity.dxftype()](doc, entity)
+            obj = process_entity(entity)
             if obj is None:
                 continue
             if isinstance(obj, list):
