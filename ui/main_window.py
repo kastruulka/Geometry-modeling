@@ -206,6 +206,24 @@ class MainWindow(QMainWindow):
         self.ellipse_method_widget.hide()
         tools_layout.addWidget(self.ellipse_method_widget)
 
+        dimension_method_layout = QHBoxLayout()
+        dimension_method_layout.addWidget(QLabel("Тип размера:"))
+        self.dimension_type_combo = QComboBox()
+        self.dimension_type_combo.addItems([
+            "Линейный горизонтальный",
+            "Линейный вертикальный",
+            "Линейный выровненный",
+            "Радиус",
+            "Диаметр",
+            "Угловой",
+        ])
+        self.dimension_type_combo.currentIndexChanged.connect(self.change_dimension_type_index)
+        dimension_method_layout.addWidget(self.dimension_type_combo)
+        self.dimension_method_widget = QWidget()
+        self.dimension_method_widget.setLayout(dimension_method_layout)
+        self.dimension_method_widget.hide()
+        tools_layout.addWidget(self.dimension_method_widget)
+
         self.delete_last_btn = QPushButton("Удалить последний")
         self.delete_last_btn.clicked.connect(self.delete_last_line)
 
@@ -804,6 +822,7 @@ class MainWindow(QMainWindow):
         self.canvas.line_finished.connect(self.update_info)
         # подключаем сигнал начала рисования прямоугольника для установки размеров
         self.canvas.rectangle_drawing_started.connect(self.update_rectangle_on_drawing_start)
+        self.canvas.dimension_mode_cancelled.connect(self.deactivate_dimension_tool)
         self.update_statusbar()
     
     def create_context_menu(self, position):
@@ -1038,6 +1057,22 @@ class MainWindow(QMainWindow):
         toolbar.addAction(reset_view_action)
         
         toolbar.addSeparator()
+
+        dimension_action = QAction("Размер", self)
+        dimension_action.setToolTip("Режим постановки размеров")
+        dimension_action.triggered.connect(self.activate_dimension_tool)
+        toolbar.addAction(dimension_action)
+        self.dimension_toolbar_combo = QComboBox()
+        self.dimension_toolbar_combo.addItems([
+            "Линейный горизонтальный",
+            "Линейный вертикальный",
+            "Линейный выровненный",
+            "Радиус",
+            "Диаметр",
+            "Угловой",
+        ])
+        self.dimension_toolbar_combo.currentIndexChanged.connect(self.change_dimension_type_index)
+        toolbar.addWidget(self.dimension_toolbar_combo)
         
         # Кнопка редактирования
         edit_action = QAction("Редактировать", self)
@@ -1375,6 +1410,7 @@ class MainWindow(QMainWindow):
         
         # Очищаем точки ввода после применения
         self.canvas.clear_input_points()
+        self.input_group.show()
         
         # Убеждаемся, что нет активного рисования
         if self.canvas.scene.is_drawing():
@@ -1783,7 +1819,25 @@ class MainWindow(QMainWindow):
         self.coordinate_system = "polar" if system == "Полярная" else "cartesian"
         self.update_input_fields()
         self.update_info()
-    
+
+    def activate_dimension_tool(self):
+        self.canvas.set_primitive_type("dimension")
+        self.canvas.clear_input_points()
+        self.input_group.hide()
+        self.line_method_widget.hide()
+        self.circle_method_widget.hide()
+        self.arc_method_widget.hide()
+        self.rectangle_method_widget.hide()
+        self.ellipse_method_widget.hide()
+        if hasattr(self, 'dimension_method_widget'):
+            self.dimension_method_widget.show()
+            self.change_dimension_type_index(self.dimension_type_combo.currentIndex())
+        self.update_info()
+
+    def deactivate_dimension_tool(self):
+        self.canvas.clear_input_points()
+        self.change_primitive_type(self.primitive_combo.currentText())
+
     def change_primitive_type(self, primitive_name):
         """Изменяет тип создаваемого примитива"""
         primitive_map = {
@@ -1796,18 +1850,26 @@ class MainWindow(QMainWindow):
             "Сплайн": "spline",
         }
         primitive_type = primitive_map.get(primitive_name, "line")
+        if primitive_name == "Размер":
+            primitive_type = "dimension"
         self.canvas.set_primitive_type(primitive_type)
         
         # Очищаем точки ввода при смене типа примитива
         self.canvas.clear_input_points()
+
+        self.line_method_widget.hide()
+        self.circle_method_widget.hide()
+        self.arc_method_widget.hide()
+        self.rectangle_method_widget.hide()
+        self.ellipse_method_widget.hide()
+        if hasattr(self, 'dimension_method_widget'):
+            self.dimension_method_widget.hide()
+        if primitive_type != "dimension":
+            self.input_group.show()
         
         # Показываем/скрываем выбор метода создания окружности или дуги
         if primitive_type == "line":
             self.line_method_widget.show()
-            self.circle_method_widget.hide()
-            self.arc_method_widget.hide()
-            self.rectangle_method_widget.hide()
-            self.ellipse_method_widget.hide()
             # Убеждаемся, что комбобокс имеет правильное значение
             if self.line_method_combo.currentIndex() < 0:
                 self.line_method_combo.setCurrentIndex(0)
@@ -1862,17 +1924,13 @@ class MainWindow(QMainWindow):
             # Явно вызываем обновление полей ввода
             self.change_ellipse_method(self.ellipse_method_combo.currentText())
         elif primitive_type == "polygon":
-            self.line_method_widget.hide()
-            self.circle_method_widget.hide()
-            self.arc_method_widget.hide()
-            self.rectangle_method_widget.hide()
-            self.ellipse_method_widget.hide()
             self.update_polygon_input_fields()
+        elif primitive_type == "dimension":
+            if hasattr(self, 'dimension_method_widget'):
+                self.dimension_method_widget.show()
+                self.change_dimension_type_index(self.dimension_type_combo.currentIndex())
+            self.input_group.hide()
         else:
-            self.line_method_widget.hide()
-            self.circle_method_widget.hide()
-            self.arc_method_widget.hide()
-            self.rectangle_method_widget.hide()
             # Восстанавливаем метку для не-окружности/дуги/прямоугольника
             self.start_point_label_widget.setText("Начальная точка (x, y):")
             # Скрываем все группы окружности
@@ -1905,6 +1963,34 @@ class MainWindow(QMainWindow):
                 self.cartesian_group.hide()
                 self.polar_group.show()
     
+    def change_dimension_type(self, dimension_name):
+        ordered_names = [
+            "Линейный горизонтальный",
+            "Линейный вертикальный",
+            "Линейный выровненный",
+            "Радиус",
+            "Диаметр",
+            "Угловой",
+        ]
+        index = ordered_names.index(dimension_name) if dimension_name in ordered_names else 0
+        self.change_dimension_type_index(index)
+
+    def change_dimension_type_index(self, index):
+        ordered_types = ["horizontal", "vertical", "aligned", "radius", "diameter", "angle"]
+        if index < 0 or index >= len(ordered_types):
+            index = 0
+        if hasattr(self, 'dimension_type_combo') and self.dimension_type_combo.currentIndex() != index:
+            self.dimension_type_combo.blockSignals(True)
+            self.dimension_type_combo.setCurrentIndex(index)
+            self.dimension_type_combo.blockSignals(False)
+        if hasattr(self, 'dimension_toolbar_combo') and self.dimension_toolbar_combo.currentIndex() != index:
+            self.dimension_toolbar_combo.blockSignals(True)
+            self.dimension_toolbar_combo.setCurrentIndex(index)
+            self.dimension_toolbar_combo.blockSignals(False)
+        if hasattr(self.canvas, 'set_dimension_creation_type'):
+            self.canvas.set_dimension_creation_type(ordered_types[index])
+        self.update_info()
+
     def change_line_method(self, method_name):
         """Изменяет способ задания отрезка"""
         if "декартовых" in method_name.lower():
@@ -2251,6 +2337,7 @@ class MainWindow(QMainWindow):
                     self.canvas.update()
     
     def update_circle_input_fields(self):
+        self.input_group.show()
         """Обновляет отображение полей ввода в зависимости от метода создания окружности"""
         # Обновляем метку для окружности
         self.start_point_label_widget.setText("Центр (x, y):")
@@ -2288,6 +2375,7 @@ class MainWindow(QMainWindow):
         # Не обновляем точки ввода автоматически - только при изменении значений в полях
     
     def update_polygon_input_fields(self):
+        self.input_group.show()
         """Обновляет отображение полей ввода для многоугольника"""
         # Обновляем метку для многоугольника
         self.start_point_label_widget.setText("Центр (x, y):")
@@ -2401,6 +2489,7 @@ class MainWindow(QMainWindow):
         self.canvas.clear_input_points()
     
     def update_ellipse_input_fields(self):
+        self.input_group.show()
         """Обновляет отображение полей ввода в зависимости от метода создания эллипса"""
         # Обновляем метку для эллипса
         self.start_point_label_widget.setText("Центр (x, y):")
@@ -2676,6 +2765,8 @@ class MainWindow(QMainWindow):
     def on_object_edited(self, obj):
         """Обработчик изменения объекта в диалоге редактирования"""
         # Обновляем информацию об объекте в панели
+        if hasattr(self.canvas, 'update_associated_dimensions'):
+            self.canvas.update_associated_dimensions(obj)
         self._update_info_if_needed(obj)
     
     def on_edit_dialog_closed(self, result):

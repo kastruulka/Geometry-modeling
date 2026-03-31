@@ -587,7 +587,9 @@ class ObjectPropertiesPanel(QGroupBox):
         styles = set()
         for obj in self.selected_objects:
             if hasattr(obj, 'style') and obj.style:
-                styles.add(obj.style.name)
+                style_name = getattr(obj.style, 'name', None)
+                if style_name:
+                    styles.add(style_name)
             elif hasattr(obj, 'style_name') and obj.style_name:
                 styles.add(obj.style_name)
         
@@ -617,7 +619,7 @@ class ObjectPropertiesPanel(QGroupBox):
         if style and self.selected_objects:
             # Применяем стиль ко всем выделенным объектам
             for obj in self.selected_objects:
-                if hasattr(obj, 'style'):
+                if hasattr(obj, 'style') and hasattr(style, 'name'):
                     # Для уже зафиксированных прямоугольников сохраняем fillet_radius
                     # Скругленные углы применяются только при создании нового прямоугольника
                     from widgets.primitives import Rectangle

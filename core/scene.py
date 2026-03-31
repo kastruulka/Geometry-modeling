@@ -55,6 +55,27 @@ class Scene:
         """Пакетное добавление объектов (без проверки дубликатов). Ускоряет импорт."""
         for obj in objects:
             self._objects.append(obj)
+
+    def add_linear_dimension(self, start: QPointF, end: QPointF, dimension_type: str = 'horizontal',
+                             offset: float = 10.0, style=None):
+        from widgets.dimensions import LinearDimension
+        obj = LinearDimension(start, end, dimension_type=dimension_type, offset=offset, style=style)
+        self.add_object(obj)
+        return obj
+
+    def add_radial_dimension(self, center: QPointF, radius_point: QPointF, dimension_type: str = 'radius',
+                             leader_point: QPointF | None = None, style=None):
+        from widgets.dimensions import RadialDimension
+        obj = RadialDimension(center, radius_point, dimension_type=dimension_type, leader_point=leader_point, style=style)
+        self.add_object(obj)
+        return obj
+
+    def add_angular_dimension(self, vertex: QPointF, ray_start: QPointF, ray_end: QPointF, radius: float = 20.0,
+                              style=None):
+        from widgets.dimensions import AngularDimension
+        obj = AngularDimension(vertex, ray_start, ray_end, radius=radius, style=style)
+        self.add_object(obj)
+        return obj
     
     def remove_object(self, obj: GeometricObject):
         """Удаляет объект со сцены"""
@@ -1135,4 +1156,3 @@ class Scene:
             points.append(QPointF(bbox.right(), bbox.bottom()))
             points.append(QPointF(bbox.left(), bbox.bottom()))
         return points
-
