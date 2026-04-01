@@ -30,7 +30,189 @@ def _legacy_pattern_style(line_width: float, line_type_enum):
         'dash_gap': _LEGACY_DASH_GAP * k,
         'thickness_mm': 0.8 * k,
         'line_type': line_type_enum,
-    })()
+})()
+
+
+def _broken_style_params(style=None):
+    """Возвращает параметры изломов в пикселях и исходный счетчик из стиля."""
+    zigzag_count = style.zigzag_count if style and hasattr(style, 'zigzag_count') else 1
+    zigzag_count = max(1, int(zigzag_count))
+    zigzag_step_mm = style.zigzag_step_mm if style and hasattr(style, 'zigzag_step_mm') else 4.0
+
+    zigzag_height_mm = 3.5
+    zigzag_width_mm = 4.0
+    dpi = 96
+
+    return {
+        'zigzag_count': zigzag_count,
+        'zigzag_height': (zigzag_height_mm * dpi) / 25.4,
+        'zigzag_length_single': (zigzag_width_mm * dpi) / 25.4,
+        'zigzag_step': (zigzag_step_mm * dpi) / 25.4,
+    }
+
+
+def _fit_broken_pattern(available_length: float, zigzag_count: int,
+                        zigzag_length_single: float, zigzag_step: float,
+                        limit_ratio: float = 0.9):
+    """Поджимает шаг между изломами, если паттерн не помещается."""
+    total_zigzag_length = zigzag_length_single * zigzag_count + zigzag_step * (zigzag_count - 1)
+
+    if total_zigzag_length > available_length * limit_ratio:
+        max_length = available_length * limit_ratio
+        if zigzag_count > 1:
+            zigzag_step = (max_length - zigzag_length_single * zigzag_count) / (zigzag_count - 1)
+            zigzag_step = max(zigzag_step, zigzag_length_single * 0.5)
+        total_zigzag_length = zigzag_length_single * zigzag_count + zigzag_step * (zigzag_count - 1)
+
+    return zigzag_step, total_zigzag_length
+
+
+def _normalized_arc_span(start_angle: float, end_angle: float) -> float:
+    """Нормализует разницу углов дуги к короткому направленному интервалу."""
+    span_angle_deg = end_angle - start_angle
+    if span_angle_deg < -180:
+        span_angle_deg += 360
+    elif span_angle_deg > 180:
+        span_angle_deg -= 360
+    return span_angle_deg
+
+
+def _ellipse_circumference(radius_x: float, radius_y: float) -> float:
+    """Приближенная длина окружности эллипса по формуле Рамануджана."""
+    if (radius_x + radius_y) <= 0 or radius_x <= 0 or radius_y <= 0:
+        return 0.0
+    h = ((radius_x - radius_y) / (radius_x + radius_y)) ** 2
+    return math.pi * (radius_x + radius_y) * (1 + (3 * h) / (10 + math.sqrt(4 - 3 * h)))
+
+
+def _arc_length(radius_x: float, radius_y: float, span_angle_deg: float) -> float:
+    """Приближенная длина дуги эллипса через средний радиус."""
+    angle_span_rad = math.radians(abs(span_angle_deg))
+    avg_radius = (radius_x + radius_y) / 2
+    return angle_span_rad * avg_radius
+
+
+def _wavy_amplitude_px(pen: QPen, style=None) -> float:
+    """Возвращает амплитуду волнистой линии в пикселях."""
+    if style and hasattr(style, 'wavy_amplitude_mm'):
+        amplitude_mm = style.wavy_amplitude_mm
+    else:
+        main_thickness_mm = 0.8
+        line_thickness_mm = pen.widthF() * 25.4 / 96
+        amplitude_mm = (main_thickness_mm / 2.5) * (line_thickness_mm / 0.4)
+    return (amplitude_mm * 96) / 25.4
+
+
+def _apply_rotation_transform(painter: QPainter, center: QPointF, rotation_angle: float):
+    """Применяет поворот вокруг центра и возвращает локальные координаты центра."""
+    if abs(rotation_angle) > 1e-6:
+        transform = QTransform()
+        transform.translate(center.x(), center.y())
+        transform.rotate(math.degrees(rotation_angle))
+        painter.setTransform(transform, True)
+        return 0.0, 0.0
+    return center.x(), center.y()
+
+
+def _distributed_dash_pattern(total_length: float, dash_length: float, dash_gap: float):
+    """Возвращает число штрихов и скорректированный зазор для равномерного распределения."""
+    pattern_length = dash_length + dash_gap
+    num_patterns = total_length / pattern_length if pattern_length > 0 else 0
+
+    if num_patterns < 1:
+        return 0, dash_gap
+
+    num_full_patterns = int(num_patterns)
+    remaining_length = total_length - num_full_patterns * pattern_length
+
+    if remaining_length >= dash_length:
+        num_dashes = num_full_patterns + 1
+        total_gap_length = (num_dashes - 1) * dash_gap + remaining_length - dash_length
+        adjusted_gap = total_gap_length / (num_dashes - 1) if num_dashes > 1 else dash_gap
+    else:
+        num_dashes = num_full_patterns
+        adjusted_gap = dash_gap + remaining_length / max(1, num_dashes - 1) if num_dashes > 1 else dash_gap
+
+    return num_dashes, adjusted_gap
+
+
+def _sample_spline_with_arc_lengths(spline, min_samples: int = 200, factor: int = 40):
+    """Возвращает точки сплайна и накопленные длины вдоль него."""
+    num_samples = max(min_samples, len(spline.control_points) * factor)
+    points = []
+    arc_lengths = [0.0]
+    total_length = 0.0
+
+    prev_point = spline._get_point_on_spline(0)
+    points.append(prev_point)
+
+    for i in range(1, num_samples + 1):
+        t = i / num_samples if num_samples > 0 else 0
+        curr_point = spline._get_point_on_spline(t)
+        points.append(curr_point)
+
+        dx = curr_point.x() - prev_point.x()
+        dy = curr_point.y() - prev_point.y()
+        segment_length = math.sqrt(dx * dx + dy * dy)
+        total_length += segment_length
+        arc_lengths.append(total_length)
+        prev_point = curr_point
+
+    return points, arc_lengths, total_length
+
+
+def _point_at_arc_length(points, arc_lengths, target_arc):
+    """Находит точку на кривой для заданной длины дуги."""
+    if target_arc <= 0:
+        return points[0]
+    if target_arc >= arc_lengths[-1]:
+        return points[-1]
+
+    for i in range(len(arc_lengths) - 1):
+        if arc_lengths[i] <= target_arc <= arc_lengths[i + 1]:
+            t = (
+                (target_arc - arc_lengths[i]) / (arc_lengths[i + 1] - arc_lengths[i])
+                if arc_lengths[i + 1] > arc_lengths[i]
+                else 0
+            )
+            return QPointF(
+                points[i].x() + t * (points[i + 1].x() - points[i].x()),
+                points[i].y() + t * (points[i + 1].y() - points[i].y()),
+            )
+
+    return points[-1]
+
+
+def _normal_from_points(prev_point: QPointF, next_point: QPointF):
+    dx = next_point.x() - prev_point.x()
+    dy = next_point.y() - prev_point.y()
+    length = math.hypot(dx, dy)
+    if length > 0.001:
+        return -dy / length, dx / length
+    return 0.0, 1.0
+
+
+def _spline_normal_at_index(points, index: int):
+    if not points:
+        return 0.0, 1.0
+    if index <= 0:
+        if len(points) > 1:
+            return _normal_from_points(points[0], points[1])
+        return 0.0, 1.0
+    if index >= len(points) - 1:
+        return _normal_from_points(points[-2], points[-1])
+    return _normal_from_points(points[index - 1], points[index + 1])
+
+
+def _spline_normal_at_arc_length(points, arc_lengths, target_arc):
+    if not points:
+        return 0.0, 1.0
+    idx = 0
+    for i in range(len(arc_lengths)):
+        if arc_lengths[i] >= target_arc:
+            idx = i
+            break
+    return _spline_normal_at_index(points, idx)
 
 
 class LineRenderer:
@@ -205,31 +387,16 @@ class LineRenderer:
         
         if length < 1:
             return
-        
-        # Количество зигзагов и шаг из стиля
-        zigzag_count = style.zigzag_count if style and hasattr(style, 'zigzag_count') else 1
-        zigzag_count = max(1, int(zigzag_count))  # Минимум 1 зигзаг
-        zigzag_step_mm = style.zigzag_step_mm if style and hasattr(style, 'zigzag_step_mm') else 4.0
-        
-        zigzag_height_mm = 3.5
-        zigzag_width_mm = 4.0  # Ширина одного зигзага
-        dpi = 96
-        zigzag_height = (zigzag_height_mm * dpi) / 25.4
-        zigzag_length_single = (zigzag_width_mm * dpi) / 25.4
-        zigzag_step = (zigzag_step_mm * dpi) / 25.4  # Шаг между зигзагами в пикселях
-        
-        # Общая длина области зигзагов: ширина одного зигзага * количество + шаги между ними
-        # Для N зигзагов нужно (N-1) шагов между ними
-        total_zigzag_length = zigzag_length_single * zigzag_count + zigzag_step * (zigzag_count - 1)
-        
-        # Ограничиваем общую длину зигзагов, если они не помещаются
-        if total_zigzag_length > length * 0.9:
-            # Уменьшаем шаг пропорционально
-            max_length = length * 0.9
-            if zigzag_count > 1:
-                zigzag_step = (max_length - zigzag_length_single * zigzag_count) / (zigzag_count - 1)
-                zigzag_step = max(zigzag_step, zigzag_length_single * 0.5)  # Минимальный шаг - половина ширины зигзага
-            total_zigzag_length = zigzag_length_single * zigzag_count + zigzag_step * (zigzag_count - 1)
+        broken_params = _broken_style_params(style)
+        zigzag_count = broken_params['zigzag_count']
+        zigzag_height = broken_params['zigzag_height']
+        zigzag_length_single = broken_params['zigzag_length_single']
+        zigzag_step, total_zigzag_length = _fit_broken_pattern(
+            length,
+            zigzag_count,
+            zigzag_length_single,
+            broken_params['zigzag_step'],
+        )
         
         straight_length = (length - total_zigzag_length) / 2
         
@@ -379,17 +546,14 @@ class PrimitiveRenderer:
     def _draw_ellipse_arc(painter: QPainter, arc, pen: QPen):
         """Отрисовывает дугу эллипса с учетом поворота"""
         import math
-        from PySide6.QtGui import QPainterPath, QTransform
+        from PySide6.QtGui import QPainterPath
         from PySide6.QtCore import Qt
         
         # Сохраняем текущее состояние painter
         painter.save()
         
         # Применяем трансформацию: переносим центр в начало координат, поворачиваем, возвращаем
-        transform = QTransform()
-        transform.translate(arc.center.x(), arc.center.y())
-        transform.rotate(math.degrees(arc.rotation_angle))
-        painter.setTransform(transform, True)
+        _apply_rotation_transform(painter, arc.center, arc.rotation_angle)
         
         # Создаем прямоугольник для эллипса (в локальной системе, где хорда горизонтальна)
         rect = QRectF(
@@ -794,33 +958,28 @@ class PrimitiveRenderer:
         if circumference < 1:
             return
         
-        # Количество зигзагов и шаг из стиля
-        zigzag_count = style.zigzag_count if style and hasattr(style, 'zigzag_count') else 1
-        zigzag_count = max(1, int(zigzag_count))
-        zigzag_step_mm = style.zigzag_step_mm if style and hasattr(style, 'zigzag_step_mm') else 4.0
-        
-        # Параметры зигзага
-        zigzag_height_mm = 3.5
-        zigzag_width_mm = 4.0
-        dpi = 96
-        zigzag_height = (zigzag_height_mm * dpi) / 25.4
-        zigzag_length_single = (zigzag_width_mm * dpi) / 25.4
-        zigzag_step = (zigzag_step_mm * dpi) / 25.4
-        
-        # Общая длина области зигзагов
-        total_zigzag_length = zigzag_length_single * zigzag_count + zigzag_step * (zigzag_count - 1)
-        
-        # Конвертируем в углы
+        broken_params = _broken_style_params(style)
+        zigzag_count = broken_params['zigzag_count']
+        zigzag_height = broken_params['zigzag_height']
+        zigzag_length_single = broken_params['zigzag_length_single']
+        zigzag_step, total_zigzag_length = _fit_broken_pattern(
+            circumference,
+            zigzag_count,
+            zigzag_length_single,
+            broken_params['zigzag_step'],
+        )
+
+        # ???????????????????????? ?? ????????
         total_zigzag_angle = (total_zigzag_length / circumference) * 2 * math.pi
         if total_zigzag_angle > math.pi * 0.9:
             total_zigzag_angle = math.pi * 0.9
-            # Пересчитываем шаг
-            if zigzag_count > 1:
-                max_length = circumference * 0.9
-                zigzag_step = (max_length - zigzag_length_single * zigzag_count) / (zigzag_count - 1)
-                zigzag_step = max(zigzag_step, zigzag_length_single * 0.5)
-                total_zigzag_length = zigzag_length_single * zigzag_count + zigzag_step * (zigzag_count - 1)
-                total_zigzag_angle = (total_zigzag_length / circumference) * 2 * math.pi
+            zigzag_step, total_zigzag_length = _fit_broken_pattern(
+                circumference,
+                zigzag_count,
+                zigzag_length_single,
+                zigzag_step,
+            )
+            total_zigzag_angle = (total_zigzag_length / circumference) * 2 * math.pi
         
         zigzag_length_single_angle = (zigzag_length_single / circumference) * 2 * math.pi
         zigzag_step_angle = (zigzag_step / circumference) * 2 * math.pi
@@ -909,8 +1068,6 @@ class PrimitiveRenderer:
     @staticmethod
     def _draw_dashed_circle(painter: QPainter, circle, pen: QPen, style):
         """Отрисовывает штриховую окружность с равномерным распределением"""
-        import math
-        
         dash_length = style.dash_length
         dash_gap = style.dash_gap
         circumference = 2 * math.pi * circle.radius
@@ -924,73 +1081,28 @@ class PrimitiveRenderer:
         
         # Если паттернов меньше 1, рисуем один штрих
         if num_patterns < 1:
-            rect = QRectF(
-                circle.center.x() - circle.radius,
-                circle.center.y() - circle.radius,
-                circle.radius * 2,
-                circle.radius * 2
-            )
+            rect = PrimitiveRenderer._circle_rect(circle)
             painter.setPen(pen)
             painter.drawArc(rect, 0, int(360 * 16))
             return
         
-        # Равномерно распределяем штрихи и пробелы по всей окружности
-        # Учитываем, что окружность замкнута
-        num_full_patterns = int(num_patterns)
-        remaining_length = circumference - num_full_patterns * pattern_length
+        # ???????????????????? ???????????????????????? ???????????? ?? ?????????????? ???? ???????? ????????????????????
+        # ??????????????????, ?????? ???????????????????? ????????????????
+        num_dashes, adjusted_gap = _distributed_dash_pattern(circumference, dash_length, dash_gap)
         
-        # Если остаток больше длины штриха, добавляем еще один штрих
-        if remaining_length >= dash_length:
-            num_dashes = num_full_patterns + 1
-            # Равномерно распределяем оставшееся пространство между пробелами
-            total_gap_length = (num_dashes - 1) * dash_gap + remaining_length - dash_length
-            if num_dashes > 1:
-                adjusted_gap = total_gap_length / (num_dashes - 1)
-            else:
-                adjusted_gap = dash_gap
-        else:
-            num_dashes = num_full_patterns
-            adjusted_gap = dash_gap + remaining_length / max(1, num_dashes - 1) if num_dashes > 1 else dash_gap
-        
-        # Вычисляем углы с учетом равномерного распределения
-        total_angle = 2 * math.pi
-        dash_angle_rad = (dash_length / circumference) * total_angle
-        gap_angle_rad = (adjusted_gap / circumference) * total_angle
         
         painter.setPen(pen)
-        current_angle_rad = 0
-        
-        rect = QRectF(
-            circle.center.x() - circle.radius,
-            circle.center.y() - circle.radius,
-            circle.radius * 2,
-            circle.radius * 2
+        PrimitiveRenderer._draw_patterned_ellipse_segments(
+            painter,
+            PrimitiveRenderer._circle_rect(circle),
+            [dash_length, adjusted_gap],
+            adjusted_gap,
+            circumference,
         )
-        
-        for i in range(num_dashes):
-            start_angle_rad = current_angle_rad
-            end_angle_rad = start_angle_rad + dash_angle_rad
-            
-            # Ограничиваем конечный угол, чтобы не выйти за пределы окружности
-            if end_angle_rad > total_angle:
-                end_angle_rad = total_angle
-            
-            # Рисуем дугу для штриха (углы в 1/16 градуса)
-            start_angle_16 = int(start_angle_rad * 16 * 180 / math.pi)
-            span_angle_16 = int((end_angle_rad - start_angle_rad) * 16 * 180 / math.pi)
-            painter.drawArc(rect, start_angle_16, span_angle_16)
-            
-            current_angle_rad = end_angle_rad + gap_angle_rad
-            
-            # Если дошли до конца окружности, выходим
-            if current_angle_rad >= total_angle:
-                break
     
     @staticmethod
     def _draw_dash_dot_circle(painter: QPainter, circle, pen: QPen, style):
         """Отрисовывает штрихпунктирную окружность"""
-        import math
-        
         dash_length = style.dash_length
         dash_gap = style.dash_gap
         dot_length = style.thickness_mm * 0.5
@@ -1005,41 +1117,19 @@ class PrimitiveRenderer:
             pattern = [dash_length, dash_gap, dot_length, dash_gap]
         
         painter.setPen(pen)
-        current_angle = 0
-        pattern_index = 0
-        
-        while current_angle < 2 * math.pi:
-            segment_length = pattern[pattern_index % len(pattern)]
-            segment_angle = (segment_length / circumference) * 2 * math.pi
-            
-            is_gap = (segment_length == dash_gap)
-            
-            if not is_gap:
-                start_angle = current_angle
-                end_angle = current_angle + segment_angle
-                
-                rect = QRectF(
-                    circle.center.x() - circle.radius,
-                    circle.center.y() - circle.radius,
-                    circle.radius * 2,
-                    circle.radius * 2
-                )
-                painter.drawArc(rect, int(start_angle * 16 * 180 / math.pi), 
-                              int((end_angle - start_angle) * 16 * 180 / math.pi))
-            
-            current_angle += segment_angle
-            pattern_index += 1
+        PrimitiveRenderer._draw_patterned_ellipse_segments(
+            painter,
+            PrimitiveRenderer._circle_rect(circle),
+            pattern,
+            dash_gap,
+            circumference,
+        )
     
     # Методы специальной отрисовки для прямоугольников
     @staticmethod
     def _draw_wavy_rectangle(painter: QPainter, rectangle, pen: QPen, style=None):
         """Отрисовывает волнистый прямоугольник с непрерывной волной (как у сплайна)"""
         from PySide6.QtGui import QPainterPath
-        fillet_radius = getattr(rectangle, 'fillet_radius', 0.0)
-        rect = rectangle.get_bounding_box()
-        w = rect.width()
-        h = rect.height()
-        r = min(fillet_radius, w / 2, h / 2) if fillet_radius > 0 else 0.0
         
         # Амплитуда волны - используем из стиля, если доступна
         if style and hasattr(style, 'wavy_amplitude_mm'):
@@ -1053,355 +1143,7 @@ class PrimitiveRenderer:
         dpi = 96
         amplitude_px = (amplitude_mm * dpi) / 25.4
         
-        # Сначала генерируем все точки вдоль периметра как единый контур (как у сплайна)
-        points = []
-        arc_lengths = []
-        total_length = 0.0
-        
-        def get_point_on_perimeter(t):
-            """Возвращает точку на периметре прямоугольника по параметру t [0, 1]"""
-            if r > 0:
-                # Прямые стороны
-                top_side = w - 2 * r
-                right_side = h - 2 * r
-                bottom_side = w - 2 * r
-                left_side = h - 2 * r
-                arc_length = r * math.pi / 2
-                total_perimeter = top_side + right_side + bottom_side + left_side + 4 * arc_length
-                
-                # Нормализуем t к длине периметра
-                pos = t * total_perimeter
-                
-                # Верхняя сторона
-                if pos <= top_side:
-                    x = rect.x() + r + pos
-                    y = rect.y()
-                    return QPointF(x, y)
-                pos -= top_side
-                
-                # Верхний правый угол (дуга) - центр в (w - r, r)
-                if pos <= arc_length:
-                    t_arc = pos / arc_length  # параметр от 0 до 1
-                    start_angle = 0  # вправо
-                    end_angle = math.pi / 2  # вниз
-                    angle = start_angle + t_arc * (end_angle - start_angle)
-                    center_x = rect.x() + w - r
-                    center_y = rect.y() + r
-                    x = center_x + r * math.cos(angle)
-                    y = center_y + r * math.sin(angle)
-                    return QPointF(x, y)
-                pos -= arc_length
-                
-                # Правая сторона
-                if pos <= right_side:
-                    x = rect.x() + w
-                    y = rect.y() + r + pos
-                    return QPointF(x, y)
-                pos -= right_side
-                
-                # Нижний правый угол (дуга) - центр в (w - r, h - r)
-                if pos <= arc_length:
-                    t_arc = pos / arc_length
-                    start_angle = math.pi / 2  # вниз
-                    end_angle = math.pi  # влево
-                    angle = start_angle + t_arc * (end_angle - start_angle)
-                    center_x = rect.x() + w - r
-                    center_y = rect.y() + h - r
-                    x = center_x + r * math.cos(angle)
-                    y = center_y + r * math.sin(angle)
-                    return QPointF(x, y)
-                pos -= arc_length
-                
-                # Нижняя сторона
-                if pos <= bottom_side:
-                    x = rect.x() + w - r - pos
-                    y = rect.y() + h
-                    return QPointF(x, y)
-                pos -= bottom_side
-                
-                # Нижний левый угол (дуга) - центр в (r, h - r)
-                if pos <= arc_length:
-                    t_arc = pos / arc_length
-                    start_angle = math.pi  # влево
-                    end_angle = 3 * math.pi / 2  # вверх
-                    angle = start_angle + t_arc * (end_angle - start_angle)
-                    center_x = rect.x() + r
-                    center_y = rect.y() + h - r
-                    x = center_x + r * math.cos(angle)
-                    y = center_y + r * math.sin(angle)
-                    return QPointF(x, y)
-                pos -= arc_length
-                
-                # Левая сторона
-                if pos <= left_side:
-                    x = rect.x()
-                    y = rect.y() + h - r - pos
-                    return QPointF(x, y)
-                pos -= left_side
-                
-                # Верхний левый угол (дуга) - центр в (r, r)
-                t_arc = pos / arc_length
-                start_angle = 3 * math.pi / 2  # вверх
-                end_angle = 2 * math.pi  # вправо (или 0)
-                angle = start_angle + t_arc * (end_angle - start_angle)
-                center_x = rect.x() + r
-                center_y = rect.y() + r
-                x = center_x + r * math.cos(angle)
-                y = center_y + r * math.sin(angle)
-                return QPointF(x, y)
-            else:
-                # Прямоугольник без скругления
-                corners = [
-                    QPointF(rect.x(), rect.y()),
-                    QPointF(rect.x() + w, rect.y()),
-                    QPointF(rect.x() + w, rect.y() + h),
-                    QPointF(rect.x(), rect.y() + h)
-                ]
-                total_perimeter = 2 * (w + h)
-                pos = t * total_perimeter
-                
-                # Верхняя сторона
-                if pos <= w:
-                    return QPointF(rect.x() + pos, rect.y())
-                pos -= w
-                
-                # Правая сторона
-                if pos <= h:
-                    return QPointF(rect.x() + w, rect.y() + pos)
-                pos -= h
-                
-                # Нижняя сторона
-                if pos <= w:
-                    return QPointF(rect.x() + w - pos, rect.y() + h)
-                pos -= w
-                
-                # Левая сторона
-                return QPointF(rect.x(), rect.y() + h - pos)
-        
-        # Генерируем точки вдоль периметра, явно проходя по каждому сегменту
-        # Это гарантирует точное совпадение точек на границах
-        if r > 0:
-            # Прямые стороны
-            top_side = w - 2 * r
-            right_side = h - 2 * r
-            bottom_side = w - 2 * r
-            left_side = h - 2 * r
-            arc_length = r * math.pi / 2
-            total_perimeter = top_side + right_side + bottom_side + left_side + 4 * arc_length
-            
-            # Плотность точек (точек на единицу длины)
-            points_per_unit = 8
-            total_points = max(200, int(total_perimeter * points_per_unit))
-            
-            # Генерируем точки сегмент за сегментом
-            accumulated_length = 0.0
-            
-            # Верхняя сторона
-            num_top = max(10, int(top_side * points_per_unit))
-            for i in range(num_top + 1):
-                t = i / num_top if num_top > 0 else 0
-                x = rect.x() + r + t * top_side
-                y = rect.y()
-                point = QPointF(x, y)
-                points.append(point)
-                if i > 0:
-                    dx = point.x() - points[-2].x()
-                    dy = point.y() - points[-2].y()
-                    segment_length = math.sqrt(dx*dx + dy*dy)
-                    accumulated_length += segment_length
-                arc_lengths.append(accumulated_length)
-            
-            # Верхний правый угол (дуга)
-            # Центр: (rect.x() + w - r, rect.y() + r)
-            # Начало: (rect.x() + w - r, rect.y()) - конец верхней стороны, угол = -pi/2
-            # Конец: (rect.x() + w, rect.y() + r) - начало правой стороны, угол = 0
-            center_x = rect.x() + w - r
-            center_y = rect.y() + r
-            num_arc = max(20, int(arc_length * points_per_unit))
-            for i in range(1, num_arc + 1):
-                t = i / num_arc
-                angle = -math.pi / 2 + t * math.pi / 2  # от -pi/2 до 0
-                x = center_x + r * math.cos(angle)
-                y = center_y + r * math.sin(angle)
-                point = QPointF(x, y)
-                points.append(point)
-                dx = point.x() - points[-2].x()
-                dy = point.y() - points[-2].y()
-                segment_length = math.sqrt(dx*dx + dy*dy)
-                accumulated_length += segment_length
-                arc_lengths.append(accumulated_length)
-            
-            # Правая сторона
-            num_right = max(10, int(right_side * points_per_unit))
-            for i in range(1, num_right + 1):
-                t = i / num_right
-                x = rect.x() + w
-                y = rect.y() + r + t * right_side
-                point = QPointF(x, y)
-                points.append(point)
-                dx = point.x() - points[-2].x()
-                dy = point.y() - points[-2].y()
-                segment_length = math.sqrt(dx*dx + dy*dy)
-                accumulated_length += segment_length
-                arc_lengths.append(accumulated_length)
-            
-            # Нижний правый угол (дуга)
-            # Центр: (rect.x() + w - r, rect.y() + h - r)
-            # Начало: (rect.x() + w, rect.y() + h - r) - конец правой стороны, угол = 0
-            # Конец: (rect.x() + w - r, rect.y() + h) - начало нижней стороны, угол = pi/2
-            center_x = rect.x() + w - r
-            center_y = rect.y() + h - r
-            num_arc = max(20, int(arc_length * points_per_unit))
-            for i in range(1, num_arc + 1):
-                t = i / num_arc
-                angle = 0 + t * math.pi / 2  # от 0 до pi/2
-                x = center_x + r * math.cos(angle)
-                y = center_y + r * math.sin(angle)
-                point = QPointF(x, y)
-                points.append(point)
-                dx = point.x() - points[-2].x()
-                dy = point.y() - points[-2].y()
-                segment_length = math.sqrt(dx*dx + dy*dy)
-                accumulated_length += segment_length
-                arc_lengths.append(accumulated_length)
-            
-            # Нижняя сторона
-            num_bottom = max(10, int(bottom_side * points_per_unit))
-            for i in range(1, num_bottom + 1):
-                t = i / num_bottom
-                x = rect.x() + w - r - t * bottom_side
-                y = rect.y() + h
-                point = QPointF(x, y)
-                points.append(point)
-                dx = point.x() - points[-2].x()
-                dy = point.y() - points[-2].y()
-                segment_length = math.sqrt(dx*dx + dy*dy)
-                accumulated_length += segment_length
-                arc_lengths.append(accumulated_length)
-            
-            # Нижний левый угол (дуга)
-            # Центр: (rect.x() + r, rect.y() + h - r)
-            # Начало: (rect.x() + r, rect.y() + h) - конец нижней стороны, угол = pi/2
-            # Конец: (rect.x(), rect.y() + h - r) - начало левой стороны, угол = pi
-            center_x = rect.x() + r
-            center_y = rect.y() + h - r
-            num_arc = max(20, int(arc_length * points_per_unit))
-            for i in range(1, num_arc + 1):
-                t = i / num_arc
-                angle = math.pi / 2 + t * math.pi / 2  # от pi/2 до pi
-                x = center_x + r * math.cos(angle)
-                y = center_y + r * math.sin(angle)
-                point = QPointF(x, y)
-                points.append(point)
-                dx = point.x() - points[-2].x()
-                dy = point.y() - points[-2].y()
-                segment_length = math.sqrt(dx*dx + dy*dy)
-                accumulated_length += segment_length
-                arc_lengths.append(accumulated_length)
-            
-            # Левая сторона
-            num_left = max(10, int(left_side * points_per_unit))
-            for i in range(1, num_left + 1):
-                t = i / num_left
-                x = rect.x()
-                y = rect.y() + h - r - t * left_side
-                point = QPointF(x, y)
-                points.append(point)
-                dx = point.x() - points[-2].x()
-                dy = point.y() - points[-2].y()
-                segment_length = math.sqrt(dx*dx + dy*dy)
-                accumulated_length += segment_length
-                arc_lengths.append(accumulated_length)
-            
-            # Верхний левый угол (дуга) - заканчивается в начальной точке
-            # Центр: (rect.x() + r, rect.y() + r)
-            # Начало: (rect.x(), rect.y() + r) - конец левой стороны, угол = pi
-            # Конец: (rect.x() + r, rect.y()) - начало верхней стороны, угол = 3*pi/2 (или -pi/2)
-            center_x = rect.x() + r
-            center_y = rect.y() + r
-            num_arc = max(20, int(arc_length * points_per_unit))
-            for i in range(1, num_arc + 1):
-                t = i / num_arc
-                angle = math.pi + t * math.pi / 2  # от pi до 3*pi/2
-                x = center_x + r * math.cos(angle)
-                y = center_y + r * math.sin(angle)
-                point = QPointF(x, y)
-                points.append(point)
-                dx = point.x() - points[-2].x()
-                dy = point.y() - points[-2].y()
-                segment_length = math.sqrt(dx*dx + dy*dy)
-                accumulated_length += segment_length
-                arc_lengths.append(accumulated_length)
-            
-            total_length = accumulated_length
-        else:
-            # Прямоугольник без скругления
-            total_perimeter = 2 * (w + h)
-            points_per_unit = 8
-            total_points = max(200, int(total_perimeter * points_per_unit))
-            
-            accumulated_length = 0.0
-            
-            # Верхняя сторона
-            num_top = max(10, int(w * points_per_unit))
-            for i in range(num_top + 1):
-                t = i / num_top if num_top > 0 else 0
-                x = rect.x() + t * w
-                y = rect.y()
-                point = QPointF(x, y)
-                points.append(point)
-                if i == 0:
-                    arc_lengths.append(0.0)
-                else:
-                    dx = point.x() - points[-2].x()
-                    dy = point.y() - points[-2].y()
-                    segment_length = math.sqrt(dx*dx + dy*dy)
-                    accumulated_length += segment_length
-                    arc_lengths.append(accumulated_length)
-            
-            # Правая сторона
-            num_right = max(10, int(h * points_per_unit))
-            for i in range(1, num_right + 1):
-                t = i / num_right
-                x = rect.x() + w
-                y = rect.y() + t * h
-                point = QPointF(x, y)
-                points.append(point)
-                dx = point.x() - points[-2].x()
-                dy = point.y() - points[-2].y()
-                segment_length = math.sqrt(dx*dx + dy*dy)
-                accumulated_length += segment_length
-                arc_lengths.append(accumulated_length)
-            
-            # Нижняя сторона
-            num_bottom = max(10, int(w * points_per_unit))
-            for i in range(1, num_bottom + 1):
-                t = i / num_bottom
-                x = rect.x() + w - t * w
-                y = rect.y() + h
-                point = QPointF(x, y)
-                points.append(point)
-                dx = point.x() - points[-2].x()
-                dy = point.y() - points[-2].y()
-                segment_length = math.sqrt(dx*dx + dy*dy)
-                accumulated_length += segment_length
-                arc_lengths.append(accumulated_length)
-            
-            # Левая сторона
-            num_left = max(10, int(h * points_per_unit))
-            for i in range(1, num_left + 1):
-                t = i / num_left
-                x = rect.x()
-                y = rect.y() + h - t * h
-                point = QPointF(x, y)
-                points.append(point)
-                dx = point.x() - points[-2].x()
-                dy = point.y() - points[-2].y()
-                segment_length = math.sqrt(dx*dx + dy*dy)
-                accumulated_length += segment_length
-                arc_lengths.append(accumulated_length)
-            
-            total_length = accumulated_length
+        points, arc_lengths, total_length = PrimitiveRenderer._rectangle_contour_points(rectangle)
         
         # Контур всегда замкнут, так как мы явно генерируем точки по сегментам
         is_closed = True
@@ -1489,217 +1231,171 @@ class PrimitiveRenderer:
         painter.drawPath(path)
     
     @staticmethod
-    def _draw_broken_rectangle(painter: QPainter, rectangle, pen: QPen, style=None):
-        """Отрисовывает прямоугольник с изломами"""
+    def _append_measured_point(points, arc_lengths, point, accumulated_length):
+        points.append(point)
+        if len(points) == 1:
+            arc_lengths.append(0.0)
+            return 0.0
+
+        dx = point.x() - points[-2].x()
+        dy = point.y() - points[-2].y()
+        accumulated_length += math.hypot(dx, dy)
+        arc_lengths.append(accumulated_length)
+        return accumulated_length
+
+    @staticmethod
+    def _sample_line_segment(start: QPointF, end: QPointF, points_per_unit: float, include_start: bool):
+        length = math.hypot(end.x() - start.x(), end.y() - start.y())
+        num_steps = max(10, int(length * points_per_unit))
+        start_index = 0 if include_start else 1
+        samples = []
+        for i in range(start_index, num_steps + 1):
+            t = i / num_steps if num_steps > 0 else 0.0
+            samples.append(
+                QPointF(
+                    start.x() + (end.x() - start.x()) * t,
+                    start.y() + (end.y() - start.y()) * t,
+                )
+            )
+        return samples
+
+    @staticmethod
+    def _sample_arc_segment(start: QPointF, end: QPointF, center: QPointF, radius: float, points_per_unit: float):
+        if radius <= 0:
+            return [QPointF(end)]
+
+        arc_length = radius * math.pi / 2
+        num_steps = max(20, int(arc_length * points_per_unit))
+        start_angle = math.atan2(start.y() - center.y(), start.x() - center.x())
+        end_angle = math.atan2(end.y() - center.y(), end.x() - center.x())
+        if end_angle <= start_angle:
+            end_angle += 2 * math.pi
+
+        samples = []
+        for i in range(1, num_steps + 1):
+            t = i / num_steps
+            angle = start_angle + t * (end_angle - start_angle)
+            samples.append(
+                QPointF(
+                    center.x() + radius * math.cos(angle),
+                    center.y() + radius * math.sin(angle),
+                )
+            )
+        return samples
+
+    @staticmethod
+    def _rectangle_contour_points(rectangle, points_per_unit: float = 8.0):
+        points = []
+        arc_lengths = []
+        accumulated_length = 0.0
+        line_segments, arc_segments = PrimitiveRenderer._rectangle_contour_segments(rectangle)
+
+        for index, (start, end) in enumerate(line_segments):
+            for point in PrimitiveRenderer._sample_line_segment(
+                start,
+                end,
+                points_per_unit,
+                include_start=(index == 0),
+            ):
+                accumulated_length = PrimitiveRenderer._append_measured_point(
+                    points, arc_lengths, point, accumulated_length
+                )
+            if index < len(arc_segments):
+                arc_start, arc_end, center, radius = arc_segments[index]
+                for point in PrimitiveRenderer._sample_arc_segment(
+                    arc_start,
+                    arc_end,
+                    center,
+                    radius,
+                    points_per_unit,
+                ):
+                    accumulated_length = PrimitiveRenderer._append_measured_point(
+                        points, arc_lengths, point, accumulated_length
+                    )
+
+        return points, arc_lengths, accumulated_length
+
+    @staticmethod
+    def _rectangle_contour_segments(rectangle):
         fillet_radius = getattr(rectangle, 'fillet_radius', 0.0)
         rect = rectangle.get_bounding_box()
         w = rect.width()
         h = rect.height()
         r = min(fillet_radius, w / 2, h / 2) if fillet_radius > 0 else 0.0
-        
+
         if r > 0:
-            # Для скругленных углов разбиваем контур на сегменты и применяем стиль с изломами
-            # Верхняя сторона
-            LineRenderer._draw_broken_line(painter, 
-                                         QPointF(rect.x() + r, rect.y()), 
-                                         QPointF(rect.x() + w - r, rect.y()), 
-                                         pen, style)
-            # Верхний правый угол (дуга) - центр в (w - r, r)
-            if r > 0:
-                PrimitiveRenderer._draw_broken_arc_segment(painter, 
-                    QPointF(rect.x() + w - r, rect.y()), 
-                    QPointF(rect.x() + w, rect.y() + r), 
-                    QPointF(rect.x() + w - r, rect.y() + r), r, pen, style)
-            # Правая сторона
-            LineRenderer._draw_broken_line(painter, 
-                                         QPointF(rect.x() + w, rect.y() + r), 
-                                         QPointF(rect.x() + w, rect.y() + h - r), 
-                                         pen, style)
-            # Нижний правый угол (дуга) - центр в (w - r, h - r)
-            if r > 0:
-                PrimitiveRenderer._draw_broken_arc_segment(painter, 
-                    QPointF(rect.x() + w, rect.y() + h - r), 
-                    QPointF(rect.x() + w - r, rect.y() + h), 
-                    QPointF(rect.x() + w - r, rect.y() + h - r), r, pen, style)
-            # Нижняя сторона
-            LineRenderer._draw_broken_line(painter, 
-                                         QPointF(rect.x() + w - r, rect.y() + h), 
-                                         QPointF(rect.x() + r, rect.y() + h), 
-                                         pen, style)
-            # Нижний левый угол (дуга) - центр в (r, h - r)
-            if r > 0:
-                PrimitiveRenderer._draw_broken_arc_segment(painter, 
-                    QPointF(rect.x() + r, rect.y() + h), 
-                    QPointF(rect.x(), rect.y() + h - r), 
-                    QPointF(rect.x() + r, rect.y() + h - r), r, pen, style)
-            # Левая сторона
-            LineRenderer._draw_broken_line(painter, 
-                                         QPointF(rect.x(), rect.y() + h - r), 
-                                         QPointF(rect.x(), rect.y() + r), 
-                                         pen, style)
-            # Верхний левый угол (дуга) - центр в (r, r)
-            if r > 0:
-                PrimitiveRenderer._draw_broken_arc_segment(painter, 
-                    QPointF(rect.x(), rect.y() + r), 
-                    QPointF(rect.x() + r, rect.y()), 
-                    QPointF(rect.x() + r, rect.y() + r), r, pen, style)
-        else:
-            # Обычный прямоугольник без скругления
-            bbox = rectangle.get_bounding_box()
-            corners = [
-                QPointF(bbox.left(), bbox.top()),
-                QPointF(bbox.right(), bbox.top()),
-                QPointF(bbox.right(), bbox.bottom()),
-                QPointF(bbox.left(), bbox.bottom())
+            line_segments = [
+                (QPointF(rect.x() + r, rect.y()), QPointF(rect.x() + w - r, rect.y())),
+                (QPointF(rect.x() + w, rect.y() + r), QPointF(rect.x() + w, rect.y() + h - r)),
+                (QPointF(rect.x() + w - r, rect.y() + h), QPointF(rect.x() + r, rect.y() + h)),
+                (QPointF(rect.x(), rect.y() + h - r), QPointF(rect.x(), rect.y() + r)),
             ]
-            
-            # Рисуем каждую сторону как линию с изломами
-            for i in range(4):
-                start = corners[i]
-                end = corners[(i + 1) % 4]
-                LineRenderer._draw_broken_line(painter, start, end, pen, style)
+            arc_segments = [
+                (
+                    QPointF(rect.x() + w - r, rect.y()),
+                    QPointF(rect.x() + w, rect.y() + r),
+                    QPointF(rect.x() + w - r, rect.y() + r),
+                    r,
+                ),
+                (
+                    QPointF(rect.x() + w, rect.y() + h - r),
+                    QPointF(rect.x() + w - r, rect.y() + h),
+                    QPointF(rect.x() + w - r, rect.y() + h - r),
+                    r,
+                ),
+                (
+                    QPointF(rect.x() + r, rect.y() + h),
+                    QPointF(rect.x(), rect.y() + h - r),
+                    QPointF(rect.x() + r, rect.y() + h - r),
+                    r,
+                ),
+                (
+                    QPointF(rect.x(), rect.y() + r),
+                    QPointF(rect.x() + r, rect.y()),
+                    QPointF(rect.x() + r, rect.y() + r),
+                    r,
+                ),
+            ]
+            return line_segments, arc_segments
+
+        corners = [
+            QPointF(rect.left(), rect.top()),
+            QPointF(rect.right(), rect.top()),
+            QPointF(rect.right(), rect.bottom()),
+            QPointF(rect.left(), rect.bottom()),
+        ]
+        line_segments = [
+            (corners[i], corners[(i + 1) % 4])
+            for i in range(4)
+        ]
+        return line_segments, []
+
+    @staticmethod
+    def _draw_broken_rectangle(painter: QPainter, rectangle, pen: QPen, style=None):
+        """Отрисовывает прямоугольник с изломами"""
+        line_segments, arc_segments = PrimitiveRenderer._rectangle_contour_segments(rectangle)
+        for start, end in line_segments:
+            LineRenderer._draw_broken_line(painter, start, end, pen, style)
+        for start, end, center, radius in arc_segments:
+            PrimitiveRenderer._draw_broken_arc_segment(painter, start, end, center, radius, pen, style)
     
     @staticmethod
     def _draw_dashed_rectangle(painter: QPainter, rectangle, pen: QPen, style):
         """Отрисовывает штриховой прямоугольник"""
-        fillet_radius = getattr(rectangle, 'fillet_radius', 0.0)
-        rect = rectangle.get_bounding_box()
-        w = rect.width()
-        h = rect.height()
-        r = min(fillet_radius, w / 2, h / 2) if fillet_radius > 0 else 0.0
-        
-        if r > 0:
-            # Для скругленных углов разбиваем контур на сегменты и применяем штриховой стиль
-            # Верхняя сторона
-            LineRenderer._draw_dashed_line(painter, 
-                                         QPointF(rect.x() + r, rect.y()), 
-                                         QPointF(rect.x() + w - r, rect.y()), 
-                                         pen, style)
-            # Верхний правый угол (дуга) - центр в (w - r, r)
-            if r > 0:
-                PrimitiveRenderer._draw_dashed_arc_segment(painter, 
-                    QPointF(rect.x() + w - r, rect.y()), 
-                    QPointF(rect.x() + w, rect.y() + r), 
-                    QPointF(rect.x() + w - r, rect.y() + r), r, pen, style)
-            # Правая сторона
-            LineRenderer._draw_dashed_line(painter, 
-                                         QPointF(rect.x() + w, rect.y() + r), 
-                                         QPointF(rect.x() + w, rect.y() + h - r), 
-                                         pen, style)
-            # Нижний правый угол (дуга) - центр в (w - r, h - r)
-            if r > 0:
-                PrimitiveRenderer._draw_dashed_arc_segment(painter, 
-                    QPointF(rect.x() + w, rect.y() + h - r), 
-                    QPointF(rect.x() + w - r, rect.y() + h), 
-                    QPointF(rect.x() + w - r, rect.y() + h - r), r, pen, style)
-            # Нижняя сторона
-            LineRenderer._draw_dashed_line(painter, 
-                                         QPointF(rect.x() + w - r, rect.y() + h), 
-                                         QPointF(rect.x() + r, rect.y() + h), 
-                                         pen, style)
-            # Нижний левый угол (дуга) - центр в (r, h - r)
-            if r > 0:
-                PrimitiveRenderer._draw_dashed_arc_segment(painter, 
-                    QPointF(rect.x() + r, rect.y() + h), 
-                    QPointF(rect.x(), rect.y() + h - r), 
-                    QPointF(rect.x() + r, rect.y() + h - r), r, pen, style)
-            # Левая сторона
-            LineRenderer._draw_dashed_line(painter, 
-                                         QPointF(rect.x(), rect.y() + h - r), 
-                                         QPointF(rect.x(), rect.y() + r), 
-                                         pen, style)
-            # Верхний левый угол (дуга) - центр в (r, r)
-            if r > 0:
-                PrimitiveRenderer._draw_dashed_arc_segment(painter, 
-                    QPointF(rect.x(), rect.y() + r), 
-                    QPointF(rect.x() + r, rect.y()), 
-                    QPointF(rect.x() + r, rect.y() + r), r, pen, style)
-        else:
-            # Обычный прямоугольник без скругления
-            bbox = rectangle.get_bounding_box()
-            corners = [
-                QPointF(bbox.left(), bbox.top()),
-                QPointF(bbox.right(), bbox.top()),
-                QPointF(bbox.right(), bbox.bottom()),
-                QPointF(bbox.left(), bbox.bottom())
-            ]
-            
-            # Рисуем каждую сторону как штриховую линию
-            for i in range(4):
-                start = corners[i]
-                end = corners[(i + 1) % 4]
-                LineRenderer._draw_dashed_line(painter, start, end, pen, style)
+        line_segments, arc_segments = PrimitiveRenderer._rectangle_contour_segments(rectangle)
+        for start, end in line_segments:
+            LineRenderer._draw_dashed_line(painter, start, end, pen, style)
+        for start, end, center, radius in arc_segments:
+            PrimitiveRenderer._draw_dashed_arc_segment(painter, start, end, center, radius, pen, style)
     
     @staticmethod
     def _draw_dash_dot_rectangle(painter: QPainter, rectangle, pen: QPen, style):
         """Отрисовывает штрихпунктирный прямоугольник"""
-        fillet_radius = getattr(rectangle, 'fillet_radius', 0.0)
-        rect = rectangle.get_bounding_box()
-        w = rect.width()
-        h = rect.height()
-        r = min(fillet_radius, w / 2, h / 2) if fillet_radius > 0 else 0.0
-        
-        if r > 0:
-            # Для скругленных углов разбиваем контур на сегменты и применяем штрихпунктирный стиль
-            # Верхняя сторона
-            LineRenderer._draw_dash_dot_line(painter, 
-                                           QPointF(rect.x() + r, rect.y()), 
-                                           QPointF(rect.x() + w - r, rect.y()), 
-                                           pen, style)
-            # Верхний правый угол (дуга) - центр в (w - r, r)
-            if r > 0:
-                PrimitiveRenderer._draw_dash_dot_arc_segment(painter, 
-                    QPointF(rect.x() + w - r, rect.y()), 
-                    QPointF(rect.x() + w, rect.y() + r), 
-                    QPointF(rect.x() + w - r, rect.y() + r), r, pen, style)
-            # Правая сторона
-            LineRenderer._draw_dash_dot_line(painter, 
-                                           QPointF(rect.x() + w, rect.y() + r), 
-                                           QPointF(rect.x() + w, rect.y() + h - r), 
-                                           pen, style)
-            # Нижний правый угол (дуга) - центр в (w - r, h - r)
-            if r > 0:
-                PrimitiveRenderer._draw_dash_dot_arc_segment(painter, 
-                    QPointF(rect.x() + w, rect.y() + h - r), 
-                    QPointF(rect.x() + w - r, rect.y() + h), 
-                    QPointF(rect.x() + w - r, rect.y() + h - r), r, pen, style)
-            # Нижняя сторона
-            LineRenderer._draw_dash_dot_line(painter, 
-                                           QPointF(rect.x() + w - r, rect.y() + h), 
-                                           QPointF(rect.x() + r, rect.y() + h), 
-                                           pen, style)
-            # Нижний левый угол (дуга) - центр в (r, h - r)
-            if r > 0:
-                PrimitiveRenderer._draw_dash_dot_arc_segment(painter, 
-                    QPointF(rect.x() + r, rect.y() + h), 
-                    QPointF(rect.x(), rect.y() + h - r), 
-                    QPointF(rect.x() + r, rect.y() + h - r), r, pen, style)
-            # Левая сторона
-            LineRenderer._draw_dash_dot_line(painter, 
-                                           QPointF(rect.x(), rect.y() + h - r), 
-                                           QPointF(rect.x(), rect.y() + r), 
-                                           pen, style)
-            # Верхний левый угол (дуга) - центр в (r, r)
-            if r > 0:
-                PrimitiveRenderer._draw_dash_dot_arc_segment(painter, 
-                    QPointF(rect.x(), rect.y() + r), 
-                    QPointF(rect.x() + r, rect.y()), 
-                    QPointF(rect.x() + r, rect.y() + r), r, pen, style)
-        else:
-            # Обычный прямоугольник без скругления
-            bbox = rectangle.get_bounding_box()
-            corners = [
-                QPointF(bbox.left(), bbox.top()),
-                QPointF(bbox.right(), bbox.top()),
-                QPointF(bbox.right(), bbox.bottom()),
-                QPointF(bbox.left(), bbox.bottom())
-            ]
-            
-            # Рисуем каждую сторону как штрихпунктирную линию
-            for i in range(4):
-                start = corners[i]
-                end = corners[(i + 1) % 4]
-                LineRenderer._draw_dash_dot_line(painter, start, end, pen, style)
+        line_segments, arc_segments = PrimitiveRenderer._rectangle_contour_segments(rectangle)
+        for start, end in line_segments:
+            LineRenderer._draw_dash_dot_line(painter, start, end, pen, style)
+        for start, end, center, radius in arc_segments:
+            PrimitiveRenderer._draw_dash_dot_arc_segment(painter, start, end, center, radius, pen, style)
     
     @staticmethod
     def _draw_wavy_arc_segment(painter: QPainter, start: QPointF, end: QPointF, center: QPointF, radius: float, pen: QPen):
@@ -2091,9 +1787,8 @@ class PrimitiveRenderer:
             segment_end_angle = min(current_angle + segment_angle, end_angle)
             
             is_gap = (segment_length == dash_gap)
-            
             if not is_gap:
-                # Рисуем сегмент (штрих или точку)
+                # ???????????? ?????????????? (?????????? ?????? ??????????)
                 num_points = max(5, int((segment_end_angle - current_angle) * radius / 2))
                 path = QPainterPath()
                 
@@ -2108,89 +1803,59 @@ class PrimitiveRenderer:
                     else:
                         path.lineTo(x, y)
                 
-                if num_points > 0:
-                    painter.drawPath(path)
+                painter.drawPath(path)
             
             current_angle = segment_end_angle
             pattern_index += 1
     
-    # Методы специальной отрисовки для эллипсов
     @staticmethod
     def _draw_ellipse_with_rotation(painter: QPainter, ellipse, pen: QPen):
-        """Отрисовывает эллипс с учетом поворота"""
-        import math
-        from PySide6.QtGui import QTransform
+        """???????????????????????? ???????????? ?? ???????????? ????????????????"""
         from PySide6.QtCore import Qt, QRectF
         
-        # Сохраняем состояние painter
         painter.save()
         
-        # Применяем трансформацию поворота
         if hasattr(ellipse, 'rotation_angle') and abs(ellipse.rotation_angle) > 1e-6:
-            transform = QTransform()
-            transform.translate(ellipse.center.x(), ellipse.center.y())
-            transform.rotate(math.degrees(ellipse.rotation_angle))
-            painter.setTransform(transform, True)
-            
-            # Рисуем эллипс в локальной системе координат
-            rect = QRectF(-ellipse.radius_x, -ellipse.radius_y, 
-                         ellipse.radius_x * 2, ellipse.radius_y * 2)
+            _apply_rotation_transform(painter, ellipse.center, ellipse.rotation_angle)
+            rect = QRectF(-ellipse.radius_x, -ellipse.radius_y, ellipse.radius_x * 2, ellipse.radius_y * 2)
             painter.setPen(pen)
             painter.setBrush(Qt.NoBrush)
             painter.drawEllipse(rect)
         else:
-            # Без поворота - рисуем напрямую
             painter.setPen(pen)
             painter.setBrush(Qt.NoBrush)
             painter.drawEllipse(ellipse.center, ellipse.radius_x, ellipse.radius_y)
         
         painter.restore()
     
-    @staticmethod
     def _draw_wavy_ellipse(painter: QPainter, ellipse, pen: QPen, style=None):
         """Отрисовывает волнистый эллипс (как отрезок, скрученный в эллипс) с учетом поворота"""
         import math
-        from PySide6.QtGui import QPainterPath, QTransform
+        from PySide6.QtGui import QPainterPath
         from PySide6.QtCore import Qt, QPointF
         
         # Сохраняем состояние painter
         painter.save()
-        
-        # Применяем трансформацию поворота
+        # ?????????????????? ?????????????????????????? ????????????????
         rotation_angle = getattr(ellipse, 'rotation_angle', 0.0)
-        if abs(rotation_angle) > 1e-6:
-            transform = QTransform()
-            transform.translate(ellipse.center.x(), ellipse.center.y())
-            transform.rotate(math.degrees(rotation_angle))
-            painter.setTransform(transform, True)
-            center_offset = QPointF(0, 0)
-        else:
-            center_offset = ellipse.center
+        center_x, center_y = _apply_rotation_transform(painter, ellipse.center, rotation_angle)
+        center_offset = QPointF(center_x, center_y)
+        
         
         # Приблизительная длина окружности эллипса
         a = ellipse.radius_x
         b = ellipse.radius_y
-        if (a + b) <= 0 or a <= 0 or b <= 0:
+        circumference = _ellipse_circumference(a, b)
+        if circumference <= 0:
             painter.restore()
             return
-        h = ((a - b) / (a + b)) ** 2
-        circumference = math.pi * (a + b) * (1 + (3 * h) / (10 + math.sqrt(4 - 3 * h)))
         
         if circumference < 1:
             painter.restore()
             return
         
-        # Амплитуда волны - используем из стиля, если доступна
-        if style and hasattr(style, 'wavy_amplitude_mm'):
-            amplitude_mm = style.wavy_amplitude_mm
-        else:
-            # Автоматический расчет по ГОСТ
-            main_thickness_mm = 0.8
-            line_thickness_mm = pen.widthF() * 25.4 / 96
-            amplitude_mm = (main_thickness_mm / 2.5) * (line_thickness_mm / 0.4)
+        amplitude_px = _wavy_amplitude_px(pen, style)
         
-        dpi = 96
-        amplitude_px = (amplitude_mm * dpi) / 25.4
         
         wave_length_px = amplitude_px * 5
         num_waves = max(1, int(circumference / wave_length_px))
@@ -2242,31 +1907,25 @@ class PrimitiveRenderer:
     def _draw_broken_ellipse(painter: QPainter, ellipse, pen: QPen, style=None):
         """Отрисовывает эллипс с зигзагами с учетом поворота"""
         import math
-        from PySide6.QtGui import QPainterPath, QTransform
+        from PySide6.QtGui import QPainterPath
         from PySide6.QtCore import QPointF
         
         # Сохраняем состояние painter
         painter.save()
         
-        # Применяем трансформацию поворота
+        # ?????????????????? ?????????????????????????? ????????????????
         rotation_angle = getattr(ellipse, 'rotation_angle', 0.0)
-        if abs(rotation_angle) > 1e-6:
-            transform = QTransform()
-            transform.translate(ellipse.center.x(), ellipse.center.y())
-            transform.rotate(math.degrees(rotation_angle))
-            painter.setTransform(transform, True)
-            center_offset = QPointF(0, 0)
-        else:
-            center_offset = ellipse.center
+        center_x, center_y = _apply_rotation_transform(painter, ellipse.center, rotation_angle)
+        center_offset = QPointF(center_x, center_y)
+        
         
         # Приблизительная длина окружности эллипса
         a = ellipse.radius_x
         b = ellipse.radius_y
-        if (a + b) <= 0 or a <= 0 or b <= 0:
+        circumference = _ellipse_circumference(a, b)
+        if circumference <= 0:
             painter.restore()
             return
-        h = ((a - b) / (a + b)) ** 2
-        circumference = math.pi * (a + b) * (1 + (3 * h) / (10 + math.sqrt(4 - 3 * h)))
         
         if circumference < 1:
             painter.restore()
@@ -2399,24 +2058,13 @@ class PrimitiveRenderer:
     @staticmethod
     def _draw_dashed_ellipse(painter: QPainter, ellipse, pen: QPen, style):
         """Отрисовывает штриховой эллипс с равномерным распределением и учетом поворота"""
-        import math
-        from PySide6.QtGui import QTransform
-        from PySide6.QtCore import QRectF
-        
         # Сохраняем состояние painter
         painter.save()
         
-        # Применяем трансформацию поворота
+        # ?????????????????? ?????????????????????????? ????????????????
         rotation_angle = getattr(ellipse, 'rotation_angle', 0.0)
-        if abs(rotation_angle) > 1e-6:
-            transform = QTransform()
-            transform.translate(ellipse.center.x(), ellipse.center.y())
-            transform.rotate(math.degrees(rotation_angle))
-            painter.setTransform(transform, True)
-            # В локальной системе координат центр в (0, 0)
-            center_x, center_y = 0, 0
-        else:
-            center_x, center_y = ellipse.center.x(), ellipse.center.y()
+        center_x, center_y = _apply_rotation_transform(painter, ellipse.center, rotation_angle)
+        
         
         dash_length = style.dash_length
         dash_gap = style.dash_gap
@@ -2424,11 +2072,10 @@ class PrimitiveRenderer:
         # Приблизительная длина окружности эллипса
         a = ellipse.radius_x
         b = ellipse.radius_y
-        if (a + b) <= 0 or a <= 0 or b <= 0:
+        circumference = _ellipse_circumference(a, b)
+        if circumference <= 0:
             painter.restore()
             return
-        h = ((a - b) / (a + b)) ** 2
-        circumference = math.pi * (a + b) * (1 + (3 * h) / (10 + math.sqrt(4 - 3 * h)))
         
         if circumference < 0.1:
             painter.restore()
@@ -2440,32 +2087,15 @@ class PrimitiveRenderer:
         
         # Если паттернов меньше 1, рисуем один штрих
         if num_patterns < 1:
-            rect = QRectF(
-                center_x - ellipse.radius_x,
-                center_y - ellipse.radius_y,
-                ellipse.radius_x * 2,
-                ellipse.radius_y * 2
-            )
+            rect = PrimitiveRenderer._ellipse_rect(center_x, center_y, ellipse.radius_x, ellipse.radius_y)
             painter.setPen(pen)
             painter.drawArc(rect, 0, int(360 * 16))
             painter.restore()
             return
         
-        # Равномерно распределяем штрихи и пробелы по всей окружности
-        num_full_patterns = int(num_patterns)
-        remaining_length = circumference - num_full_patterns * pattern_length
+        # ???????????????????? ???????????????????????? ???????????? ?? ?????????????? ???? ???????? ????????????????????
+        num_dashes, adjusted_gap = _distributed_dash_pattern(circumference, dash_length, dash_gap)
         
-        # Если остаток больше длины штриха, добавляем еще один штрих
-        if remaining_length >= dash_length:
-            num_dashes = num_full_patterns + 1
-            total_gap_length = (num_dashes - 1) * dash_gap + remaining_length - dash_length
-            if num_dashes > 1:
-                adjusted_gap = total_gap_length / (num_dashes - 1)
-            else:
-                adjusted_gap = dash_gap
-        else:
-            num_dashes = num_full_patterns
-            adjusted_gap = dash_gap + remaining_length / max(1, num_dashes - 1) if num_dashes > 1 else dash_gap
         
         # Вычисляем углы с учетом равномерного распределения
         total_angle = 2 * math.pi
@@ -2473,57 +2103,29 @@ class PrimitiveRenderer:
         gap_angle_rad = (adjusted_gap / circumference) * total_angle
         
         painter.setPen(pen)
-        current_angle_rad = 0
-        
-        rect = QRectF(
-            center_x - ellipse.radius_x,
-            center_y - ellipse.radius_y,
-            ellipse.radius_x * 2,
-            ellipse.radius_y * 2
+        rect = PrimitiveRenderer._ellipse_rect(center_x, center_y, ellipse.radius_x, ellipse.radius_y)
+        pattern = [dash_length, adjusted_gap]
+        PrimitiveRenderer._draw_patterned_ellipse_segments(
+            painter,
+            rect,
+            pattern,
+            adjusted_gap,
+            circumference,
+            total_angle=total_angle,
         )
-        
-        for i in range(num_dashes):
-            start_angle_rad = current_angle_rad
-            end_angle_rad = start_angle_rad + dash_angle_rad
-            
-            # Ограничиваем конечный угол, чтобы не выйти за пределы окружности
-            if end_angle_rad > total_angle:
-                end_angle_rad = total_angle
-            
-            # Рисуем дугу эллипса (углы в 1/16 градуса)
-            start_angle_16 = int(start_angle_rad * 16 * 180 / math.pi)
-            span_angle_16 = int((end_angle_rad - start_angle_rad) * 16 * 180 / math.pi)
-            painter.drawArc(rect, start_angle_16, span_angle_16)
-            
-            current_angle_rad = end_angle_rad + gap_angle_rad
-            
-            # Если дошли до конца окружности, выходим
-            if current_angle_rad >= total_angle:
-                break
         
         painter.restore()
     
     @staticmethod
     def _draw_dash_dot_ellipse(painter: QPainter, ellipse, pen: QPen, style):
         """Отрисовывает штрихпунктирный эллипс с учетом поворота"""
-        import math
-        from PySide6.QtGui import QTransform
-        from PySide6.QtCore import QRectF
-        
         # Сохраняем состояние painter
         painter.save()
         
-        # Применяем трансформацию поворота
+        # ?????????????????? ?????????????????????????? ????????????????
         rotation_angle = getattr(ellipse, 'rotation_angle', 0.0)
-        if abs(rotation_angle) > 1e-6:
-            transform = QTransform()
-            transform.translate(ellipse.center.x(), ellipse.center.y())
-            transform.rotate(math.degrees(rotation_angle))
-            painter.setTransform(transform, True)
-            # В локальной системе координат центр в (0, 0)
-            center_x, center_y = 0, 0
-        else:
-            center_x, center_y = ellipse.center.x(), ellipse.center.y()
+        center_x, center_y = _apply_rotation_transform(painter, ellipse.center, rotation_angle)
+        
         
         dash_length = style.dash_length
         dash_gap = style.dash_gap
@@ -2532,11 +2134,10 @@ class PrimitiveRenderer:
         # Приблизительная длина окружности эллипса
         a = ellipse.radius_x
         b = ellipse.radius_y
-        if (a + b) <= 0 or a <= 0 or b <= 0:
+        circumference = _ellipse_circumference(a, b)
+        if circumference <= 0:
             painter.restore()
             return
-        h = ((a - b) / (a + b)) ** 2
-        circumference = math.pi * (a + b) * (1 + (3 * h) / (10 + math.sqrt(4 - 3 * h)))
         
         if circumference < 0.1:
             painter.restore()
@@ -2548,78 +2149,152 @@ class PrimitiveRenderer:
             pattern = [dash_length, dash_gap, dot_length, dash_gap]
         
         painter.setPen(pen)
-        current_angle = 0
-        pattern_index = 0
-        
-        while current_angle < 2 * math.pi:
-            segment_length = pattern[pattern_index % len(pattern)]
-            segment_angle = (segment_length / circumference) * 2 * math.pi
-            
-            is_gap = (segment_length == dash_gap)
-            
-            if not is_gap:
-                start_angle = current_angle
-                end_angle = current_angle + segment_angle
-                
-                rect = QRectF(
-                    center_x - ellipse.radius_x,
-                    center_y - ellipse.radius_y,
-                    ellipse.radius_x * 2,
-                    ellipse.radius_y * 2
-                )
-                painter.drawArc(rect, int(start_angle * 16 * 180 / math.pi), 
-                              int((end_angle - start_angle) * 16 * 180 / math.pi))
-            
-            current_angle += segment_angle
-            pattern_index += 1
+        PrimitiveRenderer._draw_patterned_ellipse_segments(
+            painter,
+            PrimitiveRenderer._ellipse_rect(center_x, center_y, ellipse.radius_x, ellipse.radius_y),
+            pattern,
+            dash_gap,
+            circumference,
+        )
         
         painter.restore()
     
     # Методы специальной отрисовки для дуг
     @staticmethod
+    def _arc_rect(arc):
+        return QRectF(
+            -arc.radius_x,
+            -arc.radius_y,
+            arc.radius_x * 2,
+            arc.radius_y * 2
+        )
+
+    @staticmethod
+    def _draw_arc_path_segment(painter: QPainter, rect: QRectF, start_angle: float, end_angle: float):
+        path = QPainterPath()
+        path.arcMoveTo(rect, start_angle)
+        path.arcTo(rect, start_angle, end_angle - start_angle)
+        painter.drawPath(path)
+
+    @staticmethod
+    def _draw_patterned_arc_segments(
+        painter: QPainter,
+        arc,
+        rect: QRectF,
+        pattern,
+        gap_length: float,
+        arc_length: float,
+        angle_span: float,
+        span_angle_deg: float,
+        max_iterations: int = 1000,
+    ):
+        if arc_length <= 0 or angle_span <= 0:
+            return
+
+        direction = 1 if span_angle_deg >= 0 else -1
+        current_angle = arc.start_angle
+        pattern_index = 0
+        iteration = 0
+
+        while iteration < max_iterations:
+            if direction > 0:
+                if current_angle >= arc.end_angle:
+                    break
+            else:
+                if current_angle <= arc.end_angle:
+                    break
+
+            segment_length = pattern[pattern_index % len(pattern)]
+            segment_angle_abs = (segment_length / arc_length) * angle_span
+            segment_angle = segment_angle_abs if direction > 0 else -segment_angle_abs
+
+            if segment_length != gap_length:
+                start_angle = current_angle
+                end_angle = current_angle + segment_angle
+                if direction > 0:
+                    end_angle = min(end_angle, arc.end_angle)
+                else:
+                    end_angle = max(end_angle, arc.end_angle)
+                PrimitiveRenderer._draw_arc_path_segment(painter, rect, start_angle, end_angle)
+
+            current_angle += segment_angle
+            pattern_index += 1
+            iteration += 1
+
+    @staticmethod
+    def _ellipse_rect(center_x: float, center_y: float, radius_x: float, radius_y: float):
+        return QRectF(
+            center_x - radius_x,
+            center_y - radius_y,
+            radius_x * 2,
+            radius_y * 2
+        )
+
+    @staticmethod
+    def _circle_rect(circle):
+        return PrimitiveRenderer._ellipse_rect(
+            circle.center.x(),
+            circle.center.y(),
+            circle.radius,
+            circle.radius,
+        )
+
+    @staticmethod
+    def _draw_ellipse_rad_segment(painter: QPainter, rect: QRectF, start_angle_rad: float, end_angle_rad: float):
+        start_angle_16 = int(start_angle_rad * 16 * 180 / math.pi)
+        span_angle_16 = int((end_angle_rad - start_angle_rad) * 16 * 180 / math.pi)
+        painter.drawArc(rect, start_angle_16, span_angle_16)
+
+    @staticmethod
+    def _draw_patterned_ellipse_segments(
+        painter: QPainter,
+        rect: QRectF,
+        pattern,
+        gap_length: float,
+        circumference: float,
+        total_angle: float = 2 * math.pi,
+    ):
+        if circumference <= 0:
+            return
+
+        current_angle = 0.0
+        pattern_index = 0
+        while current_angle < total_angle:
+            segment_length = pattern[pattern_index % len(pattern)]
+            segment_angle = (segment_length / circumference) * total_angle
+            if segment_length != gap_length:
+                start_angle = current_angle
+                end_angle = min(current_angle + segment_angle, total_angle)
+                PrimitiveRenderer._draw_ellipse_rad_segment(painter, rect, start_angle, end_angle)
+            current_angle += segment_angle
+            pattern_index += 1
+
+    @staticmethod
     def _draw_wavy_arc(painter: QPainter, arc, pen: QPen, style=None):
         """Отрисовывает волнистую дугу эллипса с учетом поворота"""
         import math
-        from PySide6.QtGui import QPainterPath, QTransform
+        from PySide6.QtGui import QPainterPath
         
         # Сохраняем состояние painter
         painter.save()
         
-        # Применяем трансформацию поворота
-        transform = QTransform()
-        transform.translate(arc.center.x(), arc.center.y())
-        transform.rotate(math.degrees(arc.rotation_angle))
-        painter.setTransform(transform, True)
+        # ?????????????????? ?????????????????????????? ????????????????
+        _apply_rotation_transform(painter, arc.center, arc.rotation_angle)
+        
         
         # Вычисляем span_angle с учетом направления
-        span_angle_deg = arc.end_angle - arc.start_angle
-        if span_angle_deg < -180:
-            span_angle_deg += 360
-        elif span_angle_deg > 180:
-            span_angle_deg -= 360
+        span_angle_deg = _normalized_arc_span(arc.start_angle, arc.end_angle)
         
-        # Вычисляем длину дуги эллипса (используем абсолютное значение угла)
+        # ?????????????????? ?????????? ???????? ?????????????? (???????????????????? ???????????????????? ???????????????? ????????)
         angle_span_deg = abs(span_angle_deg)
-        angle_span_rad = math.radians(angle_span_deg)
-        # Приблизительная длина дуги эллипса
-        avg_radius = (arc.radius_x + arc.radius_y) / 2
-        arc_length = angle_span_rad * avg_radius
+        arc_length = _arc_length(arc.radius_x, arc.radius_y, span_angle_deg)
         
         if arc_length < 1:
             painter.restore()
             return
         
         # Амплитуда волны - используем из стиля, если доступна
-        if style and hasattr(style, 'wavy_amplitude_mm'):
-            amplitude_mm = style.wavy_amplitude_mm
-        else:
-            # Автоматический расчет по ГОСТ
-            main_thickness_mm = 0.8
-            line_thickness_mm = pen.widthF() * 25.4 / 96
-            amplitude_mm = (main_thickness_mm / 2.5) * (line_thickness_mm / 0.4)
-        
-        dpi = 96
-        amplitude_px = (amplitude_mm * dpi) / 25.4
+        amplitude_px = _wavy_amplitude_px(pen, style)
         
         wave_length_px = amplitude_px * 5
         num_waves = max(1, int(arc_length / wave_length_px))
@@ -2673,56 +2348,36 @@ class PrimitiveRenderer:
     def _draw_broken_arc(painter: QPainter, arc, pen: QPen, style=None):
         """Отрисовывает дугу эллипса с зигзагами с учетом поворота"""
         import math
-        from PySide6.QtGui import QPainterPath, QTransform
+        from PySide6.QtGui import QPainterPath
         
         # Сохраняем состояние painter
         painter.save()
         
-        # Применяем трансформацию поворота
-        transform = QTransform()
-        transform.translate(arc.center.x(), arc.center.y())
-        transform.rotate(math.degrees(arc.rotation_angle))
-        painter.setTransform(transform, True)
+        # ?????????????????? ?????????????????????????? ????????????????
+        _apply_rotation_transform(painter, arc.center, arc.rotation_angle)
+        
         
         # Вычисляем span_angle с учетом направления
-        span_angle_deg = arc.end_angle - arc.start_angle
-        if span_angle_deg < -180:
-            span_angle_deg += 360
-        elif span_angle_deg > 180:
-            span_angle_deg -= 360
+        span_angle_deg = _normalized_arc_span(arc.start_angle, arc.end_angle)
         
         angle_span = abs(span_angle_deg)
-        # Приблизительная длина дуги эллипса
-        avg_radius = (arc.radius_x + arc.radius_y) / 2
-        arc_length = math.radians(angle_span) * avg_radius
+        arc_length = _arc_length(arc.radius_x, arc.radius_y, span_angle_deg)
         
         if arc_length < 1:
             painter.restore()
             return
         
-        # Количество зигзагов и шаг из стиля
-        zigzag_count = style.zigzag_count if style and hasattr(style, 'zigzag_count') else 1
-        zigzag_count = max(1, int(zigzag_count))
-        zigzag_step_mm = style.zigzag_step_mm if style and hasattr(style, 'zigzag_step_mm') else 4.0
+        broken_params = _broken_style_params(style)
+        zigzag_count = broken_params['zigzag_count']
+        zigzag_height = broken_params['zigzag_height']
+        zigzag_length_single = broken_params['zigzag_length_single']
+        zigzag_step, total_zigzag_length = _fit_broken_pattern(
+            arc_length,
+            zigzag_count,
+            zigzag_length_single,
+            broken_params['zigzag_step'],
+        )
         
-        # Параметры зигзага
-        zigzag_height_mm = 3.5
-        zigzag_width_mm = 4.0
-        dpi = 96
-        zigzag_height = (zigzag_height_mm * dpi) / 25.4
-        zigzag_length_single = (zigzag_width_mm * dpi) / 25.4
-        zigzag_step = (zigzag_step_mm * dpi) / 25.4
-        
-        # Общая длина области зигзагов
-        total_zigzag_length = zigzag_length_single * zigzag_count + zigzag_step * (zigzag_count - 1)
-        
-        # Ограничиваем общую длину зигзагов
-        if total_zigzag_length > arc_length * 0.9:
-            max_length = arc_length * 0.9
-            if zigzag_count > 1:
-                zigzag_step = (max_length - zigzag_length_single * zigzag_count) / (zigzag_count - 1)
-                zigzag_step = max(zigzag_step, zigzag_length_single * 0.5)
-                total_zigzag_length = zigzag_length_single * zigzag_count + zigzag_step * (zigzag_count - 1)
         
         # Конвертируем длину в параметрический угол
         total_zigzag_angle_abs = (total_zigzag_length / arc_length) * angle_span
@@ -2854,33 +2509,21 @@ class PrimitiveRenderer:
     @staticmethod
     def _draw_dashed_arc(painter: QPainter, arc, pen: QPen, style):
         """Отрисовывает штриховую дугу эллипса с равномерным распределением и учетом поворота"""
-        import math
-        from PySide6.QtGui import QTransform, QPainterPath
-        
         # Сохраняем состояние painter
         painter.save()
         
-        # Применяем трансформацию поворота
-        transform = QTransform()
-        transform.translate(arc.center.x(), arc.center.y())
-        transform.rotate(math.degrees(arc.rotation_angle))
-        painter.setTransform(transform, True)
+        # ?????????????????? ?????????????????????????? ????????????????
+        _apply_rotation_transform(painter, arc.center, arc.rotation_angle)
+        
         
         dash_length = style.dash_length
         dash_gap = style.dash_gap
         
         # Вычисляем span_angle с учетом направления
-        span_angle_deg = arc.end_angle - arc.start_angle
-        if span_angle_deg < -180:
-            span_angle_deg += 360
-        elif span_angle_deg > 180:
-            span_angle_deg -= 360
+        span_angle_deg = _normalized_arc_span(arc.start_angle, arc.end_angle)
         
         angle_span_deg = abs(span_angle_deg)
-        angle_span_rad = math.radians(angle_span_deg)
-        # Приблизительная длина дуги эллипса
-        avg_radius = (arc.radius_x + arc.radius_y) / 2
-        arc_length = angle_span_rad * avg_radius
+        arc_length = _arc_length(arc.radius_x, arc.radius_y, span_angle_deg)
         
         if arc_length < 0.1:
             painter.restore()
@@ -2892,49 +2535,28 @@ class PrimitiveRenderer:
         
         # Если паттернов меньше 1, рисуем один штрих
         if num_patterns < 1:
-            rect = QRectF(
-                -arc.radius_x,
-                -arc.radius_y,
-                arc.radius_x * 2,
-                arc.radius_y * 2
-            )
+            rect = PrimitiveRenderer._arc_rect(arc)
             painter.setPen(pen)
-            path = QPainterPath()
-            path.arcMoveTo(rect, arc.start_angle)
-            path.arcTo(rect, arc.start_angle, angle_span_deg)
-            painter.drawPath(path)
+            PrimitiveRenderer._draw_arc_path_segment(
+                painter,
+                rect,
+                arc.start_angle,
+                arc.start_angle + angle_span_deg,
+            )
             painter.restore()
             return
         
-        # Равномерно распределяем штрихи и пробелы по всей дуге
-        num_full_patterns = int(num_patterns)
-        remaining_length = arc_length - num_full_patterns * pattern_length
+        # ???????????????????? ???????????????????????? ???????????? ?? ?????????????? ???? ???????? ????????
+        num_dashes, adjusted_gap = _distributed_dash_pattern(arc_length, dash_length, dash_gap)
         
-        # Если остаток больше длины штриха, добавляем еще один штрих
-        if remaining_length >= dash_length:
-            num_dashes = num_full_patterns + 1
-            total_gap_length = (num_dashes - 1) * dash_gap + remaining_length - dash_length
-            if num_dashes > 1:
-                adjusted_gap = total_gap_length / (num_dashes - 1)
-            else:
-                adjusted_gap = dash_gap
-        else:
-            num_dashes = num_full_patterns
-            adjusted_gap = dash_gap + remaining_length / max(1, num_dashes - 1) if num_dashes > 1 else dash_gap
-        
-        # Вычисляем углы с учетом равномерного распределения
+        # ?????????????????? ???????? ?? ???????????? ???????????????????????? ??????????????????????????
         dash_angle_deg = (dash_length / arc_length) * angle_span_deg
         gap_angle_deg = (adjusted_gap / arc_length) * angle_span_deg
         
         painter.setPen(pen)
         current_angle_deg = arc.start_angle
         
-        rect = QRectF(
-            -arc.radius_x,
-            -arc.radius_y,
-            arc.radius_x * 2,
-            arc.radius_y * 2
-        )
+        rect = PrimitiveRenderer._arc_rect(arc)
         
         # Определяем направление дуги по знаку span_angle_deg
         direction = 1 if span_angle_deg >= 0 else -1
@@ -2957,13 +2579,7 @@ class PrimitiveRenderer:
                     end_angle_deg_calc = end_angle_deg
             
             # Рисуем дугу (в локальной системе координат)
-            path = QPainterPath()
-            span_angle = end_angle_deg_calc - start_angle_deg
-            # Если span отрицательный и больше -180, это нормально для дуги по часовой стрелке
-            # Qt arcTo поддерживает отрицательные значения
-            path.arcMoveTo(rect, start_angle_deg)
-            path.arcTo(rect, start_angle_deg, span_angle)
-            painter.drawPath(path)
+            PrimitiveRenderer._draw_arc_path_segment(painter, rect, start_angle_deg, end_angle_deg_calc)
             
             current_angle_deg = end_angle_deg_calc + gap_angle_deg
             
@@ -2980,32 +2596,21 @@ class PrimitiveRenderer:
     @staticmethod
     def _draw_dash_dot_arc(painter: QPainter, arc, pen: QPen, style):
         """Отрисовывает штрихпунктирную дугу эллипса с учетом поворота"""
-        import math
-        from PySide6.QtGui import QTransform, QPainterPath
-        
         # Сохраняем состояние painter
         painter.save()
         
-        # Применяем трансформацию поворота
-        transform = QTransform()
-        transform.translate(arc.center.x(), arc.center.y())
-        transform.rotate(math.degrees(arc.rotation_angle))
-        painter.setTransform(transform, True)
+        # ?????????????????? ?????????????????????????? ????????????????
+        _apply_rotation_transform(painter, arc.center, arc.rotation_angle)
+        
         
         dash_length = style.dash_length
         dash_gap = style.dash_gap
         dot_length = style.thickness_mm * 0.5
         # Вычисляем span_angle с учетом направления
-        span_angle_deg = arc.end_angle - arc.start_angle
-        if span_angle_deg < -180:
-            span_angle_deg += 360
-        elif span_angle_deg > 180:
-            span_angle_deg -= 360
+        span_angle_deg = _normalized_arc_span(arc.start_angle, arc.end_angle)
         
         angle_span = abs(span_angle_deg)
-        # Приблизительная длина дуги эллипса
-        avg_radius = (arc.radius_x + arc.radius_y) / 2
-        arc_length = math.radians(angle_span) * avg_radius
+        arc_length = _arc_length(arc.radius_x, arc.radius_y, span_angle_deg)
         
         if arc_length < 0.1:
             painter.restore()
@@ -3017,55 +2622,16 @@ class PrimitiveRenderer:
             pattern = [dash_length, dash_gap, dot_length, dash_gap]
         
         painter.setPen(pen)
-        current_angle = arc.start_angle
-        pattern_index = 0
-        max_iterations = 1000  # Защита от бесконечного цикла
-        
-        rect = QRectF(
-            -arc.radius_x,
-            -arc.radius_y,
-            arc.radius_x * 2,
-            arc.radius_y * 2
+        PrimitiveRenderer._draw_patterned_arc_segments(
+            painter,
+            arc,
+            PrimitiveRenderer._arc_rect(arc),
+            pattern,
+            dash_gap,
+            arc_length,
+            angle_span,
+            span_angle_deg,
         )
-        
-        # Определяем направление дуги
-        direction = 1 if span_angle_deg >= 0 else -1
-        
-        iteration = 0
-        while iteration < max_iterations:
-            if direction > 0:
-                if current_angle >= arc.end_angle:
-                    break
-            else:
-                if current_angle <= arc.end_angle:
-                    break
-            
-            segment_length = pattern[pattern_index % len(pattern)]
-            segment_angle_abs = (segment_length / arc_length) * angle_span if arc_length > 0 else 0
-            segment_angle = segment_angle_abs if direction > 0 else -segment_angle_abs
-            
-            is_gap = (segment_length == dash_gap)
-            
-            if not is_gap:
-                start_angle = current_angle
-                # Ограничиваем конечный угол
-                end_angle = current_angle + segment_angle
-                if direction > 0:
-                    end_angle = min(end_angle, arc.end_angle)
-                else:
-                    end_angle = max(end_angle, arc.end_angle)
-                
-                # Рисуем дугу в локальной системе координат
-                path = QPainterPath()
-                span_angle = end_angle - start_angle
-                # Qt arcTo поддерживает отрицательные значения для направления по часовой стрелке
-                path.arcMoveTo(rect, start_angle)
-                path.arcTo(rect, start_angle, span_angle)
-                painter.drawPath(path)
-            
-            current_angle += segment_angle
-            pattern_index += 1
-            iteration += 1
         
         painter.restore()
     
@@ -3198,23 +2764,13 @@ class PrimitiveRenderer:
     @staticmethod
     def _draw_wavy_spline(painter: QPainter, spline, pen: QPen, scale_factor: float = 1.0, style=None):
         """Отрисовывает волнистый сплайн вдоль кривой"""
-        import math
         from PySide6.QtGui import QPainterPath
         
         if len(spline.control_points) < 2:
             return
         
-        # Амплитуда волны - используем из стиля, если доступна
-        if style and hasattr(style, 'wavy_amplitude_mm'):
-            amplitude_mm = style.wavy_amplitude_mm
-        else:
-            # Автоматический расчет по ГОСТ
-            main_thickness_mm = 0.8
-            line_thickness_mm = pen.widthF() * 25.4 / 96
-            amplitude_mm = (main_thickness_mm / 2.5) * (line_thickness_mm / 0.4)
-        
-        dpi = 96
-        amplitude_px = (amplitude_mm * dpi) / 25.4
+        amplitude_px = _wavy_amplitude_px(pen, style)
+
         
         # Используем фиксированную длину волны в пикселях для равномерного распределения
         wave_length_px = amplitude_px * 5
@@ -3231,24 +2787,11 @@ class PrimitiveRenderer:
         min_points_per_wave = 20
         num_samples = max(500, len(spline.control_points) * 100, estimated_waves * min_points_per_wave)
         
-        points = []
-        arc_lengths = [0.0]
-        total_length = 0.0
-        
-        prev_point = spline._get_point_on_spline(0)
-        points.append(prev_point)
-        
-        for i in range(1, num_samples + 1):
-            t = i / num_samples if num_samples > 0 else 0
-            curr_point = spline._get_point_on_spline(t)
-            points.append(curr_point)
-            
-            dx = curr_point.x() - prev_point.x()
-            dy = curr_point.y() - prev_point.y()
-            segment_length = math.sqrt(dx*dx + dy*dy)
-            total_length += segment_length
-            arc_lengths.append(total_length)
-            prev_point = curr_point
+        points, arc_lengths, total_length = _sample_spline_with_arc_lengths(
+            spline,
+            min_samples=num_samples,
+            factor=100,
+        )
         
         if total_length < 1:
             return
@@ -3263,57 +2806,18 @@ class PrimitiveRenderer:
         if len(points) < min_total_points:
             # Пересчитываем с большим количеством точек
             num_samples = min_total_points
-            points = []
-            arc_lengths = [0.0]
-            total_length = 0.0
-            
-            prev_point = spline._get_point_on_spline(0)
-            points.append(prev_point)
-            
-            for i in range(1, num_samples + 1):
-                t = i / num_samples if num_samples > 0 else 0
-                curr_point = spline._get_point_on_spline(t)
-                points.append(curr_point)
-                
-                dx = curr_point.x() - prev_point.x()
-                dy = curr_point.y() - prev_point.y()
-                segment_length = math.sqrt(dx*dx + dy*dy)
-                total_length += segment_length
-                arc_lengths.append(total_length)
-                prev_point = curr_point
+            points, arc_lengths, total_length = _sample_spline_with_arc_lengths(
+                spline,
+                min_samples=num_samples,
+                factor=100,
+            )
         
         # Строим волнистый путь вдоль сплайна
         path = QPainterPath()
         path.moveTo(points[0])
         
         for i in range(1, len(points)):
-            # Вычисляем направление перпендикуляра к кривой
-            if i < len(points) - 1:
-                # Используем направление между соседними точками
-                dx1 = points[i].x() - points[i-1].x()
-                dy1 = points[i].y() - points[i-1].y()
-                len1 = math.sqrt(dx1*dx1 + dy1*dy1)
-                if len1 > 0.001:
-                    cos_angle = dx1 / len1
-                    sin_angle = dy1 / len1
-                    perp_cos = -sin_angle
-                    perp_sin = cos_angle
-                else:
-                    perp_cos = 0
-                    perp_sin = 1
-            else:
-                # Для последней точки используем предыдущее направление
-                dx1 = points[i].x() - points[i-1].x()
-                dy1 = points[i].y() - points[i-1].y()
-                len1 = math.sqrt(dx1*dx1 + dy1*dy1)
-                if len1 > 0.001:
-                    cos_angle = dx1 / len1
-                    sin_angle = dy1 / len1
-                    perp_cos = -sin_angle
-                    perp_sin = cos_angle
-                else:
-                    perp_cos = 0
-                    perp_sin = 1
+            perp_cos, perp_sin = _spline_normal_at_index(points, i)
             
             # Вычисляем фазу волны на основе длины дуги
             arc_pos = arc_lengths[i]
@@ -3334,65 +2838,29 @@ class PrimitiveRenderer:
     @staticmethod
     def _draw_broken_spline(painter: QPainter, spline, pen: QPen, style=None):
         """Отрисовывает сплайн с изломами вдоль кривой"""
-        import math
         from PySide6.QtGui import QPainterPath
         
         if len(spline.control_points) < 2:
             return
         
-        # Вычисляем точки на сплайне и длину дуги
-        num_samples = max(200, len(spline.control_points) * 40)
-        points = []
-        arc_lengths = [0.0]
-        total_length = 0.0
-        
-        prev_point = spline._get_point_on_spline(0)
-        points.append(prev_point)
-        
-        for i in range(1, num_samples + 1):
-            t = i / num_samples if num_samples > 0 else 0
-            curr_point = spline._get_point_on_spline(t)
-            points.append(curr_point)
-            
-            dx = curr_point.x() - prev_point.x()
-            dy = curr_point.y() - prev_point.y()
-            segment_length = math.sqrt(dx*dx + dy*dy)
-            total_length += segment_length
-            arc_lengths.append(total_length)
-            prev_point = curr_point
+        points, arc_lengths, total_length = _sample_spline_with_arc_lengths(spline)
         
         if total_length < 1:
             return
         
-        # Количество зигзагов и шаг из стиля
-        zigzag_count = style.zigzag_count if style and hasattr(style, 'zigzag_count') else 1
-        zigzag_count = max(1, int(zigzag_count))
-        zigzag_step_mm = style.zigzag_step_mm if style and hasattr(style, 'zigzag_step_mm') else 4.0
-        
-        # Параметры зигзага
-        zigzag_height_mm = 3.5
-        zigzag_width_mm = 4.0
-        dpi = 96
-        zigzag_height = (zigzag_height_mm * dpi) / 25.4
-        zigzag_length_single = (zigzag_width_mm * dpi) / 25.4
-        zigzag_step = (zigzag_step_mm * dpi) / 25.4
-        
-        # Общая длина области зигзагов (в миллиметрах)
-        total_zigzag_length_mm = zigzag_length_single * zigzag_count + zigzag_step * (zigzag_count - 1)
-        
-        # Конвертируем в единицы дуги сплайна (используем масштаб 1:1 для сплайнов)
-        # Для сплайнов длина уже в мировых координатах, поэтому используем напрямую
-        total_zigzag_length = total_zigzag_length_mm
-        
-        # Ограничиваем общую длину зигзагов
-        if total_zigzag_length > total_length * 0.9:
-            max_length = total_length * 0.9
-            if zigzag_count > 1:
-                zigzag_step = (max_length - zigzag_length_single * zigzag_count) / (zigzag_count - 1)
-                zigzag_step = max(zigzag_step, zigzag_length_single * 0.5)
-                total_zigzag_length = zigzag_length_single * zigzag_count + zigzag_step * (zigzag_count - 1)
+        broken_params = _broken_style_params(style)
+        zigzag_count = broken_params['zigzag_count']
+        zigzag_height = broken_params['zigzag_height']
+        zigzag_length_single = broken_params['zigzag_length_single']
+        zigzag_step, total_zigzag_length = _fit_broken_pattern(
+            total_length,
+            zigzag_count,
+            zigzag_length_single,
+            broken_params['zigzag_step'],
+        )
         
         straight_length = (total_length - total_zigzag_length) / 2
+        
         
         # Строим путь с зигзагом
         path = QPainterPath()
@@ -3412,91 +2880,33 @@ class PrimitiveRenderer:
                 zigzag_end_idx = i
                 break
         
-        # Рисуем до начала зигзага
+        # ???????????? ???? ???????????? ??????????????
         for i in range(1, zigzag_start_idx + 1):
             path.lineTo(points[i])
         
-        # Рисуем все зигзаги с шагом между ними
+        # ???????????? ?????? ?????????????? ?? ?????????? ?????????? ????????
         if zigzag_start_idx < zigzag_end_idx:
             zigzag_segment_length = arc_lengths[zigzag_end_idx] - arc_lengths[zigzag_start_idx]
             if zigzag_segment_length > 0:
-                # Используем фактические значения длины зигзага и шага
-                # Они уже в правильных единицах (миллиметры, которые соответствуют единицам дуги)
                 zigzag_length_single_arc = zigzag_length_single
                 zigzag_step_arc = zigzag_step
-                
+
                 current_arc_pos = arc_lengths[zigzag_start_idx]
-                
+
                 for z in range(zigzag_count):
-                    # Начало зигзага
+                    # ???????????? ??????????????
                     zigzag_start_arc = current_arc_pos
                     zigzag_mid1_arc = current_arc_pos + zigzag_length_single_arc / 3
                     zigzag_mid2_arc = current_arc_pos + 2 * zigzag_length_single_arc / 3
                     zigzag_end_arc = current_arc_pos + zigzag_length_single_arc
                     
-                    # Получаем точки на кривой для зигзага
-                    def get_point_at_arc(arc_pos):
-                        """Находит точку на кривой для заданной длины дуги"""
-                        if arc_pos <= 0:
-                            return points[0]
-                        if arc_pos >= total_length:
-                            return points[-1]
-                        
-                        # Находим индекс точки
-                        idx = 0
-                        for i in range(len(arc_lengths)):
-                            if arc_lengths[i] >= arc_pos:
-                                idx = i
-                                break
-                        
-                        if idx > 0:
-                            # Интерполируем между точками
-                            t = (arc_pos - arc_lengths[idx-1]) / (arc_lengths[idx] - arc_lengths[idx-1]) if arc_lengths[idx] > arc_lengths[idx-1] else 0
-                            return QPointF(
-                                points[idx-1].x() + t * (points[idx].x() - points[idx-1].x()),
-                                points[idx-1].y() + t * (points[idx].y() - points[idx-1].y())
-                            )
-                        return points[idx]
-                    
-                    def get_perpendicular_at_arc(arc_pos):
-                        """Вычисляет перпендикулярное направление в точке на кривой по длине дуги"""
-                        # Находим индекс точки для данной длины дуги
-                        idx = 0
-                        for i in range(len(arc_lengths)):
-                            if arc_lengths[i] >= arc_pos:
-                                idx = i
-                                break
-                        
-                        # Вычисляем направление касательной
-                        if idx > 0 and idx < len(points):
-                            # Используем направление между предыдущей и следующей точками
-                            if idx < len(points) - 1:
-                                dx1 = points[idx+1].x() - points[idx-1].x()
-                                dy1 = points[idx+1].y() - points[idx-1].y()
-                            else:
-                                dx1 = points[idx].x() - points[idx-1].x()
-                                dy1 = points[idx].y() - points[idx-1].y()
-                            
-                            len1 = math.sqrt(dx1*dx1 + dy1*dy1)
-                            if len1 > 0.001:
-                                perp_cos = -dy1 / len1
-                                perp_sin = dx1 / len1
-                            else:
-                                perp_cos = 0
-                                perp_sin = 1
-                        else:
-                            perp_cos = 0
-                            perp_sin = 1
-                        
-                        return perp_cos, perp_sin
-                    
                     # Точка начала зигзага
-                    p1 = get_point_at_arc(zigzag_start_arc)
+                    p1 = _point_at_arc_length(points, arc_lengths, zigzag_start_arc)
                     path.lineTo(p1)
                     
                     # Первая точка зигзага (вверх)
-                    p2_base = get_point_at_arc(zigzag_mid1_arc)
-                    perp_cos, perp_sin = get_perpendicular_at_arc(zigzag_mid1_arc)
+                    p2_base = _point_at_arc_length(points, arc_lengths, zigzag_mid1_arc)
+                    perp_cos, perp_sin = _spline_normal_at_arc_length(points, arc_lengths, zigzag_mid1_arc)
                     p2 = QPointF(
                         p2_base.x() + (zigzag_height / 2) * perp_cos,
                         p2_base.y() + (zigzag_height / 2) * perp_sin
@@ -3504,8 +2914,8 @@ class PrimitiveRenderer:
                     path.lineTo(p2)
                     
                     # Вторая точка зигзага (вниз)
-                    p3_base = get_point_at_arc(zigzag_mid2_arc)
-                    perp_cos, perp_sin = get_perpendicular_at_arc(zigzag_mid2_arc)
+                    p3_base = _point_at_arc_length(points, arc_lengths, zigzag_mid2_arc)
+                    perp_cos, perp_sin = _spline_normal_at_arc_length(points, arc_lengths, zigzag_mid2_arc)
                     p3 = QPointF(
                         p3_base.x() - zigzag_height * perp_cos,
                         p3_base.y() - zigzag_height * perp_sin
@@ -3513,7 +2923,7 @@ class PrimitiveRenderer:
                     path.lineTo(p3)
                     
                     # Конец зигзага
-                    p4 = get_point_at_arc(zigzag_end_arc)
+                    p4 = _point_at_arc_length(points, arc_lengths, zigzag_end_arc)
                     path.lineTo(p4)
                     
                     # Если это не последний зигзаг, добавляем шаг (прямой участок)
@@ -3523,7 +2933,7 @@ class PrimitiveRenderer:
                         num_step_points = max(5, int(zigzag_step_arc / total_length * 20))
                         for i in range(1, num_step_points + 1):
                             step_arc = zigzag_end_arc + (zigzag_step_arc * i / num_step_points)
-                            step_point = get_point_at_arc(step_arc)
+                            step_point = _point_at_arc_length(points, arc_lengths, step_arc)
                             path.lineTo(step_point)
                     else:
                         current_arc_pos = zigzag_end_arc
@@ -3539,31 +2949,10 @@ class PrimitiveRenderer:
     @staticmethod
     def _draw_dashed_spline(painter: QPainter, spline, pen: QPen, style):
         """Отрисовывает штриховой сплайн вдоль кривой"""
-        import math
-        
         if len(spline.control_points) < 2:
             return
         
-        # Вычисляем точки на сплайне и длину дуги
-        num_samples = max(200, len(spline.control_points) * 40)
-        points = []
-        arc_lengths = [0.0]
-        total_length = 0.0
-        
-        prev_point = spline._get_point_on_spline(0)
-        points.append(prev_point)
-        
-        for i in range(1, num_samples + 1):
-            t = i / num_samples if num_samples > 0 else 0
-            curr_point = spline._get_point_on_spline(t)
-            points.append(curr_point)
-            
-            dx = curr_point.x() - prev_point.x()
-            dy = curr_point.y() - prev_point.y()
-            segment_length = math.sqrt(dx*dx + dy*dy)
-            total_length += segment_length
-            arc_lengths.append(total_length)
-            prev_point = curr_point
+        points, arc_lengths, total_length = _sample_spline_with_arc_lengths(spline)
         
         if total_length < 0.1:
             return
@@ -3581,8 +2970,8 @@ class PrimitiveRenderer:
             if drawing_dash:
                 dash_end = min(current_arc_pos + dash_length, total_length)
                 # Находим точки на кривой для начала и конца штриха
-                start_point = PrimitiveRenderer._get_point_at_arc_length(points, arc_lengths, current_arc_pos)
-                end_point = PrimitiveRenderer._get_point_at_arc_length(points, arc_lengths, dash_end)
+                start_point = _point_at_arc_length(points, arc_lengths, current_arc_pos)
+                end_point = _point_at_arc_length(points, arc_lengths, dash_end)
                 painter.drawLine(start_point, end_point)
                 current_arc_pos = dash_end
                 drawing_dash = False
@@ -3592,32 +2981,11 @@ class PrimitiveRenderer:
     
     @staticmethod
     def _draw_dash_dot_spline(painter: QPainter, spline, pen: QPen, style):
-        """Отрисовывает штрихпунктирный сплайн вдоль кривой"""
-        import math
-        
+        """???????????????????????? ?????????????????????????????? ???????????? ?????????? ????????????"""
         if len(spline.control_points) < 2:
             return
         
-        # Вычисляем точки на сплайне и длину дуги
-        num_samples = max(200, len(spline.control_points) * 40)
-        points = []
-        arc_lengths = [0.0]
-        total_length = 0.0
-        
-        prev_point = spline._get_point_on_spline(0)
-        points.append(prev_point)
-        
-        for i in range(1, num_samples + 1):
-            t = i / num_samples if num_samples > 0 else 0
-            curr_point = spline._get_point_on_spline(t)
-            points.append(curr_point)
-            
-            dx = curr_point.x() - prev_point.x()
-            dy = curr_point.y() - prev_point.y()
-            segment_length = math.sqrt(dx*dx + dy*dy)
-            total_length += segment_length
-            arc_lengths.append(total_length)
-            prev_point = curr_point
+        points, arc_lengths, total_length = _sample_spline_with_arc_lengths(spline)
         
         if total_length < 0.1:
             return
@@ -3632,8 +3000,6 @@ class PrimitiveRenderer:
             pattern = [dash_length, dash_gap, dot_length, dash_gap]
         
         painter.setPen(pen)
-        
-        # Рисуем паттерн вдоль кривой
         current_arc_pos = 0.0
         pattern_index = 0
         
@@ -3644,35 +3010,16 @@ class PrimitiveRenderer:
             is_gap = (segment_length == dash_gap)
             
             if not is_gap:
-                start_point = PrimitiveRenderer._get_point_at_arc_length(points, arc_lengths, current_arc_pos)
-                end_point = PrimitiveRenderer._get_point_at_arc_length(points, arc_lengths, segment_end)
+                start_point = _point_at_arc_length(points, arc_lengths, current_arc_pos)
+                end_point = _point_at_arc_length(points, arc_lengths, segment_end)
                 painter.drawLine(start_point, end_point)
             
             current_arc_pos += segment_length
             pattern_index += 1
-    
     @staticmethod
     def _get_point_at_arc_length(points, arc_lengths, target_arc):
         """Находит точку на кривой для заданной длины дуги"""
-        import math
-        from PySide6.QtCore import QPointF
-        
-        if target_arc <= 0:
-            return points[0]
-        if target_arc >= arc_lengths[-1]:
-            return points[-1]
-        
-        # Находим индекс, между которым находится target_arc
-        for i in range(len(arc_lengths) - 1):
-            if arc_lengths[i] <= target_arc <= arc_lengths[i + 1]:
-                # Интерполируем между точками
-                t = (target_arc - arc_lengths[i]) / (arc_lengths[i + 1] - arc_lengths[i]) if arc_lengths[i + 1] > arc_lengths[i] else 0
-                return QPointF(
-                    points[i].x() + t * (points[i + 1].x() - points[i].x()),
-                    points[i].y() + t * (points[i + 1].y() - points[i].y())
-                )
-        
-        return points[-1]
+        return _point_at_arc_length(points, arc_lengths, target_arc)
     
 
 class SceneRenderer:
@@ -3848,4 +3195,3 @@ class SceneRenderer:
     def set_grid_step(self, step_mm: float):
         """Устанавливает шаг сетки в миллиметрах"""
         self.grid_step = step_mm
-

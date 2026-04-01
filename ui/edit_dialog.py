@@ -1,4 +1,4 @@
-"""
+﻿"""
 Окно редактирования выделенных объектов
 """
 import sys
@@ -124,6 +124,220 @@ class EditDialog(QDialog):
             child = self.content_layout.takeAt(0)
             if child.widget():
                 child.widget().deleteLater()
+
+    def _block_controls(self, controls, blocked):
+        for control in controls:
+            control.blockSignals(blocked)
+
+    def _update_dimension_labels(self, dimension_obj):
+        self.dimension_auto_value_label.setText(dimension_obj._default_text())
+        self.dimension_display_value_label.setText(dimension_obj.display_text)
+
+    def _editing_mode_text(self, obj):
+        from widgets.primitives import Circle, Rectangle, Arc, Ellipse, Polygon
+
+        if isinstance(obj, LineSegment):
+            return "Перемещение точек"
+        if isinstance(obj, Circle):
+            return "Перемещение точек"
+        if isinstance(obj, Rectangle):
+            return "Перемещение углов"
+        if isinstance(obj, Arc):
+            return "Перемещение точек"
+        if isinstance(obj, Ellipse):
+            return "Перемещение точек"
+        if isinstance(obj, Polygon):
+            return "Редактирование"
+        return "Редактирование"
+
+    def _dimension_style_controls(self):
+        return [
+            self.dim_ext_line_type_combo,
+            self.dim_line_type_combo,
+            self.dim_ext_width_spin,
+            self.dim_line_width_spin,
+            self.dim_gap_from_object_spin,
+            self.dim_overshoot_spin,
+            self.dim_extension_spin,
+            self.dim_arrow_size_spin,
+            self.dim_arrow_type_combo,
+            self.dim_font_family_edit,
+            self.dim_text_height_spin,
+            self.dim_text_gap_spin,
+            self.dim_text_position_combo,
+        ]
+
+    def _set_spin_value_safely(self, spin, value):
+        if spin.value() == value:
+            return
+        spin.blockSignals(True)
+        spin.setValue(value)
+        spin.blockSignals(False)
+
+    def _set_combo_index_safely(self, combo, index):
+        if combo.currentIndex() == index:
+            return
+        combo.blockSignals(True)
+        combo.setCurrentIndex(index)
+        combo.blockSignals(False)
+
+    def _set_edit_mode_ui(self, enabled: bool, mode_text: str):
+        if enabled:
+            self.toggle_edit_mode_btn.setText("Отключить редактирование")
+            self.edit_mode_label.setText(f"{mode_text}: Включено")
+            self.edit_mode_label.setStyleSheet("color: green; font-weight: bold;")
+            return
+        self.toggle_edit_mode_btn.setText("Включить редактирование")
+        self.edit_mode_label.setText(f"{mode_text}: Отключено")
+        self.edit_mode_label.setStyleSheet("color: gray;")
+
+    def _line_is_degrees(self) -> bool:
+        return self.line_angle_combo.currentText() == "Градусы"
+
+    def _line_polar_values(self, line: LineSegment | None = None):
+        if line is None:
+            start_x = self.start_x_spin.value()
+            start_y = self.start_y_spin.value()
+            end_x = self.end_x_spin.value()
+            end_y = self.end_y_spin.value()
+        else:
+            start_x = line.start_point.x()
+            start_y = line.start_point.y()
+            end_x = line.end_point.x()
+            end_y = line.end_point.y()
+        dx = end_x - start_x
+        dy = end_y - start_y
+        radius = math.hypot(dx, dy)
+        angle_rad = math.atan2(dy, dx)
+        angle = math.degrees(angle_rad) if self._line_is_degrees() else angle_rad
+        return radius, angle
+
+    def _line_end_point_from_polar(self):
+        start_x = self.start_x_spin.value()
+        start_y = self.start_y_spin.value()
+        radius = self.radius_spin.value()
+        angle = self.angle_spin.value()
+        angle_rad = math.radians(angle) if self._line_is_degrees() else angle
+        return QPointF(
+            start_x + radius * math.cos(angle_rad),
+            start_y + radius * math.sin(angle_rad),
+        )
+
+    def _apply_line_points(self, start_point: QPointF | None = None, end_point: QPointF | None = None):
+        if not isinstance(self.editing_object, LineSegment):
+            return False
+        if start_point is not None:
+            self.editing_object.start_point = QPointF(start_point)
+        if end_point is not None:
+            self.editing_object.end_point = QPointF(end_point)
+        self.apply_changes()
+        return True
+
+    def _circle_is_radius_mode(self, method_text: str | None = None) -> bool:
+        text = method_text if method_text is not None else self.circle_method_combo.currentText()
+        return "радиус" in text.lower()
+
+    def _show_circle_value_group(self, radius_mode: bool):
+        self.circle_radius_group.setVisible(radius_mode)
+        self.circle_diameter_group.setVisible(not radius_mode)
+
+    def _set_circle_radius_controls(self, radius: float):
+        self._set_spin_value_safely(self.circle_radius_spin, radius)
+        self._set_spin_value_safely(self.circle_diameter_spin, radius * 2.0)
+
+    def _apply_circle_center(self):
+        from widgets.primitives import Circle
+
+        if not isinstance(self.editing_object, Circle):
+            return False
+        self.editing_object.center = QPointF(
+            self.circle_center_x_spin.value(),
+            self.circle_center_y_spin.value(),
+        )
+        self.apply_changes()
+        return True
+
+    def _apply_circle_radius(self, radius: float):
+        from widgets.primitives import Circle
+
+        if not isinstance(self.editing_object, Circle):
+            return False
+        self.editing_object.radius = radius
+        self._set_circle_radius_controls(radius)
+        self.apply_changes()
+        return True
+
+    def _load_dimension_style_controls(self, dimension_obj):
+        style = dimension_obj.style
+        controls = self._dimension_style_controls()
+        self._block_controls(controls, True)
+
+        self.dim_ext_line_type_combo.setCurrentText(style.extension_lines.line_type)
+        self.dim_line_type_combo.setCurrentText(style.dimension_line.line_type)
+        self.dim_ext_width_spin.setValue(style.extension_lines.width_px)
+        self.dim_line_width_spin.setValue(style.dimension_line.width_px)
+        self.dim_gap_from_object_spin.setValue(style.extension_lines.gap_from_object)
+        self.dim_overshoot_spin.setValue(style.extension_lines.overshoot)
+        self.dim_extension_spin.setValue(style.dimension_line.extension)
+        self.dim_arrow_size_spin.setValue(style.arrows.size)
+        self.dim_arrow_type_combo.setCurrentText(style.arrows.arrow_type)
+        self.dim_font_family_edit.setText(style.text.font_family)
+        self.dim_text_height_spin.setValue(style.text.height)
+        self.dim_text_gap_spin.setValue(style.text.gap)
+        self.dim_text_position_combo.setCurrentText(style.text.position)
+
+        self._block_controls(controls, False)
+
+        self._set_color_button(self.dim_ext_color_btn, style.extension_lines.color)
+        self._set_color_button(self.dim_line_color_btn, style.dimension_line.color)
+        self._set_color_button(self.dim_text_color_btn, style.text.color)
+
+    def _capture_dimension_state(self, obj):
+        state = {'text_override': obj.text_override}
+        state['text_position_override'] = QPointF(obj.text_position_override) if obj.text_position_override is not None else None
+        state['style'] = copy.deepcopy(obj.style)
+        if isinstance(obj, LinearDimension):
+            state.update({
+                'start': QPointF(obj.start),
+                'end': QPointF(obj.end),
+                'dimension_type': obj.dimension_type,
+                'offset': obj.offset,
+            })
+        elif isinstance(obj, RadialDimension):
+            state.update({
+                'center': QPointF(obj.center),
+                'radius_point': QPointF(obj.radius_point),
+                'dimension_type': obj.dimension_type,
+                'leader_point': QPointF(obj.leader_point) if obj.leader_point is not None else None,
+            })
+        elif isinstance(obj, AngularDimension):
+            state.update({
+                'vertex': QPointF(obj.vertex),
+                'ray_start': QPointF(obj.ray_start),
+                'ray_end': QPointF(obj.ray_end),
+                'radius': obj.radius,
+            })
+        return state
+
+    def _restore_dimension_state(self, obj, state):
+        obj.text_override = state['text_override']
+        obj.text_position_override = QPointF(state['text_position_override']) if state['text_position_override'] is not None else None
+        obj.style = copy.deepcopy(state['style'])
+        if isinstance(obj, LinearDimension):
+            obj.start = state['start']
+            obj.end = state['end']
+            obj.dimension_type = state['dimension_type']
+            obj.offset = state['offset']
+        elif isinstance(obj, RadialDimension):
+            obj.center = state['center']
+            obj.radius_point = state['radius_point']
+            obj.dimension_type = state['dimension_type']
+            obj.leader_point = QPointF(state['leader_point']) if state['leader_point'] is not None else None
+        elif isinstance(obj, AngularDimension):
+            obj.vertex = state['vertex']
+            obj.ray_start = state['ray_start']
+            obj.ray_end = state['ray_end']
+            obj.radius = state['radius']
     
     def setup_dimension_editing(self, dimension_obj, title):
         self.title_label.setText(title)
@@ -289,56 +503,16 @@ class EditDialog(QDialog):
         self.dimension_override_edit.blockSignals(True)
         self.dimension_override_edit.setText(dimension_obj.text_override or "")
         self.dimension_override_edit.blockSignals(False)
-        self.dimension_auto_value_label.setText(dimension_obj._default_text())
-        self.dimension_display_value_label.setText(dimension_obj.display_text)
+        self._update_dimension_labels(dimension_obj)
 
         if hasattr(self, "dim_ext_line_type_combo"):
-            style = dimension_obj.style
-            controls = [
-                self.dim_ext_line_type_combo,
-                self.dim_line_type_combo,
-                self.dim_ext_width_spin,
-                self.dim_line_width_spin,
-                self.dim_gap_from_object_spin,
-                self.dim_overshoot_spin,
-                self.dim_extension_spin,
-                self.dim_arrow_size_spin,
-                self.dim_arrow_type_combo,
-                self.dim_font_family_edit,
-                self.dim_text_height_spin,
-                self.dim_text_gap_spin,
-                self.dim_text_position_combo,
-            ]
-            for control in controls:
-                control.blockSignals(True)
-
-            self.dim_ext_line_type_combo.setCurrentText(style.extension_lines.line_type)
-            self.dim_line_type_combo.setCurrentText(style.dimension_line.line_type)
-            self.dim_ext_width_spin.setValue(style.extension_lines.width_px)
-            self.dim_line_width_spin.setValue(style.dimension_line.width_px)
-            self.dim_gap_from_object_spin.setValue(style.extension_lines.gap_from_object)
-            self.dim_overshoot_spin.setValue(style.extension_lines.overshoot)
-            self.dim_extension_spin.setValue(style.dimension_line.extension)
-            self.dim_arrow_size_spin.setValue(style.arrows.size)
-            self.dim_arrow_type_combo.setCurrentText(style.arrows.arrow_type)
-            self.dim_font_family_edit.setText(style.text.font_family)
-            self.dim_text_height_spin.setValue(style.text.height)
-            self.dim_text_gap_spin.setValue(style.text.gap)
-            self.dim_text_position_combo.setCurrentText(style.text.position)
-
-            for control in controls:
-                control.blockSignals(False)
-
-            self._set_color_button(self.dim_ext_color_btn, style.extension_lines.color)
-            self._set_color_button(self.dim_line_color_btn, style.dimension_line.color)
-            self._set_color_button(self.dim_text_color_btn, style.text.color)
+            self._load_dimension_style_controls(dimension_obj)
 
     def on_dimension_text_override_changed(self, text):
         if self.editing_object is None:
             return
         self.editing_object.text_override = text or None
-        self.dimension_auto_value_label.setText(self.editing_object._default_text())
-        self.dimension_display_value_label.setText(self.editing_object.display_text)
+        self._update_dimension_labels(self.editing_object)
         self.apply_changes()
 
     def _set_color_button(self, button, color: QColor):
@@ -518,43 +692,38 @@ class EditDialog(QDialog):
     
     def load_line_data(self, line: LineSegment):
         """Загружает данные отрезка в поля редактирования"""
-        # Блокируем сигналы, чтобы не вызывать обработчики при загрузке
-        self.start_x_spin.blockSignals(True)
-        self.start_y_spin.blockSignals(True)
-        self.end_x_spin.blockSignals(True)
-        self.end_y_spin.blockSignals(True)
-        self.radius_spin.blockSignals(True)
-        self.angle_spin.blockSignals(True)
-        
-        # Начальная точка
+        self._block_controls(
+            [
+                self.start_x_spin,
+                self.start_y_spin,
+                self.end_x_spin,
+                self.end_y_spin,
+                self.radius_spin,
+                self.angle_spin,
+            ],
+            True,
+        )
+
         self.start_x_spin.setValue(line.start_point.x())
         self.start_y_spin.setValue(line.start_point.y())
-        
-        # Конечная точка в декартовых координатах
         self.end_x_spin.setValue(line.end_point.x())
         self.end_y_spin.setValue(line.end_point.y())
-        
-        # Вычисляем полярные координаты относительно начальной точки
-        dx = line.end_point.x() - line.start_point.x()
-        dy = line.end_point.y() - line.start_point.y()
-        radius = math.sqrt(dx*dx + dy*dy)
-        angle_rad = math.atan2(dy, dx)
-        angle_deg = math.degrees(angle_rad)
-        
+        radius, angle = self._line_polar_values(line)
         self.radius_spin.setValue(radius)
-        self.angle_spin.setValue(angle_deg)
-        
-        # Устанавливаем способ задания по умолчанию (декартовы координаты)
-        self.line_method_combo.setCurrentIndex(0)
-        self.line_angle_combo.setCurrentIndex(0)  # Градусы
-        
-        # Разблокируем сигналы
-        self.start_x_spin.blockSignals(False)
-        self.start_y_spin.blockSignals(False)
-        self.end_x_spin.blockSignals(False)
-        self.end_y_spin.blockSignals(False)
-        self.radius_spin.blockSignals(False)
-        self.angle_spin.blockSignals(False)
+        self.angle_spin.setValue(angle)
+        self._set_combo_index_safely(self.line_method_combo, 0)
+        self._set_combo_index_safely(self.line_angle_combo, 0)
+        self._block_controls(
+            [
+                self.start_x_spin,
+                self.start_y_spin,
+                self.end_x_spin,
+                self.end_y_spin,
+                self.radius_spin,
+                self.angle_spin,
+            ],
+            False,
+        )
     
     def on_line_method_changed(self, method_text):
         """Обработчик изменения способа задания"""
@@ -571,145 +740,64 @@ class EditDialog(QDialog):
         """Обработчик изменения единиц углов"""
         is_degrees = units_text == "Градусы"
         self.angle_label.setText("°" if is_degrees else "rad")
-        
-        # Конвертируем угол
         if self.polar_group.isVisible():
             current_angle = self.angle_spin.value()
-            self.angle_spin.blockSignals(True)
             if is_degrees:
-                # Были радианы, стали градусы
                 self.angle_spin.setRange(-360, 360)
-                self.angle_spin.setValue(math.degrees(current_angle))
+                self._set_spin_value_safely(self.angle_spin, math.degrees(current_angle))
             else:
-                # Были градусы, стали радианы
                 self.angle_spin.setRange(-2 * math.pi, 2 * math.pi)
-                self.angle_spin.setValue(math.radians(current_angle))
-            self.angle_spin.blockSignals(False)
+                self._set_spin_value_safely(self.angle_spin, math.radians(current_angle))
     
     def update_polar_from_cartesian(self):
         """Обновляет полярные координаты на основе декартовых"""
-        start_x = self.start_x_spin.value()
-        start_y = self.start_y_spin.value()
-        end_x = self.end_x_spin.value()
-        end_y = self.end_y_spin.value()
-        
-        dx = end_x - start_x
-        dy = end_y - start_y
-        radius = math.sqrt(dx*dx + dy*dy)
-        angle_rad = math.atan2(dy, dx)
-        
-        is_degrees = self.line_angle_combo.currentText() == "Градусы"
-        angle = math.degrees(angle_rad) if is_degrees else angle_rad
-        
-        self.radius_spin.blockSignals(True)
-        self.angle_spin.blockSignals(True)
-        self.radius_spin.setValue(radius)
-        self.angle_spin.setValue(angle)
-        self.radius_spin.blockSignals(False)
-        self.angle_spin.blockSignals(False)
+        radius, angle = self._line_polar_values()
+        self._set_spin_value_safely(self.radius_spin, radius)
+        self._set_spin_value_safely(self.angle_spin, angle)
     
     def update_cartesian_from_polar(self):
         """Обновляет декартовы координаты на основе полярных"""
-        start_x = self.start_x_spin.value()
-        start_y = self.start_y_spin.value()
-        radius = self.radius_spin.value()
-        angle = self.angle_spin.value()
-        
-        is_degrees = self.line_angle_combo.currentText() == "Градусы"
-        angle_rad = math.radians(angle) if is_degrees else angle
-        
-        end_x = start_x + radius * math.cos(angle_rad)
-        end_y = start_y + radius * math.sin(angle_rad)
-        
-        self.end_x_spin.blockSignals(True)
-        self.end_y_spin.blockSignals(True)
-        self.end_x_spin.setValue(end_x)
-        self.end_y_spin.setValue(end_y)
-        self.end_x_spin.blockSignals(False)
-        self.end_y_spin.blockSignals(False)
+        end_point = self._line_end_point_from_polar()
+        self._set_spin_value_safely(self.end_x_spin, end_point.x())
+        self._set_spin_value_safely(self.end_y_spin, end_point.y())
     
     def on_start_point_changed(self):
         """Обработчик изменения начальной точки"""
         if not self.editing_object:
             return
-        
-        start_x = self.start_x_spin.value()
-        start_y = self.start_y_spin.value()
-        
-        # Обновляем объект
         if isinstance(self.editing_object, LineSegment):
-            # Обновляем только начальную точку, конечная точка остается неизменной
-            self.editing_object.start_point = QPointF(start_x, start_y)
-            
-            # Обновляем полярные координаты, если они видны (на основе текущих значений конечной точки)
             if self.polar_group.isVisible():
                 self.update_polar_from_cartesian()
-            
-            self.apply_changes()
+            self._apply_line_points(
+                start_point=QPointF(self.start_x_spin.value(), self.start_y_spin.value()),
+            )
     
     def on_cartesian_end_changed(self):
         """Обработчик изменения конечной точки в декартовых координатах"""
         if not self.editing_object:
             return
-        
-        end_x = self.end_x_spin.value()
-        end_y = self.end_y_spin.value()
-        
         if isinstance(self.editing_object, LineSegment):
-            self.editing_object.end_point = QPointF(end_x, end_y)
-            
-            # Обновляем полярные координаты, если они видны
             if self.polar_group.isVisible():
                 self.update_polar_from_cartesian()
-            
-            self.apply_changes()
+            self._apply_line_points(
+                end_point=QPointF(self.end_x_spin.value(), self.end_y_spin.value()),
+            )
     
     def on_polar_end_changed(self):
         """Обработчик изменения конечной точки в полярных координатах"""
         if not self.editing_object:
             return
-        
-        # Обновляем декартовы координаты на основе полярных
         self.update_cartesian_from_polar()
-        
         if isinstance(self.editing_object, LineSegment):
-            end_x = self.end_x_spin.value()
-            end_y = self.end_y_spin.value()
-            self.editing_object.end_point = QPointF(end_x, end_y)
-            self.apply_changes()
+            self._apply_line_points(end_point=self._line_end_point_from_polar())
     
     def toggle_edit_mode(self):
         """Переключает режим редактирования (перемещение точек)"""
         self.editing_mode = not self.editing_mode
-        
-        # Определяем тип объекта для правильного текста
-        from widgets.primitives import Circle, Rectangle, Arc, Ellipse, Polygon
-        if isinstance(self.editing_object, LineSegment):
-            mode_text = "Перемещение точек"
-        elif isinstance(self.editing_object, Circle):
-            mode_text = "Перемещение точек"
-        elif isinstance(self.editing_object, Rectangle):
-            mode_text = "Перемещение углов"
-        elif isinstance(self.editing_object, Arc):
-            mode_text = "Перемещение точек"
-        elif isinstance(self.editing_object, Ellipse):
-            mode_text = "Перемещение точек"
-        elif isinstance(self.editing_object, Polygon):
-            mode_text = "Редактирование"
-        else:
-            mode_text = "Редактирование"
-        
-        if self.editing_mode:
-            self.toggle_edit_mode_btn.setText("Отключить редактирование")
-            self.edit_mode_label.setText(f"{mode_text}: Включено")
-            self.edit_mode_label.setStyleSheet("color: green; font-weight: bold;")
-        else:
-            self.toggle_edit_mode_btn.setText("Включить редактирование")
-            self.edit_mode_label.setText(f"{mode_text}: Отключено")
-            self.edit_mode_label.setStyleSheet("color: gray;")
+        mode_text = self._editing_mode_text(self.editing_object)
+        self._set_edit_mode_ui(self.editing_mode, mode_text)
+        if not self.editing_mode:
             self.dragging_point = None
-        
-        # Уведомляем канвас о режиме редактирования
         if self.canvas:
             self.canvas.set_editing_mode(self.editing_mode, self)
     
@@ -831,86 +919,41 @@ class EditDialog(QDialog):
     
     def load_circle_data(self, circle):
         """Загружает данные окружности в поля редактирования"""
-        from widgets.primitives import Circle
-        
-        # Блокируем сигналы, чтобы не вызывать обработчики при загрузке
-        self.circle_center_x_spin.blockSignals(True)
-        self.circle_center_y_spin.blockSignals(True)
-        self.circle_radius_spin.blockSignals(True)
-        self.circle_diameter_spin.blockSignals(True)
-        
-        # Центр
+        controls = [
+            self.circle_center_x_spin,
+            self.circle_center_y_spin,
+            self.circle_radius_spin,
+            self.circle_diameter_spin,
+        ]
+        self._block_controls(controls, True)
         self.circle_center_x_spin.setValue(circle.center.x())
         self.circle_center_y_spin.setValue(circle.center.y())
-        
-        # Радиус и диаметр
-        self.circle_radius_spin.setValue(circle.radius)
-        self.circle_diameter_spin.setValue(circle.radius * 2)
-        
-        # Устанавливаем способ задания по умолчанию (радиус)
-        self.circle_method_combo.setCurrentIndex(0)
-        
-        # Разблокируем сигналы
-        self.circle_center_x_spin.blockSignals(False)
-        self.circle_center_y_spin.blockSignals(False)
-        self.circle_radius_spin.blockSignals(False)
-        self.circle_diameter_spin.blockSignals(False)
+        self._set_circle_radius_controls(circle.radius)
+        self._set_combo_index_safely(self.circle_method_combo, 0)
+        self._block_controls(controls, False)
+        self._show_circle_value_group(True)
     
     def on_circle_method_changed(self, method_text):
         """Обработчик изменения способа задания окружности"""
-        if "радиус" in method_text.lower():
-            self.circle_radius_group.show()
-            self.circle_diameter_group.hide()
-        else:
-            self.circle_radius_group.hide()
-            self.circle_diameter_group.show()
+        self._show_circle_value_group(self._circle_is_radius_mode(method_text))
     
     def on_circle_center_changed(self):
         """Обработчик изменения центра окружности"""
         if not self.editing_object:
             return
-        
-        from widgets.primitives import Circle
-        if isinstance(self.editing_object, Circle):
-            center_x = self.circle_center_x_spin.value()
-            center_y = self.circle_center_y_spin.value()
-            self.editing_object.center = QPointF(center_x, center_y)
-            self.apply_changes()
+        self._apply_circle_center()
     
     def on_circle_radius_changed(self):
         """Обработчик изменения радиуса окружности"""
         if not self.editing_object:
             return
-        
-        from widgets.primitives import Circle
-        if isinstance(self.editing_object, Circle):
-            radius = self.circle_radius_spin.value()
-            self.editing_object.radius = radius
-            
-            # Обновляем диаметр
-            self.circle_diameter_spin.blockSignals(True)
-            self.circle_diameter_spin.setValue(radius * 2)
-            self.circle_diameter_spin.blockSignals(False)
-            
-            self.apply_changes()
+        self._apply_circle_radius(self.circle_radius_spin.value())
     
     def on_circle_diameter_changed(self):
         """Обработчик изменения диаметра окружности"""
         if not self.editing_object:
             return
-        
-        from widgets.primitives import Circle
-        if isinstance(self.editing_object, Circle):
-            diameter = self.circle_diameter_spin.value()
-            radius = diameter / 2.0
-            self.editing_object.radius = radius
-            
-            # Обновляем радиус
-            self.circle_radius_spin.blockSignals(True)
-            self.circle_radius_spin.setValue(radius)
-            self.circle_radius_spin.blockSignals(False)
-            
-            self.apply_changes()
+        self._apply_circle_radius(self.circle_diameter_spin.value() / 2.0)
     
     def setup_rectangle_editing(self, rectangle):
         """Настраивает интерфейс редактирования прямоугольника"""
@@ -1030,13 +1073,13 @@ class EditDialog(QDialog):
         from widgets.primitives import Rectangle
         
         # Блокируем сигналы, чтобы не вызывать обработчики при загрузке
-        self.rect_top_left_x_spin.blockSignals(True)
-        self.rect_top_left_y_spin.blockSignals(True)
-        self.rect_bottom_right_x_spin.blockSignals(True)
-        self.rect_bottom_right_y_spin.blockSignals(True)
-        self.rect_width_spin.blockSignals(True)
-        self.rect_height_spin.blockSignals(True)
-        self.rect_fillet_radius_spin.blockSignals(True)
+        self._block_controls([self.rect_top_left_x_spin], True)
+        self._block_controls([self.rect_top_left_y_spin], True)
+        self._block_controls([self.rect_bottom_right_x_spin], True)
+        self._block_controls([self.rect_bottom_right_y_spin], True)
+        self._block_controls([self.rect_width_spin], True)
+        self._block_controls([self.rect_height_spin], True)
+        self._block_controls([self.rect_fillet_radius_spin], True)
         
         # Позиция углов
         self.rect_top_left_x_spin.setValue(rectangle.top_left.x())
@@ -1053,13 +1096,13 @@ class EditDialog(QDialog):
         self.rect_fillet_radius_spin.setValue(getattr(rectangle, 'fillet_radius', 0.0))
         
         # Разблокируем сигналы
-        self.rect_top_left_x_spin.blockSignals(False)
-        self.rect_top_left_y_spin.blockSignals(False)
-        self.rect_bottom_right_x_spin.blockSignals(False)
-        self.rect_bottom_right_y_spin.blockSignals(False)
-        self.rect_width_spin.blockSignals(False)
-        self.rect_height_spin.blockSignals(False)
-        self.rect_fillet_radius_spin.blockSignals(False)
+        self._block_controls([self.rect_top_left_x_spin], False)
+        self._block_controls([self.rect_top_left_y_spin], False)
+        self._block_controls([self.rect_bottom_right_x_spin], False)
+        self._block_controls([self.rect_bottom_right_y_spin], False)
+        self._block_controls([self.rect_width_spin], False)
+        self._block_controls([self.rect_height_spin], False)
+        self._block_controls([self.rect_fillet_radius_spin], False)
     
     def on_rectangle_position_changed(self):
         """Обработчик изменения позиции прямоугольника"""
@@ -1078,12 +1121,12 @@ class EditDialog(QDialog):
             
             # Обновляем размеры
             bbox = self.editing_object.get_bounding_box()
-            self.rect_width_spin.blockSignals(True)
-            self.rect_height_spin.blockSignals(True)
+            self._block_controls([self.rect_width_spin], True)
+            self._block_controls([self.rect_height_spin], True)
             self.rect_width_spin.setValue(bbox.width())
             self.rect_height_spin.setValue(bbox.height())
-            self.rect_width_spin.blockSignals(False)
-            self.rect_height_spin.blockSignals(False)
+            self._block_controls([self.rect_width_spin], False)
+            self._block_controls([self.rect_height_spin], False)
             
             self.apply_changes()
     
@@ -1105,21 +1148,21 @@ class EditDialog(QDialog):
             )
             
             # Обновляем поля позиции
-            self.rect_bottom_right_x_spin.blockSignals(True)
-            self.rect_bottom_right_y_spin.blockSignals(True)
+            self._block_controls([self.rect_bottom_right_x_spin], True)
+            self._block_controls([self.rect_bottom_right_y_spin], True)
             self.rect_bottom_right_x_spin.setValue(self.editing_object.bottom_right.x())
             self.rect_bottom_right_y_spin.setValue(self.editing_object.bottom_right.y())
-            self.rect_bottom_right_x_spin.blockSignals(False)
-            self.rect_bottom_right_y_spin.blockSignals(False)
+            self._block_controls([self.rect_bottom_right_x_spin], False)
+            self._block_controls([self.rect_bottom_right_y_spin], False)
             
             # Проверяем радиус скругления (не должен превышать половину меньшей стороны)
             max_fillet = min(width, height) / 2.0
             current_fillet = getattr(self.editing_object, 'fillet_radius', 0.0)
             if current_fillet > max_fillet:
                 self.editing_object.fillet_radius = max_fillet
-                self.rect_fillet_radius_spin.blockSignals(True)
+                self._block_controls([self.rect_fillet_radius_spin], True)
                 self.rect_fillet_radius_spin.setValue(max_fillet)
-                self.rect_fillet_radius_spin.blockSignals(False)
+                self._block_controls([self.rect_fillet_radius_spin], False)
             
             self.apply_changes()
     
@@ -1137,9 +1180,9 @@ class EditDialog(QDialog):
             max_fillet = min(bbox.width(), bbox.height()) / 2.0
             if fillet_radius > max_fillet:
                 fillet_radius = max_fillet
-                self.rect_fillet_radius_spin.blockSignals(True)
+                self._block_controls([self.rect_fillet_radius_spin], True)
                 self.rect_fillet_radius_spin.setValue(fillet_radius)
-                self.rect_fillet_radius_spin.blockSignals(False)
+                self._block_controls([self.rect_fillet_radius_spin], False)
             
             self.editing_object.fillet_radius = fillet_radius
             self.apply_changes()
@@ -1245,12 +1288,12 @@ class EditDialog(QDialog):
             return
         
         arc = self.editing_object
-        self.arc_center_x_spin.blockSignals(True)
-        self.arc_center_y_spin.blockSignals(True)
-        self.arc_radius_x_spin.blockSignals(True)
-        self.arc_radius_y_spin.blockSignals(True)
-        self.arc_start_angle_spin.blockSignals(True)
-        self.arc_end_angle_spin.blockSignals(True)
+        self._block_controls([self.arc_center_x_spin], True)
+        self._block_controls([self.arc_center_y_spin], True)
+        self._block_controls([self.arc_radius_x_spin], True)
+        self._block_controls([self.arc_radius_y_spin], True)
+        self._block_controls([self.arc_start_angle_spin], True)
+        self._block_controls([self.arc_end_angle_spin], True)
         
         self.arc_center_x_spin.setValue(arc.center.x())
         self.arc_center_y_spin.setValue(arc.center.y())
@@ -1259,12 +1302,12 @@ class EditDialog(QDialog):
         self.arc_start_angle_spin.setValue(arc.start_angle)
         self.arc_end_angle_spin.setValue(arc.end_angle)
         
-        self.arc_center_x_spin.blockSignals(False)
-        self.arc_center_y_spin.blockSignals(False)
-        self.arc_radius_x_spin.blockSignals(False)
-        self.arc_radius_y_spin.blockSignals(False)
-        self.arc_start_angle_spin.blockSignals(False)
-        self.arc_end_angle_spin.blockSignals(False)
+        self._block_controls([self.arc_center_x_spin], False)
+        self._block_controls([self.arc_center_y_spin], False)
+        self._block_controls([self.arc_radius_x_spin], False)
+        self._block_controls([self.arc_radius_y_spin], False)
+        self._block_controls([self.arc_start_angle_spin], False)
+        self._block_controls([self.arc_end_angle_spin], False)
         
         self.apply_changes()
     
@@ -1376,20 +1419,20 @@ class EditDialog(QDialog):
             return
         
         ellipse = self.editing_object
-        self.ellipse_center_x_spin.blockSignals(True)
-        self.ellipse_center_y_spin.blockSignals(True)
-        self.ellipse_radius_x_spin.blockSignals(True)
-        self.ellipse_radius_y_spin.blockSignals(True)
+        self._block_controls([self.ellipse_center_x_spin], True)
+        self._block_controls([self.ellipse_center_y_spin], True)
+        self._block_controls([self.ellipse_radius_x_spin], True)
+        self._block_controls([self.ellipse_radius_y_spin], True)
         
         self.ellipse_center_x_spin.setValue(ellipse.center.x())
         self.ellipse_center_y_spin.setValue(ellipse.center.y())
         self.ellipse_radius_x_spin.setValue(ellipse.radius_x)
         self.ellipse_radius_y_spin.setValue(ellipse.radius_y)
         
-        self.ellipse_center_x_spin.blockSignals(False)
-        self.ellipse_center_y_spin.blockSignals(False)
-        self.ellipse_radius_x_spin.blockSignals(False)
-        self.ellipse_radius_y_spin.blockSignals(False)
+        self._block_controls([self.ellipse_center_x_spin], False)
+        self._block_controls([self.ellipse_center_y_spin], False)
+        self._block_controls([self.ellipse_radius_x_spin], False)
+        self._block_controls([self.ellipse_radius_y_spin], False)
         
         self.apply_changes()
     
@@ -1515,11 +1558,11 @@ class EditDialog(QDialog):
         if not hasattr(polygon, 'construction_type'):
             polygon.construction_type = "inscribed"
         
-        self.polygon_center_x_spin.blockSignals(True)
-        self.polygon_center_y_spin.blockSignals(True)
-        self.polygon_radius_spin.blockSignals(True)
-        self.polygon_num_vertices_spin.blockSignals(True)
-        self.polygon_construction_combo.blockSignals(True)
+        self._block_controls([self.polygon_center_x_spin], True)
+        self._block_controls([self.polygon_center_y_spin], True)
+        self._block_controls([self.polygon_radius_spin], True)
+        self._block_controls([self.polygon_num_vertices_spin], True)
+        self._block_controls([self.polygon_construction_combo], True)
         
         self.polygon_center_x_spin.setValue(polygon.center.x())
         self.polygon_center_y_spin.setValue(polygon.center.y())
@@ -1531,13 +1574,11 @@ class EditDialog(QDialog):
         else:
             self.polygon_construction_combo.setCurrentIndex(0)
         
-        self.polygon_center_x_spin.blockSignals(False)
-        self.polygon_center_y_spin.blockSignals(False)
-        self.polygon_center_x_spin.blockSignals(False)
-        self.polygon_center_y_spin.blockSignals(False)
-        self.polygon_radius_spin.blockSignals(False)
-        self.polygon_num_vertices_spin.blockSignals(False)
-        self.polygon_construction_combo.blockSignals(False)
+        self._block_controls([self.polygon_center_x_spin], False)
+        self._block_controls([self.polygon_center_y_spin], False)
+        self._block_controls([self.polygon_radius_spin], False)
+        self._block_controls([self.polygon_num_vertices_spin], False)
+        self._block_controls([self.polygon_construction_combo], False)
         
         self.apply_changes()
     
@@ -1770,30 +1811,8 @@ class EditDialog(QDialog):
         state = {}
         state['type'] = type(obj).__name__
         
-        if isinstance(obj, LinearDimension):
-            state['start'] = QPointF(obj.start)
-            state['end'] = QPointF(obj.end)
-            state['dimension_type'] = obj.dimension_type
-            state['offset'] = obj.offset
-            state['text_override'] = obj.text_override
-            state['text_position_override'] = QPointF(obj.text_position_override) if obj.text_position_override is not None else None
-            state['style'] = copy.deepcopy(obj.style)
-        elif isinstance(obj, RadialDimension):
-            state['center'] = QPointF(obj.center)
-            state['radius_point'] = QPointF(obj.radius_point)
-            state['dimension_type'] = obj.dimension_type
-            state['leader_point'] = QPointF(obj.leader_point) if obj.leader_point is not None else None
-            state['text_override'] = obj.text_override
-            state['text_position_override'] = QPointF(obj.text_position_override) if obj.text_position_override is not None else None
-            state['style'] = copy.deepcopy(obj.style)
-        elif isinstance(obj, AngularDimension):
-            state['vertex'] = QPointF(obj.vertex)
-            state['ray_start'] = QPointF(obj.ray_start)
-            state['ray_end'] = QPointF(obj.ray_end)
-            state['radius'] = obj.radius
-            state['text_override'] = obj.text_override
-            state['text_position_override'] = QPointF(obj.text_position_override) if obj.text_position_override is not None else None
-            state['style'] = copy.deepcopy(obj.style)
+        if isinstance(obj, (LinearDimension, RadialDimension, AngularDimension)):
+            state.update(self._capture_dimension_state(obj))
         elif isinstance(obj, LineSegment):
             state['start_point'] = QPointF(obj.start_point)
             state['end_point'] = QPointF(obj.end_point)
@@ -1830,30 +1849,8 @@ class EditDialog(QDialog):
         
         from widgets.primitives import Circle, Rectangle
         
-        if isinstance(obj, LinearDimension):
-            obj.start = state['start']
-            obj.end = state['end']
-            obj.dimension_type = state['dimension_type']
-            obj.offset = state['offset']
-            obj.text_override = state['text_override']
-            obj.text_position_override = QPointF(state['text_position_override']) if state['text_position_override'] is not None else None
-            obj.style = copy.deepcopy(state['style'])
-        elif isinstance(obj, RadialDimension):
-            obj.center = state['center']
-            obj.radius_point = state['radius_point']
-            obj.dimension_type = state['dimension_type']
-            obj.leader_point = QPointF(state['leader_point']) if state['leader_point'] is not None else None
-            obj.text_override = state['text_override']
-            obj.text_position_override = QPointF(state['text_position_override']) if state['text_position_override'] is not None else None
-            obj.style = copy.deepcopy(state['style'])
-        elif isinstance(obj, AngularDimension):
-            obj.vertex = state['vertex']
-            obj.ray_start = state['ray_start']
-            obj.ray_end = state['ray_end']
-            obj.radius = state['radius']
-            obj.text_override = state['text_override']
-            obj.text_position_override = QPointF(state['text_position_override']) if state['text_position_override'] is not None else None
-            obj.style = copy.deepcopy(state['style'])
+        if isinstance(obj, (LinearDimension, RadialDimension, AngularDimension)):
+            self._restore_dimension_state(obj, state)
         elif isinstance(obj, LineSegment):
             obj.start_point = state['start_point']
             obj.end_point = state['end_point']

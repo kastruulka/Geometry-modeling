@@ -32,9 +32,7 @@ class SnapPoint:
     
     def distance_to(self, other_point: QPointF) -> float:
         """Вычисляет расстояние до другой точки"""
-        dx = self.point.x() - other_point.x()
-        dy = self.point.y() - other_point.y()
-        return math.sqrt(dx*dx + dy*dy)
+        return math.hypot(self.point.x() - other_point.x(), self.point.y() - other_point.y())
 
 
 class SnapManager:
@@ -59,6 +57,136 @@ class SnapManager:
     def set_tolerance(self, tolerance: float):
         """Устанавливает радиус привязки"""
         self.tolerance = tolerance
+
+    def _distance_between_points(self, first: QPointF, second: QPointF) -> float:
+        """Возвращает расстояние между двумя точками."""
+        return math.hypot(first.x() - second.x(), first.y() - second.y())
+
+    def _is_far_enough_from_segment_endpoints(
+        self,
+        point: QPointF,
+        segment_start: QPointF,
+        segment_end: QPointF,
+        min_distance: float,
+    ) -> bool:
+        """Проверяет, что точка не слишком близка к концам сегмента."""
+        return (
+            self._distance_between_points(point, segment_start) > min_distance
+            and self._distance_between_points(point, segment_end) > min_distance
+        )
+
+    def _arc_mid_angle(self, start_angle: float, end_angle: float) -> float:
+        """Возвращает средний угол дуги с учетом перехода через 360 градусов."""
+        mid_angle = (start_angle + end_angle) / 2.0
+        if start_angle > end_angle:
+            span = (360.0 - start_angle) + end_angle
+            mid_angle = (start_angle + span / 2.0) % 360.0
+        return mid_angle
+
+    def _to_ellipse_local_coords(self, point: QPointF, ellipse) -> tuple[float, float]:
+        """Переводит мировую точку в локальные координаты эллипса с учетом поворота."""
+        x = point.x() - ellipse.center.x()
+        y = point.y() - ellipse.center.y()
+        if abs(ellipse.rotation_angle) > 1e-6:
+            cos_r = math.cos(-ellipse.rotation_angle)
+            sin_r = math.sin(-ellipse.rotation_angle)
+            return x * cos_r - y * sin_r, x * sin_r + y * cos_r
+        return x, y
+
+    def _from_ellipse_local_coords(self, x_local: float, y_local: float, ellipse) -> QPointF:
+        """Переводит локальные координаты эллипса в мировые."""
+        if abs(ellipse.rotation_angle) > 1e-6:
+            cos_r = math.cos(ellipse.rotation_angle)
+            sin_r = math.sin(ellipse.rotation_angle)
+            x_world = x_local * cos_r - y_local * sin_r
+            y_world = x_local * sin_r + y_local * cos_r
+        else:
+            x_world, y_world = x_local, y_local
+        return QPointF(ellipse.center.x() + x_world, ellipse.center.y() + y_world)
+
+    def _normalize_ellipse_coords(self, x_local: float, y_local: float, ellipse) -> tuple[float, float] | None:
+        """Нормализует локальные координаты эллипса к единичной окружности."""
+        if ellipse.radius_x < 1e-6 or ellipse.radius_y < 1e-6:
+            return None
+        return x_local / ellipse.radius_x, y_local / ellipse.radius_y
+
+    def _ellipse_equation_value(self, point: QPointF, ellipse) -> float | None:
+        """Возвращает значение уравнения эллипса в точке."""
+        local = self._to_ellipse_local_coords(point, ellipse)
+        normalized = self._normalize_ellipse_coords(local[0], local[1], ellipse)
+        if normalized is None:
+            return None
+        x_norm, y_norm = normalized
+        return x_norm * x_norm + y_norm * y_norm
+
+    def _arc_uses_direct_y(self, arc: Arc) -> bool:
+        """Определяет, нужно ли для дуги использовать прямой Y при вычислении параметрического угла."""
+        orig_start = arc.start_angle
+        orig_end = arc.end_angle
+        start_angle_norm = orig_start % 360
+        end_angle_norm = orig_end % 360
+
+        if abs(orig_start - 180.0) < 1.0 and abs(orig_end - 0.0) < 1.0:
+            return True
+        if start_angle_norm > end_angle_norm and (start_angle_norm - end_angle_norm) > 180:
+            if abs(orig_end - 360.0) > 1.0 and abs(orig_end - 0.0) < 1.0:
+                return True
+        return False
+
+    def _normalized_arc_range(self, arc: Arc) -> tuple[float, float]:
+        """Возвращает нормализованный диапазон углов дуги."""
+        start_angle = arc.start_angle % 360
+        end_angle = arc.end_angle % 360
+        if abs(arc.end_angle - 360.0) < 1e-6:
+            end_angle = 360.0
+        elif end_angle == 0 and arc.end_angle > 180:
+            end_angle = 360.0
+        return start_angle, end_angle
+
+    def _project_point_to_segment(
+        self,
+        point: QPointF,
+        segment_start: QPointF,
+        segment_end: QPointF,
+    ) -> tuple[QPointF, float, float] | None:
+        """Проецирует точку на отрезок и возвращает точку проекции, параметр t и длину в квадрате."""
+        dx = segment_end.x() - segment_start.x()
+        dy = segment_end.y() - segment_start.y()
+        length_sq = dx * dx + dy * dy
+        if length_sq < 1e-10:
+            return None
+        t = ((point.x() - segment_start.x()) * dx + (point.y() - segment_start.y()) * dy) / length_sq
+        t = max(0.0, min(1.0, t))
+        projection = QPointF(segment_start.x() + t * dx, segment_start.y() + t * dy)
+        return projection, t, length_sq
+
+    def _segment_components(
+        self,
+        segment_start: QPointF,
+        segment_end: QPointF,
+    ) -> tuple[float, float, float]:
+        """Возвращает dx, dy и квадрат длины отрезка."""
+        dx = segment_end.x() - segment_start.x()
+        dy = segment_end.y() - segment_start.y()
+        return dx, dy, dx * dx + dy * dy
+
+    def _line_points_in_ellipse_local_coords(
+        self,
+        line_start: QPointF,
+        line_end: QPointF,
+        ellipse,
+    ) -> tuple[float, float, float, float]:
+        """Возвращает концы линии в локальных координатах эллипса."""
+        x1_rot, y1_rot = self._to_ellipse_local_coords(line_start, ellipse)
+        x2_rot, y2_rot = self._to_ellipse_local_coords(line_end, ellipse)
+        return x1_rot, y1_rot, x2_rot, y2_rot
+
+    def _normalize_vector(self, dx: float, dy: float) -> tuple[float, float, float] | None:
+        """Нормализует вектор и возвращает ux, uy, длину."""
+        length = math.hypot(dx, dy)
+        if length < 1e-10:
+            return None
+        return dx / length, dy / length, length
     
     def get_snap_points(self, objects: List[GeometricObject], 
                        exclude_object: Optional[GeometricObject] = None) -> List[SnapPoint]:
@@ -157,10 +285,7 @@ class SnapManager:
         # Function to check if point is duplicate
         def is_duplicate_point(new_point: QPointF, existing_points: List[SnapPoint]) -> bool:
             for existing in existing_points:
-                dx = new_point.x() - existing.point.x()
-                dy = new_point.y() - existing.point.y()
-                distance = math.sqrt(dx*dx + dy*dy)
-                if distance < 0.1:
+                if self._distance_between_points(new_point, existing.point) < 0.1:
                     return True
             return False
         
@@ -369,12 +494,8 @@ class SnapManager:
                 intersections = self._find_intersections(start_point, point, obj)
                 for intersection in intersections:
                     # Проверяем, что точка пересечения не слишком близко к началу или концу линии
-                    dist_to_start = math.sqrt((intersection.x() - start_point.x())**2 + 
-                                             (intersection.y() - start_point.y())**2)
-                    dist_to_end = math.sqrt((intersection.x() - point.x())**2 + 
-                                           (intersection.y() - point.y())**2)
                     # Игнорируем точки, которые слишком близко к концам (меньше 1 пикселя)
-                    if dist_to_start > 1.0 and dist_to_end > 1.0:
+                    if self._is_far_enough_from_segment_endpoints(intersection, start_point, point, 1.0):
                         dynamic_points.append(SnapPoint(intersection, SnapType.INTERSECTION, obj))
             
             # Перпендикуляры
@@ -402,11 +523,7 @@ class SnapManager:
             )
             if intersection:
                 # Проверяем, что точка не совпадает с началом или концом линии
-                dist_to_start = math.sqrt((intersection.x() - line_start.x())**2 + 
-                                         (intersection.y() - line_start.y())**2)
-                dist_to_end = math.sqrt((intersection.x() - line_end.x())**2 + 
-                                       (intersection.y() - line_end.y())**2)
-                if dist_to_start > 1e-6 and dist_to_end > 1e-6:
+                if self._is_far_enough_from_segment_endpoints(intersection, line_start, line_end, 1e-6):
                     intersections.append(intersection)
         elif isinstance(obj, Circle):
             intersections.extend(self._line_circle_intersection(
@@ -1347,24 +1464,9 @@ class SnapManager:
         """Находит точки пересечения линии с эллипсом (или дугой)"""
         intersections = []
         
-        # Переводим в локальную систему координат эллипса
-        # Сначала переносим центр в начало
-        x1 = line_start.x() - ellipse.center.x()
-        y1 = line_start.y() - ellipse.center.y()
-        x2 = line_end.x() - ellipse.center.x()
-        y2 = line_end.y() - ellipse.center.y()
-        
-        # Применяем обратный поворот
-        if abs(ellipse.rotation_angle) > 1e-6:
-            cos_r = math.cos(-ellipse.rotation_angle)
-            sin_r = math.sin(-ellipse.rotation_angle)
-            x1_rot = x1 * cos_r - y1 * sin_r
-            y1_rot = x1 * sin_r + y1 * cos_r
-            x2_rot = x2 * cos_r - y2 * sin_r
-            y2_rot = x2 * sin_r + y2 * cos_r
-        else:
-            x1_rot, y1_rot = x1, y1
-            x2_rot, y2_rot = x2, y2
+        x1_rot, y1_rot, x2_rot, y2_rot = self._line_points_in_ellipse_local_coords(
+            line_start, line_end, ellipse
+        )
         
         # Нормализуем эллипс к единичной окружности
         if ellipse.radius_x < 1e-6 or ellipse.radius_y < 1e-6:
@@ -1388,8 +1490,6 @@ class SnapManager:
         
         if discriminant < 0:
             return intersections
-        
-        sqrt_disc = math.sqrt(discriminant)
         
         # Две точки пересечения
         # Используем правильную формулу для пересечения линии с единичной окружностью
@@ -1421,11 +1521,6 @@ class SnapManager:
         # где dx_rot = dx_norm * radius_x, dy_rot = dy_norm * radius_y
         # Но нам нужно найти параметр t для исходной линии в мировых координатах
         
-        # Вычисляем направление линии в локальных координатах эллипса (до нормализации)
-        dx_rot = (x2_rot - x1_rot)
-        dy_rot = (y2_rot - y1_rot)
-        dr_rot_sq = dx_rot * dx_rot + dy_rot * dy_rot
-        
         for t_norm in [t1, t2]:
             # Точка в нормализованном пространстве
             x_norm = x1_norm + t_norm * dx_norm
@@ -1441,108 +1536,45 @@ class SnapManager:
             x_local = x_norm * ellipse.radius_x
             y_local = y_norm * ellipse.radius_y
             
-            # Применяем поворот обратно
-            if abs(ellipse.rotation_angle) > 1e-6:
-                cos_r = math.cos(ellipse.rotation_angle)
-                sin_r = math.sin(ellipse.rotation_angle)
-                x_world = x_local * cos_r - y_local * sin_r
-                y_world = x_local * sin_r + y_local * cos_r
-            else:
-                x_world, y_world = x_local, y_local
-            
-            # Переводим в мировые координаты
-            x = x_world + ellipse.center.x()
-            y = y_world + ellipse.center.y()
+            world_point = self._from_ellipse_local_coords(x_local, y_local, ellipse)
             
             # Проверяем, что точка на отрезке
-            # Вычисляем параметр t для точки на исходной линии: P = P1 + t * (P2 - P1)
-            dx_line = line_end.x() - line_start.x()
-            dy_line = line_end.y() - line_start.y()
-            line_len_sq = dx_line*dx_line + dy_line*dy_line
-            
-            if line_len_sq > 1e-10:
-                t = ((x - line_start.x()) * dx_line + (y - line_start.y()) * dy_line) / line_len_sq
+            projection = self._project_point_to_segment(world_point, line_start, line_end)
+            if projection is not None:
+                _, t, _ = projection
                 # Проверяем, что точка находится на отрезке (с небольшой погрешностью)
                 if -1e-6 <= t <= 1.0 + 1e-6:
                     # Убеждаемся, что точка действительно на эллипсе (проверка расстояния)
-                    # Переводим точку обратно в локальные координаты для проверки
-                    check_x = x - ellipse.center.x()
-                    check_y = y - ellipse.center.y()
-                    
-                    if abs(ellipse.rotation_angle) > 1e-6:
-                        cos_r = math.cos(-ellipse.rotation_angle)
-                        sin_r = math.sin(-ellipse.rotation_angle)
-                        check_x_rot = check_x * cos_r - check_y * sin_r
-                        check_y_rot = check_x * sin_r + check_y * cos_r
-                    else:
-                        check_x_rot, check_y_rot = check_x, check_y
-                    
-                    # Проверяем уравнение эллипса: (x/a)^2 + (y/b)^2 = 1
-                    ellipse_eq = (check_x_rot / ellipse.radius_x)**2 + (check_y_rot / ellipse.radius_y)**2
-                    if abs(ellipse_eq - 1.0) < 0.1:  # Увеличиваем допустимую погрешность
-                        intersections.append(QPointF(x, y))
+                    ellipse_eq = self._ellipse_equation_value(world_point, ellipse)
+                    if ellipse_eq is not None and abs(ellipse_eq - 1.0) < 0.1:  # Увеличиваем допустимую погрешность
+                        intersections.append(QPointF(world_point))
         
         return intersections
     
     def _point_on_arc(self, point: QPointF, arc: Arc) -> bool:
         """Проверяет, находится ли точка на дуге (в её угловом диапазоне)"""
-        # Переводим точку в локальные координаты
-        x = point.x() - arc.center.x()
-        y = point.y() - arc.center.y()
-        
-        # Применяем обратный поворот
-        if abs(arc.rotation_angle) > 1e-6:
-            cos_r = math.cos(-arc.rotation_angle)
-            sin_r = math.sin(-arc.rotation_angle)
-            x_rot = x * cos_r - y * sin_r
-            y_rot = x * sin_r + y * cos_r
-        else:
-            x_rot, y_rot = x, y
+        x_rot, y_rot = self._to_ellipse_local_coords(point, arc)
         
         # Вычисляем параметрический угол
         if abs(x_rot) < 1e-6 and abs(y_rot) < 1e-6:
             return False
         
         # Нормализуем к единичному эллипсу для вычисления угла
-        if arc.radius_x < 1e-6 or arc.radius_y < 1e-6:
+        normalized = self._normalize_ellipse_coords(x_rot, y_rot, arc)
+        if normalized is None:
             return False
-        
-        x_norm = x_rot / arc.radius_x
-        y_norm = y_rot / arc.radius_y
+        x_norm, y_norm = normalized
         
         # Проверяем, что точка находится на эллипсе (с небольшой погрешностью)
         dist_sq = x_norm * x_norm + y_norm * y_norm
-        
-        # Нормализуем углы дуги
-        # Сохраняем оригинальные значения для проверки
-        orig_start = arc.start_angle
-        orig_end = arc.end_angle
-        
-        # Определяем направление дуги: вверх или вниз
-        # Дуга вверх: start_angle=180, end_angle=360
-        # Дуга вниз: start_angle=180, end_angle=0
-        start_angle_norm = orig_start % 360
-        end_angle_norm = orig_end % 360
-        
-        # Определяем, является ли дуга дугой вниз
-        # Дуга вниз: start_angle=180, end_angle=0 (не 360!)
-        # Дуга вверх: start_angle=180, end_angle=360
-        is_arc_down = False
-        if abs(orig_start - 180.0) < 1.0:  # start_angle точно 180
-            if abs(orig_end - 0.0) < 1.0:  # end_angle точно 0 (не 360!)
-                is_arc_down = True
-            # Если end_angle=360, это дуга вверх, оставляем is_arc_down=False
-        elif start_angle_norm > end_angle_norm and (start_angle_norm - end_angle_norm) > 180:
-            # Дуга идет от большего угла к меньшему через 0°, вероятно вниз
-            # Но только если end_angle не равен 360 (дуга вверх имеет end_angle=360)
-            if abs(orig_end - 360.0) > 1.0 and abs(orig_end - 0.0) < 1.0:  # end_angle точно 0, не 360
-                is_arc_down = True
+        if abs(dist_sq - 1.0) > 0.1:
+            return False
         
         # Вычисляем параметрический угол эллипса
         # Для эллипса: x = a*cos(t), y = b*sin(t)
         # Для дуги вверх (180-360): нужно инвертировать Y для системы с Y вниз
         # Для дуги вниз (180-0): используем обычную формулу
-        if is_arc_down:
+        if self._arc_uses_direct_y(arc):
             # Дуга вниз: используем обычную формулу
             angle_rad = math.atan2(y_norm, x_norm)
         else:
@@ -1555,15 +1587,7 @@ class SnapManager:
         if angle_deg < 0:
             angle_deg += 360
         
-        # Нормализуем углы в диапазон [0, 360)
-        start_angle = orig_start % 360
-        end_angle = orig_end % 360
-        
-        # Если end_angle был 360 или близок к 360, устанавливаем его в 360
-        if abs(orig_end - 360.0) < 1e-6:
-            end_angle = 360.0
-        elif end_angle == 0 and orig_end > 180:
-            end_angle = 360.0
+        start_angle, end_angle = self._normalized_arc_range(arc)
         
         # Проверяем, попадает ли угол в диапазон
         if start_angle < end_angle:
@@ -1585,16 +1609,12 @@ class SnapManager:
                                obj_start: QPointF, obj_end: QPointF) -> Optional[QPointF]:
         """Находит основание перпендикуляра от линии к отрезку"""
         # Направление текущей линии
-        line_dx = line_end.x() - line_start.x()
-        line_dy = line_end.y() - line_start.y()
-        line_len_sq = line_dx*line_dx + line_dy*line_dy
+        line_dx, line_dy, line_len_sq = self._segment_components(line_start, line_end)
         if line_len_sq < 1e-10:
             return None
         
         # Направление объекта
-        obj_dx = obj_end.x() - obj_start.x()
-        obj_dy = obj_end.y() - obj_start.y()
-        obj_len_sq = obj_dx*obj_dx + obj_dy*obj_dy
+        obj_dx, obj_dy, obj_len_sq = self._segment_components(obj_start, obj_end)
         if obj_len_sq < 1e-10:
             return None
         
@@ -1611,16 +1631,10 @@ class SnapManager:
         
         # Проверяем конечные точки объекта
         for test_point in [obj_start, obj_end]:
-            # Вектор от точки объекта к ближайшей точке на линии
-            # Ближайшая точка на линии: проекция test_point на линию
-            t_line = ((test_point.x() - line_start.x()) * line_dx + 
-                     (test_point.y() - line_start.y()) * line_dy) / line_len_sq
-            t_line = max(0, min(1, t_line))  # Ограничиваем отрезком
-            
-            closest_on_line = QPointF(
-                line_start.x() + t_line * line_dx,
-                line_start.y() + t_line * line_dy
-            )
+            projection = self._project_point_to_segment(test_point, line_start, line_end)
+            if projection is None:
+                continue
+            closest_on_line, _, _ = projection
             
             # Вектор от closest_on_line к test_point
             perp_dx = test_point.x() - closest_on_line.x()
@@ -1659,14 +1673,10 @@ class SnapManager:
             
             # Проверяем, что это действительно перпендикуляр
             # Находим ближайшую точку на линии
-            t_line = ((perp_point.x() - line_start.x()) * line_dx + 
-                     (perp_point.y() - line_start.y()) * line_dy) / line_len_sq
-            t_line = max(0, min(1, t_line))
-            
-            closest_on_line = QPointF(
-                line_start.x() + t_line * line_dx,
-                line_start.y() + t_line * line_dy
-            )
+            projection = self._project_point_to_segment(perp_point, line_start, line_end)
+            if projection is None:
+                return best_point if best_point and best_angle_diff < 0.1 else None
+            closest_on_line, _, _ = projection
             
             # Вектор перпендикуляра
             perp_vec_x = perp_point.x() - closest_on_line.x()
@@ -1687,46 +1697,43 @@ class SnapManager:
                                  center: QPointF, radius: float) -> Optional[QPointF]:
         """Находит точку на окружности, которая является основанием перпендикуляра от линии"""
         # Направление линии
-        line_dx = line_end.x() - line_start.x()
-        line_dy = line_end.y() - line_start.y()
-        line_len_sq = line_dx*line_dx + line_dy*line_dy
+        line_dx, line_dy, line_len_sq = self._segment_components(line_start, line_end)
         
         if line_len_sq < 1e-10:
             return None
         
         # Находим ближайшую точку на линии к центру окружности
-        t = ((center.x() - line_start.x()) * line_dx + 
-             (center.y() - line_start.y()) * line_dy) / line_len_sq
-        t = max(0, min(1, t))  # Ограничиваем отрезком
-        
-        closest_on_line = QPointF(
-            line_start.x() + t * line_dx,
-            line_start.y() + t * line_dy
-        )
+        projection = self._project_point_to_segment(center, line_start, line_end)
+        if projection is None:
+            return None
+        closest_on_line, _, _ = projection
         
         # Вектор от центра к ближайшей точке на линии
         dx = closest_on_line.x() - center.x()
         dy = closest_on_line.y() - center.y()
-        dist = math.sqrt(dx*dx + dy*dy)
+        normalized = self._normalize_vector(dx, dy)
         
-        if dist < 1e-10:
+        if normalized is None:
             # Центр на линии - любая точка на окружности перпендикулярна
             # Возвращаем точку в направлении перпендикуляра к линии
             perp_dx = -line_dy
             perp_dy = line_dx
-            perp_len = math.sqrt(perp_dx*perp_dx + perp_dy*perp_dy)
-            if perp_len > 1e-10:
+            perp_normalized = self._normalize_vector(perp_dx, perp_dy)
+            if perp_normalized is not None:
+                perp_ux, perp_uy, _ = perp_normalized
                 perp_point = QPointF(
-                    center.x() + radius * perp_dx / perp_len,
-                    center.y() + radius * perp_dy / perp_len
+                    center.x() + radius * perp_ux,
+                    center.y() + radius * perp_uy
                 )
                 return perp_point
             return None
+
+        ux, uy, _ = normalized
         
         # Нормализуем и умножаем на радиус
         perp_point = QPointF(
-            center.x() + radius * dx / dist,
-            center.y() + radius * dy / dist
+            center.x() + radius * ux,
+            center.y() + radius * uy
         )
         
         return perp_point
@@ -1741,45 +1748,27 @@ class SnapManager:
                                   ellipse) -> Optional[QPointF]:
         """Находит точку на эллипсе, которая является основанием перпендикуляра от линии"""
         # Направление линии
-        line_dx = line_end.x() - line_start.x()
-        line_dy = line_end.y() - line_start.y()
-        line_len_sq = line_dx*line_dx + line_dy*line_dy
+        line_dx, line_dy, line_len_sq = self._segment_components(line_start, line_end)
         
         if line_len_sq < 1e-10:
             return None
         
         # Находим ближайшую точку на линии к центру эллипса
-        t_line = ((ellipse.center.x() - line_start.x()) * line_dx + 
-                  (ellipse.center.y() - line_start.y()) * line_dy) / line_len_sq
-        t_line = max(0, min(1, t_line))  # Ограничиваем отрезком
+        projection = self._project_point_to_segment(ellipse.center, line_start, line_end)
+        if projection is None:
+            return None
+        closest_on_line, _, _ = projection
         
-        closest_on_line = QPointF(
-            line_start.x() + t_line * line_dx,
-            line_start.y() + t_line * line_dy
-        )
-        
-        # Переводим closest_on_line в локальные координаты эллипса
-        x = closest_on_line.x() - ellipse.center.x()
-        y = closest_on_line.y() - ellipse.center.y()
-        
-        # Применяем обратный поворот
-        if abs(ellipse.rotation_angle) > 1e-6:
-            cos_r = math.cos(-ellipse.rotation_angle)
-            sin_r = math.sin(-ellipse.rotation_angle)
-            x_rot = x * cos_r - y * sin_r
-            y_rot = x * sin_r + y * cos_r
-        else:
-            x_rot, y_rot = x, y
+        x_rot, y_rot = self._to_ellipse_local_coords(closest_on_line, ellipse)
         
         # Нормализуем к единичному эллипсу
-        if ellipse.radius_x < 1e-6 or ellipse.radius_y < 1e-6:
+        normalized = self._normalize_ellipse_coords(x_rot, y_rot, ellipse)
+        if normalized is None:
             return None
-        
-        x_norm = x_rot / ellipse.radius_x
-        y_norm = y_rot / ellipse.radius_y
+        x_norm, y_norm = normalized
         
         # Находим ближайшую точку на единичной окружности
-        dist = math.sqrt(x_norm*x_norm + y_norm*y_norm)
+        dist = math.hypot(x_norm, y_norm)
         if dist < 1e-10:
             return None
         
@@ -1789,20 +1778,7 @@ class SnapManager:
         # Обратное преобразование
         x_local = x_unit * ellipse.radius_x
         y_local = y_unit * ellipse.radius_y
-        
-        # Применяем поворот
-        if abs(ellipse.rotation_angle) > 1e-6:
-            cos_r = math.cos(ellipse.rotation_angle)
-            sin_r = math.sin(ellipse.rotation_angle)
-            x_world = x_local * cos_r - y_local * sin_r
-            y_world = x_local * sin_r + y_local * cos_r
-        else:
-            x_world, y_world = x_local, y_local
-        
-        perp_point = QPointF(
-            ellipse.center.x() + x_world,
-            ellipse.center.y() + y_world
-        )
+        perp_point = self._from_ellipse_local_coords(x_local, y_local, ellipse)
         
         # Для дуги проверяем, что точка в диапазоне
         if isinstance(ellipse, Arc):
@@ -1828,7 +1804,10 @@ class SnapManager:
             return tangents  # Точка совпадает с центром
         
         # Расстояние от точки до центра
-        dist = math.sqrt(dist_sq)
+        normalized = self._normalize_vector(dx, dy)
+        if normalized is None:
+            return tangents
+        _, _, dist = normalized
         
         # Угол от точки к центру
         angle_to_center = math.atan2(dy, dx)
@@ -1869,25 +1848,13 @@ class SnapManager:
         """Находит точки касания от точки к эллипсу"""
         tangents = []
         
-        # Переводим точку в локальные координаты
-        x = point.x() - ellipse.center.x()
-        y = point.y() - ellipse.center.y()
-        
-        # Применяем обратный поворот
-        if abs(ellipse.rotation_angle) > 1e-6:
-            cos_r = math.cos(-ellipse.rotation_angle)
-            sin_r = math.sin(-ellipse.rotation_angle)
-            x_rot = x * cos_r - y * sin_r
-            y_rot = x * sin_r + y * cos_r
-        else:
-            x_rot, y_rot = x, y
+        x_rot, y_rot = self._to_ellipse_local_coords(point, ellipse)
         
         # Нормализуем к единичной окружности
-        if ellipse.radius_x < 1e-6 or ellipse.radius_y < 1e-6:
+        normalized = self._normalize_ellipse_coords(x_rot, y_rot, ellipse)
+        if normalized is None:
             return tangents
-        
-        x_norm = x_rot / ellipse.radius_x
-        y_norm = y_rot / ellipse.radius_y
+        x_norm, y_norm = normalized
         
         # Находим касательные к единичной окружности
         dist_sq = x_norm*x_norm + y_norm*y_norm
@@ -1900,36 +1867,15 @@ class SnapManager:
         
         # Для эллипса используем приближенный метод
         # Находим ближайшую точку на эллипсе
-        dist = math.sqrt(dist_sq)
-        if dist < 1.0 + 1e-6:
-            # Точка на эллипсе - одна касательная
-            x_unit = x_norm / dist
-            y_unit = y_norm / dist
-        else:
-            # Две касательные (упрощенный метод)
-            # Используем итеративный поиск или аналитическое решение
-            # Для простоты используем метод ближайшей точки
-            x_unit = x_norm / dist
-            y_unit = y_norm / dist
+        normalized_vector = self._normalize_vector(x_norm, y_norm)
+        if normalized_vector is None:
+            return tangents
+        x_unit, y_unit, _ = normalized_vector
         
         # Обратное преобразование
         x_local = x_unit * ellipse.radius_x
         y_local = y_unit * ellipse.radius_y
-        
-        # Применяем поворот
-        if abs(ellipse.rotation_angle) > 1e-6:
-            cos_r = math.cos(ellipse.rotation_angle)
-            sin_r = math.sin(ellipse.rotation_angle)
-            x_world = x_local * cos_r - y_local * sin_r
-            y_world = x_local * sin_r + y_local * cos_r
-        else:
-            x_world, y_world = x_local, y_local
-        
-        tangent_point = QPointF(
-            ellipse.center.x() + x_world,
-            ellipse.center.y() + y_world
-        )
+        tangent_point = self._from_ellipse_local_coords(x_local, y_local, ellipse)
         tangents.append(tangent_point)
         
         return tangents
-

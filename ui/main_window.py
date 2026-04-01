@@ -1,4 +1,4 @@
-import sys
+﻿import sys
 import math
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                                QPushButton, QLabel, QComboBox, QDoubleSpinBox, QGroupBox,
@@ -1799,47 +1799,16 @@ class MainWindow(QMainWindow):
         self.update_info()
         
         # Сбрасываем значения для следующего многоугольника
-        self.start_x_spin.blockSignals(True)
-        self.start_y_spin.blockSignals(True)
-        self.start_x_spin.setValue(0)
-        self.start_y_spin.setValue(0)
-        self.start_y_spin.blockSignals(False)
-        self.start_x_spin.blockSignals(False)
-        
-        self.polygon_radius_spin.blockSignals(True)
-        self.polygon_num_vertices_spin.blockSignals(True)
-        self.polygon_radius_spin.setValue(50)
-        self.polygon_num_vertices_spin.setValue(3)
-        self.polygon_radius_spin.blockSignals(False)
-        self.polygon_num_vertices_spin.blockSignals(False)
+        self._reset_polygon_input_defaults()
         
         self.update_info()
     
     def change_coordinate_system(self, system):
-        self.coordinate_system = "polar" if system == "Полярная" else "cartesian"
+        self.coordinate_system = self._coordinate_mode_from_system_name(system)
         self.update_input_fields()
         self.update_info()
 
-    def activate_dimension_tool(self):
-        self.canvas.set_primitive_type("dimension")
-        self.canvas.clear_input_points()
-        self.input_group.hide()
-        self.line_method_widget.hide()
-        self.circle_method_widget.hide()
-        self.arc_method_widget.hide()
-        self.rectangle_method_widget.hide()
-        self.ellipse_method_widget.hide()
-        if hasattr(self, 'dimension_method_widget'):
-            self.dimension_method_widget.show()
-            self.change_dimension_type_index(self.dimension_type_combo.currentIndex())
-        self.update_info()
-
-    def deactivate_dimension_tool(self):
-        self.canvas.clear_input_points()
-        self.change_primitive_type(self.primitive_combo.currentText())
-
-    def change_primitive_type(self, primitive_name):
-        """Изменяет тип создаваемого примитива"""
+    def _primitive_type_from_name(self, primitive_name):
         primitive_map = {
             "Отрезок": "line",
             "Окружность": "circle",
@@ -1848,123 +1817,12 @@ class MainWindow(QMainWindow):
             "Эллипс": "ellipse",
             "Многоугольник": "polygon",
             "Сплайн": "spline",
+            "Размер": "dimension",
         }
-        primitive_type = primitive_map.get(primitive_name, "line")
-        if primitive_name == "Размер":
-            primitive_type = "dimension"
-        self.canvas.set_primitive_type(primitive_type)
-        
-        # Очищаем точки ввода при смене типа примитива
-        self.canvas.clear_input_points()
+        return primitive_map.get(primitive_name, "line")
 
-        self.line_method_widget.hide()
-        self.circle_method_widget.hide()
-        self.arc_method_widget.hide()
-        self.rectangle_method_widget.hide()
-        self.ellipse_method_widget.hide()
-        if hasattr(self, 'dimension_method_widget'):
-            self.dimension_method_widget.hide()
-        if primitive_type != "dimension":
-            self.input_group.show()
-        
-        # Показываем/скрываем выбор метода создания окружности или дуги
-        if primitive_type == "line":
-            self.line_method_widget.show()
-            # Убеждаемся, что комбобокс имеет правильное значение
-            if self.line_method_combo.currentIndex() < 0:
-                self.line_method_combo.setCurrentIndex(0)
-            # Синхронизируем комбобоксы системы координат и единиц углов с выбранным методом
-            method_text = self.line_method_combo.currentText()
-            if "декартовых" in method_text.lower():
-                self.line_coord_combo.blockSignals(True)
-                self.line_coord_combo.setCurrentText("Декартова")
-                self.line_coord_combo.blockSignals(False)
-                self.line_coordinate_system = "cartesian"
-            else:
-                self.line_coord_combo.blockSignals(True)
-                self.line_coord_combo.setCurrentText("Полярная")
-                self.line_coord_combo.blockSignals(False)
-                self.line_coordinate_system = "polar"
-            # Явно вызываем обновление полей ввода
-            self.change_line_method(method_text)
-        elif primitive_type == "circle":
-            self.line_method_widget.hide()
-            self.circle_method_widget.show()
-            self.arc_method_widget.hide()
-            self.update_circle_input_fields()
-        elif primitive_type == "arc":
-            self.line_method_widget.hide()
-            self.circle_method_widget.hide()
-            self.arc_method_widget.show()
-            self.rectangle_method_widget.hide()
-            # Убеждаемся, что комбобокс имеет правильное значение
-            if self.arc_method_combo.currentIndex() < 0:
-                self.arc_method_combo.setCurrentIndex(0)
-            # Явно вызываем обновление полей ввода
-            self.change_arc_method(self.arc_method_combo.currentText())
-        elif primitive_type == "rectangle":
-            self.line_method_widget.hide()
-            self.circle_method_widget.hide()
-            self.arc_method_widget.hide()
-            self.rectangle_method_widget.show()
-            # Убеждаемся, что комбобокс имеет правильное значение
-            if self.rectangle_method_combo.currentIndex() < 0:
-                self.rectangle_method_combo.setCurrentIndex(0)
-            # Явно вызываем обновление полей ввода
-            self.change_rectangle_method(self.rectangle_method_combo.currentText())
-        elif primitive_type == "ellipse":
-            self.line_method_widget.hide()
-            self.circle_method_widget.hide()
-            self.arc_method_widget.hide()
-            self.rectangle_method_widget.hide()
-            self.ellipse_method_widget.show()
-            # Убеждаемся, что комбобокс имеет правильное значение
-            if self.ellipse_method_combo.currentIndex() < 0:
-                self.ellipse_method_combo.setCurrentIndex(0)
-            # Явно вызываем обновление полей ввода
-            self.change_ellipse_method(self.ellipse_method_combo.currentText())
-        elif primitive_type == "polygon":
-            self.update_polygon_input_fields()
-        elif primitive_type == "dimension":
-            if hasattr(self, 'dimension_method_widget'):
-                self.dimension_method_widget.show()
-                self.change_dimension_type_index(self.dimension_type_combo.currentIndex())
-            self.input_group.hide()
-        else:
-            # Восстанавливаем метку для не-окружности/дуги/прямоугольника
-            self.start_point_label_widget.setText("Начальная точка (x, y):")
-            # Скрываем все группы окружности
-            self.circle_center_radius_group.hide()
-            self.circle_center_diameter_group.hide()
-            self.circle_two_points_group.hide()
-            self.circle_three_points_group.hide()
-            # Скрываем все группы дуги
-            self.arc_three_points_group.hide()
-            self.arc_center_angles_group.hide()
-            # Скрываем все группы прямоугольника
-            self.rectangle_point_size_group.hide()
-            self.rectangle_center_size_group.hide()
-            self.rectangle_fillets_group.hide()
-            # Скрываем все группы эллипса
-            self.ellipse_center_radii_group.hide()
-            self.ellipse_three_points_group.hide()
-            # Скрываем все группы многоугольника
-            self.polygon_center_radius_vertices_group.hide()
-            # Скрываем все группы сплайна
-            if hasattr(self, 'spline_control_points_group'):
-                self.spline_control_points_group.hide()
-            # Показываем метку "Конечная точка" для отрезка
-            self.end_point_label_widget.show()
-            # Показываем обычные поля ввода
-            if self.coordinate_system == "cartesian":
-                self.cartesian_group.show()
-                self.polar_group.hide()
-            else:
-                self.cartesian_group.hide()
-                self.polar_group.show()
-    
-    def change_dimension_type(self, dimension_name):
-        ordered_names = [
+    def _dimension_type_names(self):
+        return [
             "Линейный горизонтальный",
             "Линейный вертикальный",
             "Линейный выровненный",
@@ -1972,61 +1830,357 @@ class MainWindow(QMainWindow):
             "Диаметр",
             "Угловой",
         ]
+
+    def _dimension_type_keys(self):
+        return ["horizontal", "vertical", "aligned", "radius", "diameter", "angle"]
+
+    def _hide_creation_method_widgets(self):
+        for widget_name in (
+            'line_method_widget',
+            'circle_method_widget',
+            'arc_method_widget',
+            'rectangle_method_widget',
+            'ellipse_method_widget',
+            'dimension_method_widget',
+        ):
+            widget = getattr(self, widget_name, None)
+            if widget is not None:
+                widget.hide()
+
+    def _show_creation_method_widget(self, widget_name):
+        self._hide_creation_method_widgets()
+        widget = getattr(self, widget_name, None)
+        if widget is not None:
+            widget.show()
+
+    def _show_dimension_creation_controls(self):
+        self._show_creation_method_widget('dimension_method_widget')
+        if hasattr(self, 'dimension_type_combo'):
+            self.change_dimension_type_index(self.dimension_type_combo.currentIndex())
+
+    def _set_input_group_visible(self, visible: bool):
+        if hasattr(self, 'input_group'):
+            self.input_group.setVisible(visible)
+
+    def _set_combo_index_safely(self, combo, index):
+        if combo.currentIndex() == index:
+            return
+        combo.blockSignals(True)
+        combo.setCurrentIndex(index)
+        combo.blockSignals(False)
+
+    def _set_combo_text_safely(self, combo, text):
+        if combo.currentText() == text:
+            return
+        combo.blockSignals(True)
+        combo.setCurrentText(text)
+        combo.blockSignals(False)
+
+    def _set_spin_value_safely(self, spin, value):
+        if spin.value() == value:
+            return
+        spin.blockSignals(True)
+        spin.setValue(value)
+        spin.blockSignals(False)
+
+    def _ensure_combo_has_selection(self, combo, default_index=0):
+        if combo.currentIndex() < 0:
+            combo.setCurrentIndex(default_index)
+
+    def _configure_line_creation_ui(self):
+        self._show_creation_method_widget('line_method_widget')
+        self._ensure_combo_has_selection(self.line_method_combo)
+        method_text = self.line_method_combo.currentText()
+        self.line_coordinate_system = self._line_mode_from_method_name(method_text)
+        self._sync_line_coord_combo()
+        self.change_line_method(method_text)
+
+    def _configure_circle_creation_ui(self):
+        self._show_creation_method_widget('circle_method_widget')
+        self.update_circle_input_fields()
+
+    def _configure_arc_creation_ui(self):
+        self._show_creation_method_widget('arc_method_widget')
+        self._ensure_combo_has_selection(self.arc_method_combo)
+        self.change_arc_method(self.arc_method_combo.currentText())
+
+    def _configure_rectangle_creation_ui(self):
+        self._show_creation_method_widget('rectangle_method_widget')
+        self._ensure_combo_has_selection(self.rectangle_method_combo)
+        self.change_rectangle_method(self.rectangle_method_combo.currentText())
+
+    def _configure_ellipse_creation_ui(self):
+        self._show_creation_method_widget('ellipse_method_widget')
+        self._ensure_combo_has_selection(self.ellipse_method_combo)
+        self.change_ellipse_method(self.ellipse_method_combo.currentText())
+
+    def _restore_default_input_groups(self):
+        self.start_point_label_widget.setText("Начальная точка (x, y):")
+        self.circle_center_radius_group.hide()
+        self.circle_center_diameter_group.hide()
+        self.circle_two_points_group.hide()
+        self.circle_three_points_group.hide()
+        self.arc_three_points_group.hide()
+        self.arc_center_angles_group.hide()
+        self.rectangle_point_size_group.hide()
+        self.rectangle_center_size_group.hide()
+        self.rectangle_fillets_group.hide()
+        self.ellipse_center_radii_group.hide()
+        self.ellipse_three_points_group.hide()
+        self.polygon_center_radius_vertices_group.hide()
+        if hasattr(self, 'spline_control_points_group'):
+            self.spline_control_points_group.hide()
+        self.end_point_label_widget.show()
+        if self.coordinate_system == "cartesian":
+            self.cartesian_group.show()
+            self.polar_group.hide()
+        else:
+            self.cartesian_group.hide()
+            self.polar_group.show()
+
+    def _hide_non_line_input_groups(self):
+        self.circle_center_radius_group.hide()
+        self.circle_center_diameter_group.hide()
+        self.circle_two_points_group.hide()
+        self.circle_three_points_group.hide()
+        self.arc_three_points_group.hide()
+        self.arc_center_angles_group.hide()
+        self.rectangle_point_size_group.hide()
+        self.rectangle_center_size_group.hide()
+        self.rectangle_fillets_group.hide()
+        self.ellipse_center_radii_group.hide()
+        self.ellipse_three_points_group.hide()
+        self.polygon_method_group.hide()
+        self.polygon_center_radius_vertices_group.hide()
+        if hasattr(self, 'spline_control_points_group'):
+            self.spline_control_points_group.hide()
+
+    def _hide_all_input_groups(self):
+        self.cartesian_group.hide()
+        self.polar_group.hide()
+        self._hide_non_line_input_groups()
+
+    def _prepare_object_input_panel(self, start_label="Начальная точка (x, y):", show_end_label=False):
+        self.input_group.show()
+        self.start_point_label_widget.setText(start_label)
+        self.start_point_label_widget.show()
+        self.start_x_spin.show()
+        self.start_y_spin.show()
+        if show_end_label:
+            self.end_point_label_widget.show()
+        else:
+            self.end_point_label_widget.hide()
+        self._hide_all_input_groups()
+
+    def _show_input_groups(self, *group_names):
+        for group_name in group_names:
+            group = getattr(self, group_name, None)
+            if group is not None:
+                group.show()
+
+    def _show_main_coordinate_group(self):
+        if self.coordinate_system == "cartesian":
+            self.cartesian_group.show()
+            self.polar_group.hide()
+        else:
+            self.cartesian_group.hide()
+            self.polar_group.show()
+
+    def _line_mode_from_method_name(self, method_name):
+        return "cartesian" if "декартовых" in method_name.lower() else "polar"
+
+    def _line_mode_from_system_name(self, system_name):
+        return "polar" if system_name == "Полярная" else "cartesian"
+
+    def _line_angle_units_from_name(self, units_name):
+        return "radians" if units_name == "Радианы" else "degrees"
+
+    def _coordinate_mode_from_system_name(self, system_name):
+        return "polar" if system_name == "Полярная" else "cartesian"
+
+    def _polar_from_line_points(self):
+        start_x = self.start_x_spin.value()
+        start_y = self.start_y_spin.value()
+        end_x = self.end_x_spin.value()
+        end_y = self.end_y_spin.value()
+        delta_x = end_x - start_x
+        delta_y = end_y - start_y
+        radius = math.hypot(delta_x, delta_y)
+        angle_rad = math.atan2(delta_y, delta_x)
+        angle = math.degrees(angle_rad) if self.line_angle_units == "degrees" else angle_rad
+        return radius, angle
+
+    def _sync_line_coord_combo(self):
+        target_text = "Декартова" if self.line_coordinate_system == "cartesian" else "Полярная"
+        self._set_combo_text_safely(self.line_coord_combo, target_text)
+
+    def _apply_creation_method_change(self, method_name, method_map, default_method,
+                                    canvas_setter, update_fields):
+        method = method_map.get(method_name, default_method)
+        canvas_setter(method)
+        update_fields()
+        self.canvas.clear_input_points()
+
+    def _polygon_creation_method(self, method_index):
+        method_map = {
+            0: "center_radius_vertices",
+            1: "inscribed_manual",
+            2: "circumscribed_manual",
+        }
+        return method_map.get(method_index, "center_radius_vertices")
+
+    def _polygon_preview_point(self, center_point, radius):
+        angle = -math.pi / 2
+        x = center_point.x() + radius * math.cos(angle)
+        y = center_point.y() + radius * math.sin(angle)
+        return QPointF(x, y)
+
+    def _point_from_spins(self, x_spin, y_spin):
+        return QPointF(x_spin.value(), y_spin.value())
+
+    def _current_start_point(self):
+        return self._point_from_spins(self.start_x_spin, self.start_y_spin)
+
+    def _set_canvas_input_points(self, *points):
+        self.canvas.set_input_points(list(points))
+
+    def _point_from_current_coordinate_inputs(self, start_point):
+        if self.coordinate_system == "cartesian":
+            return self._point_from_spins(self.end_x_spin, self.end_y_spin)
+        radius = self.radius_spin.value()
+        angle = self.angle_spin.value()
+        angle_rad = math.radians(angle) if self.angle_units == "degrees" else angle
+        delta_x = radius * math.cos(angle_rad)
+        delta_y = radius * math.sin(angle_rad)
+        return QPointF(start_point.x() + delta_x, start_point.y() + delta_y)
+
+    def _polar_from_current_points(self):
+        start_x = self.start_x_spin.value()
+        start_y = self.start_y_spin.value()
+        end_x = self.end_x_spin.value()
+        end_y = self.end_y_spin.value()
+        delta_x = end_x - start_x
+        delta_y = end_y - start_y
+        radius = math.hypot(delta_x, delta_y)
+        angle_rad = math.atan2(delta_y, delta_x)
+        angle = math.degrees(angle_rad) if self.angle_units == "degrees" else angle_rad
+        return radius, angle
+
+    def _line_preview_endpoint(self, start_point):
+        if self.line_coordinate_system == "cartesian":
+            return self._point_from_spins(self.end_x_spin, self.end_y_spin)
+        radius = self.radius_spin.value()
+        angle = self.angle_spin.value()
+        angle_rad = math.radians(angle) if self.line_angle_units == "degrees" else angle
+        delta_x = radius * math.cos(angle_rad)
+        delta_y = radius * math.sin(angle_rad)
+        return QPointF(start_point.x() + delta_x, start_point.y() + delta_y)
+
+    def _handle_non_line_coordinate_preview(self):
+        if self.canvas.primitive_type == 'rectangle':
+            self.on_rectangle_coordinates_changed()
+            return True
+        return False
+
+    def _coordinate_change_handler(self, primitive_type):
+        handlers = {
+            'circle': self.on_circle_coordinates_changed,
+            'arc': self.on_arc_coordinates_changed,
+            'rectangle': self.on_rectangle_coordinates_changed,
+            'ellipse': self.on_ellipse_coordinates_changed,
+            'polygon': self.on_polygon_coordinates_changed,
+        }
+        return handlers.get(primitive_type, self.on_coordinates_changed)
+
+    def _reset_polygon_input_defaults(self):
+        self._set_spin_value_safely(self.start_x_spin, 0)
+        self._set_spin_value_safely(self.start_y_spin, 0)
+        self._set_spin_value_safely(self.polygon_radius_spin, 50)
+        self._set_spin_value_safely(self.polygon_num_vertices_spin, 3)
+
+    def _activate_canvas_tool(self, primitive_type, input_group_visible=True):
+        self.canvas.set_primitive_type(primitive_type)
+        self.canvas.clear_input_points()
+        self._set_input_group_visible(input_group_visible)
+        if primitive_type != "dimension":
+            self._hide_creation_method_widgets()
+
+    def _apply_primitive_creation_ui(self, primitive_type):
+        if primitive_type == "line":
+            self._configure_line_creation_ui()
+        elif primitive_type == "circle":
+            self._configure_circle_creation_ui()
+        elif primitive_type == "arc":
+            self._configure_arc_creation_ui()
+        elif primitive_type == "rectangle":
+            self._configure_rectangle_creation_ui()
+        elif primitive_type == "ellipse":
+            self._configure_ellipse_creation_ui()
+        elif primitive_type == "polygon":
+            self.update_polygon_input_fields()
+        elif primitive_type == "dimension":
+            self._show_dimension_creation_controls()
+            self._set_input_group_visible(False)
+        else:
+            self._restore_default_input_groups()
+
+    def activate_dimension_tool(self):
+        self._activate_canvas_tool("dimension", input_group_visible=False)
+        self._show_dimension_creation_controls()
+        self.update_info()
+
+    def deactivate_dimension_tool(self):
+        self.canvas.clear_input_points()
+        self.change_primitive_type(self.primitive_combo.currentText())
+
+    def change_primitive_type(self, primitive_name):
+        """Изменяет тип создаваемого примитива"""
+        primitive_type = self._primitive_type_from_name(primitive_name)
+        self._activate_canvas_tool(
+            primitive_type,
+            input_group_visible=(primitive_type != "dimension"),
+        )
+        self._apply_primitive_creation_ui(primitive_type)
+    
+    def change_dimension_type(self, dimension_name):
+        ordered_names = self._dimension_type_names()
         index = ordered_names.index(dimension_name) if dimension_name in ordered_names else 0
         self.change_dimension_type_index(index)
 
     def change_dimension_type_index(self, index):
-        ordered_types = ["horizontal", "vertical", "aligned", "radius", "diameter", "angle"]
+        ordered_types = self._dimension_type_keys()
         if index < 0 or index >= len(ordered_types):
             index = 0
-        if hasattr(self, 'dimension_type_combo') and self.dimension_type_combo.currentIndex() != index:
-            self.dimension_type_combo.blockSignals(True)
-            self.dimension_type_combo.setCurrentIndex(index)
-            self.dimension_type_combo.blockSignals(False)
-        if hasattr(self, 'dimension_toolbar_combo') and self.dimension_toolbar_combo.currentIndex() != index:
-            self.dimension_toolbar_combo.blockSignals(True)
-            self.dimension_toolbar_combo.setCurrentIndex(index)
-            self.dimension_toolbar_combo.blockSignals(False)
+        if hasattr(self, 'dimension_type_combo'):
+            self._set_combo_index_safely(self.dimension_type_combo, index)
+        if hasattr(self, 'dimension_toolbar_combo'):
+            self._set_combo_index_safely(self.dimension_toolbar_combo, index)
         if hasattr(self.canvas, 'set_dimension_creation_type'):
             self.canvas.set_dimension_creation_type(ordered_types[index])
         self.update_info()
 
     def change_line_method(self, method_name):
         """Изменяет способ задания отрезка"""
-        if "декартовых" in method_name.lower():
-            # Декартовы координаты
-            self.line_coordinate_system = "cartesian"
-            # Обновляем комбобокс без вызова сигнала, чтобы избежать рекурсии
-            self.line_coord_combo.blockSignals(True)
-            self.line_coord_combo.setCurrentText("Декартова")
-            self.line_coord_combo.blockSignals(False)
-        else:
-            # Полярные координаты
-            self.line_coordinate_system = "polar"
-            # Обновляем комбобокс без вызова сигнала, чтобы избежать рекурсии
-            self.line_coord_combo.blockSignals(True)
-            self.line_coord_combo.setCurrentText("Полярная")
-            self.line_coord_combo.blockSignals(False)
+        self.line_coordinate_system = self._line_mode_from_method_name(method_name)
+        self._sync_line_coord_combo()
         self.update_line_input_fields()
-        # Очищаем точки ввода при смене метода
         self.canvas.clear_input_points()
     
     def change_line_coordinate_system(self, system):
         """Изменяет систему координат для отрезка"""
-        self.line_coordinate_system = "polar" if system == "Полярная" else "cartesian"
+        self.line_coordinate_system = self._line_mode_from_system_name(system)
         self.update_line_input_fields()
         self.update_info()
     
     def change_line_angle_units(self, units):
         """Изменяет единицы углов для отрезка"""
-        self.line_angle_units = "radians" if units == "Радианы" else "degrees"
+        self.line_angle_units = self._line_angle_units_from_name(units)
         self.update_line_angle_units()
         self.update_info()
     
     def update_line_input_fields(self):
         """Обновляет поля ввода для отрезка в зависимости от способа задания"""
-        # Показываем метку "Конечная точка"
-        self.end_point_label_widget.show()
+        self._prepare_object_input_panel(show_end_label=True)
         
         # Обновляем отображение полей ввода в зависимости от системы координат
         if self.line_coordinate_system == "cartesian":
@@ -2035,31 +2189,9 @@ class MainWindow(QMainWindow):
         else:
             self.cartesian_group.hide()
             self.polar_group.show()
-            
-            # При переключении на полярные координаты преобразуем текущие декартовы координаты
-            # ОТНОСИТЕЛЬНО НАЧАЛЬНОЙ ТОЧКИ
-            start_x = self.start_x_spin.value()
-            start_y = self.start_y_spin.value()
-            end_x = self.end_x_spin.value()
-            end_y = self.end_y_spin.value()
-            
-            # Вычисляем смещение от начальной точки
-            delta_x = end_x - start_x
-            delta_y = end_y - start_y
-            
-            # Преобразуем смещение в полярные координаты
-            radius = math.sqrt(delta_x**2 + delta_y**2)
-            angle = math.atan2(delta_y, delta_x)
-            
-            if self.line_angle_units == "degrees":
-                angle = math.degrees(angle)
-            
-            self.radius_spin.blockSignals(True)
-            self.angle_spin.blockSignals(True)
-            self.radius_spin.setValue(radius)
-            self.angle_spin.setValue(angle)
-            self.radius_spin.blockSignals(False)
-            self.angle_spin.blockSignals(False)
+            radius, angle = self._polar_from_line_points()
+            self._set_spin_value_safely(self.radius_spin, radius)
+            self._set_spin_value_safely(self.angle_spin, angle)
     
     def update_line_angle_units(self):
         """Обновляет единицы измерения углов для отрезка"""
@@ -2070,15 +2202,10 @@ class MainWindow(QMainWindow):
         if self.line_coordinate_system == "polar":
             current_angle = self.angle_spin.value()
             if self.line_angle_units == "degrees":
-                # Были радианы, стали градусы
                 current_angle = math.degrees(current_angle)
             else:
-                # Были градусы, стали радианы
                 current_angle = math.radians(current_angle)
-            
-            self.angle_spin.blockSignals(True)
-            self.angle_spin.setValue(current_angle)
-            self.angle_spin.blockSignals(False)
+            self._set_spin_value_safely(self.angle_spin, current_angle)
     
     def change_circle_method(self, method_name):
         """Изменяет метод создания окружности"""
@@ -2088,11 +2215,13 @@ class MainWindow(QMainWindow):
             "Две точки": "two_points",
             "Три точки на окружности": "three_points"
         }
-        method = method_map.get(method_name, "center_radius")
-        self.canvas.set_circle_creation_method(method)
-        self.update_circle_input_fields()
-        # Очищаем точки ввода при смене метода
-        self.canvas.clear_input_points()
+        self._apply_creation_method_change(
+            method_name,
+            method_map,
+            "center_radius",
+            self.canvas.set_circle_creation_method,
+            self.update_circle_input_fields,
+        )
     
     def change_arc_method(self, method_name):
         """Изменяет метод создания дуги"""
@@ -2100,67 +2229,36 @@ class MainWindow(QMainWindow):
             "Три точки (начало, вторая точка, конец)": "three_points",
             "Центр, начальный угол, конечный угол": "center_angles"
         }
-        method = method_map.get(method_name, "three_points")
-        self.canvas.set_arc_creation_method(method)
-        self.update_arc_input_fields()
-        # Очищаем точки ввода при смене метода
-        self.canvas.clear_input_points()
+        self._apply_creation_method_change(
+            method_name,
+            method_map,
+            "three_points",
+            self.canvas.set_arc_creation_method,
+            self.update_arc_input_fields,
+        )
     
     def update_arc_input_fields(self):
         """Обновляет отображение полей ввода в зависимости от метода создания дуги"""
-        # Показываем группу "Ввод координат"
-        self.input_group.show()
-        # Обновляем метку для дуги
-        self.start_point_label_widget.setText("Начальная точка (x, y):")
-        self.start_point_label_widget.show()
-        self.start_x_spin.show()
-        self.start_y_spin.show()
+        self._prepare_object_input_panel()
         
-        # Скрываем метку "Конечная точка" для дуги
-        self.end_point_label_widget.hide()
-        
-        # Скрываем ВСЕ группы (включая группы окружности, прямоугольника, многоугольника и эллипса)
-        self.cartesian_group.hide()
-        self.polar_group.hide()
-        self.circle_center_radius_group.hide()
-        self.circle_center_diameter_group.hide()
-        self.circle_two_points_group.hide()
-        self.circle_three_points_group.hide()
-        self.arc_three_points_group.hide()
-        self.arc_center_angles_group.hide()
-        self.rectangle_point_size_group.hide()
-        self.rectangle_center_size_group.hide()
-        self.rectangle_fillets_group.hide()
-        self.polygon_center_radius_vertices_group.hide()
-        self.ellipse_center_radii_group.hide()
-        self.ellipse_three_points_group.hide()
-        
-        # Показываем нужную группу
         method_name = self.arc_method_combo.currentText()
         if method_name == "Три точки (начало, вторая точка, конец)":
-            self.arc_three_points_group.show()
+            self._show_input_groups('arc_three_points_group')
         elif method_name == "Центр, начальный угол, конечный угол":
             self.start_point_label_widget.setText("Центр (x, y):")
-            self.arc_center_angles_group.show()
-        
-        # Не обновляем точки ввода автоматически - только при изменении значений в полях
+            self._show_input_groups('arc_center_angles_group')
     
     def on_arc_coordinates_changed(self):
         """Обработчик изменения координат дуги"""
-        # Получаем точки ввода в зависимости от метода создания
         method_name = self.arc_method_combo.currentText()
-        start_point = QPointF(self.start_x_spin.value(), self.start_y_spin.value())
-        input_points = [start_point]
-        
+        start_point = self._current_start_point()
+
         if method_name == "Три точки (начало, вторая точка, конец)":
-            point2 = QPointF(self.arc_point2_x_spin.value(), self.arc_point2_y_spin.value())
-            point3 = QPointF(self.arc_point3_x_spin.value(), self.arc_point3_y_spin.value())
-            input_points.append(point2)
-            input_points.append(point3)
-        # Для метода "Центр, начальный угол, конечный угол" показываем только центр
-        
-        # Устанавливаем точки для визуализации
-        self.canvas.set_input_points(input_points)
+            point2 = self._point_from_spins(self.arc_point2_x_spin, self.arc_point2_y_spin)
+            point3 = self._point_from_spins(self.arc_point3_x_spin, self.arc_point3_y_spin)
+            self._set_canvas_input_points(start_point, point2, point3)
+            return
+        self._set_canvas_input_points(start_point)
     
     def change_rectangle_method(self, method_name):
         """Изменяет метод создания прямоугольника"""
@@ -2170,49 +2268,24 @@ class MainWindow(QMainWindow):
             "Центр, ширина и высота": "center_size",
             "С фасками/скруглениями при создании": "with_fillets"
         }
-        method = method_map.get(method_name, "two_points")
-        self.canvas.set_rectangle_creation_method(method)
-        self.update_rectangle_input_fields()
-        # Очищаем точки ввода при смене метода
-        self.canvas.clear_input_points()
+        self._apply_creation_method_change(
+            method_name,
+            method_map,
+            "two_points",
+            self.canvas.set_rectangle_creation_method,
+            self.update_rectangle_input_fields,
+        )
     
     def update_rectangle_input_fields(self):
         """Обновляет отображение полей ввода в зависимости от метода создания прямоугольника"""
-        # Показываем группу "Ввод координат"
-        self.input_group.show()
-        # Обновляем метку для прямоугольника
-        self.start_point_label_widget.setText("Начальная точка (x, y):")
-        self.start_point_label_widget.show()
-        self.start_x_spin.show()
-        self.start_y_spin.show()
-        
-        # Скрываем ВСЕ группы (включая группы окружности, дуги, многоугольника и эллипса)
-        self.cartesian_group.hide()
-        self.polar_group.hide()
-        self.circle_center_radius_group.hide()
-        self.circle_center_diameter_group.hide()
-        self.circle_two_points_group.hide()
-        self.circle_three_points_group.hide()
-        self.arc_three_points_group.hide()
-        self.arc_center_angles_group.hide()
-        self.rectangle_point_size_group.hide()
-        self.rectangle_center_size_group.hide()
-        self.rectangle_fillets_group.hide()
-        self.polygon_center_radius_vertices_group.hide()
-        self.ellipse_center_radii_group.hide()
-        self.ellipse_three_points_group.hide()
+        self._prepare_object_input_panel(show_end_label=True)
         
         # Показываем нужную группу
         method_name = self.rectangle_method_combo.currentText()
         if method_name == "Две противоположные точки":
             # Используем обычные поля для конечной точки
             self.end_point_label_widget.show()  # Показываем метку "Конечная точка"
-            if self.coordinate_system == "cartesian":
-                self.cartesian_group.show()
-                self.polar_group.hide()
-            else:
-                self.cartesian_group.hide()
-                self.polar_group.show()
+            self._show_main_coordinate_group()
         elif method_name == "Одна точка, ширина и высота":
             self.end_point_label_widget.hide()  # Скрываем метку
             self.rectangle_point_size_group.show()
@@ -2223,37 +2296,19 @@ class MainWindow(QMainWindow):
         elif method_name == "С фасками/скруглениями при создании":
             # Используем обычные поля для конечной точки + радиус скругления
             self.end_point_label_widget.show()  # Показываем метку "Конечная точка"
-            if self.coordinate_system == "cartesian":
-                self.cartesian_group.show()
-                self.polar_group.hide()
-            else:
-                self.cartesian_group.hide()
-                self.polar_group.show()
+            self._show_main_coordinate_group()
             self.rectangle_fillets_group.show()
         
         # Не обновляем точки ввода автоматически - только при изменении значений в полях
     
     def on_rectangle_coordinates_changed(self):
         """Обработчик изменения координат прямоугольника"""
-        # Получаем точки ввода в зависимости от метода создания
         method_name = self.rectangle_method_combo.currentText()
-        start_point = QPointF(self.start_x_spin.value(), self.start_y_spin.value())
+        start_point = self._current_start_point()
         input_points = [start_point]
         
         if method_name == "Две противоположные точки":
-            if self.coordinate_system == "cartesian":
-                end_point = QPointF(self.end_x_spin.value(), self.end_y_spin.value())
-            else:
-                # Преобразуем полярные координаты в декартовы
-                radius = self.radius_spin.value()
-                angle = self.angle_spin.value()
-                if self.angle_units == "degrees":
-                    angle_rad = math.radians(angle)
-                else:
-                    angle_rad = angle
-                delta_x = radius * math.cos(angle_rad)
-                delta_y = radius * math.sin(angle_rad)
-                end_point = QPointF(start_point.x() + delta_x, start_point.y() + delta_y)
+            end_point = self._point_from_current_coordinate_inputs(start_point)
             input_points.append(end_point)
         elif method_name == "Одна точка, ширина и высота":
             width = self.rectangle_width_spin.value()
@@ -2269,23 +2324,10 @@ class MainWindow(QMainWindow):
             bottom_right = QPointF(start_point.x() + half_width, start_point.y() + half_height)
             input_points = [top_left, bottom_right]
         elif method_name == "С фасками/скруглениями при создании":
-            if self.coordinate_system == "cartesian":
-                end_point = QPointF(self.end_x_spin.value(), self.end_y_spin.value())
-            else:
-                # Преобразуем полярные координаты в декартовы
-                radius = self.radius_spin.value()
-                angle = self.angle_spin.value()
-                if self.angle_units == "degrees":
-                    angle_rad = math.radians(angle)
-                else:
-                    angle_rad = angle
-                delta_x = radius * math.cos(angle_rad)
-                delta_y = radius * math.sin(angle_rad)
-                end_point = QPointF(start_point.x() + delta_x, start_point.y() + delta_y)
+            end_point = self._point_from_current_coordinate_inputs(start_point)
             input_points.append(end_point)
         
-        # Устанавливаем точки для визуализации
-        self.canvas.set_input_points(input_points)
+        self._set_canvas_input_points(*input_points)
         
         # Обновляем размеры прямоугольника в сцене, если идет рисование
         # Важно: применяем параметры только к новому прямоугольнику в процессе создания,
@@ -2337,70 +2379,23 @@ class MainWindow(QMainWindow):
                     self.canvas.update()
     
     def update_circle_input_fields(self):
-        self.input_group.show()
         """Обновляет отображение полей ввода в зависимости от метода создания окружности"""
-        # Обновляем метку для окружности
-        self.start_point_label_widget.setText("Центр (x, y):")
+        self._prepare_object_input_panel(start_label="Центр (x, y):")
         
-        # Скрываем метку "Конечная точка" для окружности
-        self.end_point_label_widget.hide()
-        
-        # Скрываем ВСЕ группы (включая группы дуги, прямоугольника, многоугольника и эллипса)
-        self.cartesian_group.hide()
-        self.polar_group.hide()
-        self.circle_center_radius_group.hide()
-        self.circle_center_diameter_group.hide()
-        self.circle_two_points_group.hide()
-        self.circle_three_points_group.hide()
-        self.arc_three_points_group.hide()
-        self.arc_center_angles_group.hide()
-        self.rectangle_point_size_group.hide()
-        self.rectangle_center_size_group.hide()
-        self.rectangle_fillets_group.hide()
-        self.polygon_center_radius_vertices_group.hide()
-        self.ellipse_center_radii_group.hide()
-        self.ellipse_three_points_group.hide()
-        
-        # Показываем нужную группу
         method_name = self.circle_method_combo.currentText()
         if method_name == "Центр и радиус":
-            self.circle_center_radius_group.show()
+            self._show_input_groups('circle_center_radius_group')
         elif method_name == "Центр и диаметр":
-            self.circle_center_diameter_group.show()
+            self._show_input_groups('circle_center_diameter_group')
         elif method_name == "Две точки":
-            self.circle_two_points_group.show()
+            self._show_input_groups('circle_two_points_group')
         elif method_name == "Три точки на окружности":
-            self.circle_three_points_group.show()
-        
-        # Не обновляем точки ввода автоматически - только при изменении значений в полях
+            self._show_input_groups('circle_three_points_group')
     
     def update_polygon_input_fields(self):
-        self.input_group.show()
         """Обновляет отображение полей ввода для многоугольника"""
-        # Обновляем метку для многоугольника
-        self.start_point_label_widget.setText("Центр (x, y):")
-        
-        # Скрываем метку "Конечная точка" для многоугольника
-        self.end_point_label_widget.hide()
-        
-        # Скрываем ВСЕ группы
-        self.cartesian_group.hide()
-        self.polar_group.hide()
-        self.circle_center_radius_group.hide()
-        self.circle_center_diameter_group.hide()
-        self.circle_two_points_group.hide()
-        self.circle_three_points_group.hide()
-        self.arc_three_points_group.hide()
-        self.arc_center_angles_group.hide()
-        self.rectangle_point_size_group.hide()
-        self.rectangle_center_size_group.hide()
-        self.rectangle_fillets_group.hide()
-        self.ellipse_center_radii_group.hide()
-        self.ellipse_three_points_group.hide()
-        
-        # Показываем группу многоугольника
-        self.polygon_method_group.show()
-        self.polygon_center_radius_vertices_group.show()
+        self._prepare_object_input_panel(start_label="Центр (x, y):")
+        self._show_input_groups('polygon_method_group', 'polygon_center_radius_vertices_group')
     
     def update_spline_input_fields(self):
         """Обновляет отображение полей ввода для сплайна"""
@@ -2413,68 +2408,45 @@ class MainWindow(QMainWindow):
     
     def on_polygon_method_changed(self):
         """Обработчик изменения способа создания многоугольника"""
-        method_index = self.polygon_method_combo.currentIndex()
-        if method_index == 0:
-            # Центр и радиус курсором
-            self.canvas.set_polygon_creation_method('center_radius_vertices')
-        elif method_index == 1:
-            # Вписанная окружность с ручным вводом
-            self.canvas.set_polygon_creation_method('inscribed_manual')
-        elif method_index == 2:
-            # Описанная окружность с ручным вводом
-            self.canvas.set_polygon_creation_method('circumscribed_manual')
+        method = self._polygon_creation_method(self.polygon_method_combo.currentIndex())
+        self.canvas.set_polygon_creation_method(method)
     
     def on_polygon_coordinates_changed(self):
         """Обработчик изменения координат многоугольника"""
-        # Получаем центр
-        center_point = QPointF(self.start_x_spin.value(), self.start_y_spin.value())
+        center_point = self._current_start_point()
         input_points = [center_point]
-        
-        # Получаем радиус и количество вершин
         radius = self.polygon_radius_spin.value()
         num_vertices = self.polygon_num_vertices_spin.value()
-        
-        # Устанавливаем параметры в canvas
         self.canvas.set_polygon_num_vertices(num_vertices)
-        
-        # Если идет рисование, обновляем радиус
+
         if self.canvas.scene.is_drawing() and self.canvas.scene._drawing_type == 'polygon':
             method = self.canvas.scene._polygon_creation_method or 'center_radius_vertices'
             if method in ['inscribed_manual', 'circumscribed_manual']:
-                # Для ручного ввода радиуса обновляем радиус объекта
                 if radius > 0:
                     self.canvas.scene.set_polygon_radius(radius)
                     self.canvas.update()
-        
-        # Вычисляем точку на окружности для визуализации
-        import math
+
         if radius > 0:
-            angle = 0  # Начинаем с верхней точки
-            x = center_point.x() + radius * math.cos(angle - math.pi / 2)
-            y = center_point.y() + radius * math.sin(angle - math.pi / 2)
-            input_points.append(QPointF(x, y))
-        
-        # Устанавливаем точки для визуализации
-        self.canvas.set_input_points(input_points)
+            input_points.append(self._polygon_preview_point(center_point, radius))
+
+        self._set_canvas_input_points(*input_points)
     
     def on_circle_coordinates_changed(self):
         """Обработчик изменения координат окружности"""
-        # Получаем точки ввода в зависимости от метода создания
         method_name = self.circle_method_combo.currentText()
-        center_point = QPointF(self.start_x_spin.value(), self.start_y_spin.value())
+        center_point = self._current_start_point()
         input_points = [center_point]
         
         if method_name == "Две точки":
-            point2 = QPointF(self.circle_point2_x_spin.value(), self.circle_point2_y_spin.value())
+            point2 = self._point_from_spins(self.circle_point2_x_spin, self.circle_point2_y_spin)
             input_points.append(point2)
         elif method_name == "Три точки на окружности":
-            point2 = QPointF(self.circle_point2_x_spin_3p.value(), self.circle_point2_y_spin_3p.value())
-            point3 = QPointF(self.circle_point3_x_spin.value(), self.circle_point3_y_spin.value())
+            point2 = self._point_from_spins(self.circle_point2_x_spin_3p, self.circle_point2_y_spin_3p)
+            point3 = self._point_from_spins(self.circle_point3_x_spin, self.circle_point3_y_spin)
             input_points.append(point2)
             input_points.append(point3)
         
-        # Устанавливаем точки для визуализации
-        self.canvas.set_input_points(input_points)
+        self._set_canvas_input_points(*input_points)
     
     def change_ellipse_method(self, method_name):
         """Изменяет метод создания эллипса"""
@@ -2482,64 +2454,39 @@ class MainWindow(QMainWindow):
             "Центр и радиусы": "center_radii",
             "Три точки на эллипсе": "three_points"
         }
-        method = method_map.get(method_name, "center_radii")
-        self.canvas.set_ellipse_creation_method(method)
-        self.update_ellipse_input_fields()
-        # Очищаем точки ввода при смене метода
-        self.canvas.clear_input_points()
+        self._apply_creation_method_change(
+            method_name,
+            method_map,
+            "center_radii",
+            self.canvas.set_ellipse_creation_method,
+            self.update_ellipse_input_fields,
+        )
     
     def update_ellipse_input_fields(self):
-        self.input_group.show()
         """Обновляет отображение полей ввода в зависимости от метода создания эллипса"""
-        # Обновляем метку для эллипса
-        self.start_point_label_widget.setText("Центр (x, y):")
+        self._prepare_object_input_panel(start_label="Центр (x, y):")
         
-        # Скрываем метку "Конечная точка" для эллипса
-        self.end_point_label_widget.hide()
-        
-        # Скрываем ВСЕ группы (включая группы окружности, дуги и прямоугольника)
-        self.cartesian_group.hide()
-        self.polar_group.hide()
-        self.circle_center_radius_group.hide()
-        self.circle_center_diameter_group.hide()
-        self.circle_two_points_group.hide()
-        self.circle_three_points_group.hide()
-        self.arc_three_points_group.hide()
-        self.arc_center_angles_group.hide()
-        self.rectangle_point_size_group.hide()
-        self.rectangle_center_size_group.hide()
-        self.rectangle_fillets_group.hide()
-        self.ellipse_center_radii_group.hide()
-        self.ellipse_three_points_group.hide()
-        
-        # Показываем нужную группу
         method_name = self.ellipse_method_combo.currentText()
         if method_name == "Центр и радиусы":
-            self.ellipse_center_radii_group.show()
+            self._show_input_groups('ellipse_center_radii_group')
         elif method_name == "Три точки на эллипсе":
-            self.ellipse_three_points_group.show()
-        
-        # Не обновляем точки ввода автоматически - только при изменении значений в полях
+            self._show_input_groups('ellipse_three_points_group')
     
     def on_ellipse_coordinates_changed(self):
         """Обработчик изменения координат эллипса"""
-        # Получаем точки ввода в зависимости от метода создания
         method_name = self.ellipse_method_combo.currentText()
-        center_point = QPointF(self.start_x_spin.value(), self.start_y_spin.value())
+        center_point = self._current_start_point()
         input_points = [center_point]
         
         if method_name == "Три точки на эллипсе":
-            point2 = QPointF(self.ellipse_point2_x_spin.value(), self.ellipse_point2_y_spin.value())
-            point3 = QPointF(self.ellipse_point3_x_spin.value(), self.ellipse_point3_y_spin.value())
+            point2 = self._point_from_spins(self.ellipse_point2_x_spin, self.ellipse_point2_y_spin)
+            point3 = self._point_from_spins(self.ellipse_point3_x_spin, self.ellipse_point3_y_spin)
             input_points.append(point2)
             input_points.append(point3)
-        # Для метода "Центр и радиусы" показываем только центр
-        
-        # Устанавливаем точки для визуализации
-        self.canvas.set_input_points(input_points)
+        self._set_canvas_input_points(*input_points)
     
     def change_angle_units(self, units):
-        self.angle_units = "radians" if units == "Радианы" else "degrees"
+        self.angle_units = self._line_angle_units_from_name(units)
         self.update_angle_units()
         self.update_info()
     
@@ -2566,126 +2513,49 @@ class MainWindow(QMainWindow):
             self.canvas.set_grid_color(color)
     
     def update_input_fields(self):
-        #  обновляет отображение полей ввода в зависимости от системы координат
         if self.coordinate_system == "cartesian":
             self.cartesian_group.show()
             self.polar_group.hide()
         else:
             self.cartesian_group.hide()
             self.polar_group.show()
-            
-            # при переключении на полярные координаты преобразуем текущие декартовы координаты
-            # ОТНОСИТЕЛЬНО НАЧАЛЬНОЙ ТОЧКИ
-            start_x = self.start_x_spin.value()
-            start_y = self.start_y_spin.value()
-            end_x = self.end_x_spin.value()
-            end_y = self.end_y_spin.value()
-            
-            # вычисляем смещение от начальной точки
-            delta_x = end_x - start_x
-            delta_y = end_y - start_y
-            
-            # преобразуем смещение в полярные координаты
-            radius = math.sqrt(delta_x**2 + delta_y**2)
-            angle = math.atan2(delta_y, delta_x)
-            
-            if self.angle_units == "degrees":
-                angle = math.degrees(angle)
-            
-            self.radius_spin.blockSignals(True)
-            self.angle_spin.blockSignals(True)
-            self.radius_spin.setValue(radius)
-            self.angle_spin.setValue(angle)
-            self.radius_spin.blockSignals(False)
-            self.angle_spin.blockSignals(False)
+            radius, angle = self._polar_from_current_points()
+            self._set_spin_value_safely(self.radius_spin, radius)
+            self._set_spin_value_safely(self.angle_spin, angle)
     
     def update_angle_units(self):
-        # обновляет единицы измерения углов
         self.angle_label.setText("°" if self.angle_units == "degrees" else "rad")
-        
-        # конвертируем угол при смене единиц измерения
         if self.coordinate_system == "polar":
             current_angle = self.angle_spin.value()
             if self.angle_units == "degrees":
-                # были радианы, стали градусы
                 current_angle = math.degrees(current_angle)
             else:
-                # были градусы, стали радианы
                 current_angle = math.radians(current_angle)
-            
-            self.angle_spin.blockSignals(True)
-            self.angle_spin.setValue(current_angle)
-            self.angle_spin.blockSignals(False)
+            self._set_spin_value_safely(self.angle_spin, current_angle)
     
     def on_start_coordinates_changed(self):
         """Обработчик изменения начальных координат"""
-        # Обновляем точки ввода для окружности, дуги, прямоугольника и эллипса
-        if self.canvas.primitive_type == 'circle':
-            self.on_circle_coordinates_changed()
-        elif self.canvas.primitive_type == 'arc':
-            self.on_arc_coordinates_changed()
-        elif self.canvas.primitive_type == 'rectangle':
-            self.on_rectangle_coordinates_changed()
-        elif self.canvas.primitive_type == 'ellipse':
-            self.on_ellipse_coordinates_changed()
-        elif self.canvas.primitive_type == 'polygon':
-            self.on_polygon_coordinates_changed()
-        else:
-            # Для отрезков используем обычный обработчик
-            self.on_coordinates_changed()
+        self._coordinate_change_handler(self.canvas.primitive_type)()
     
     def on_coordinates_changed(self):
-        # обработчик изменения декартовых координат только предпросмотр
-        # Показываем предпросмотр только для отрезков
         if self.canvas.primitive_type != 'line':
-            # Для прямоугольника обновляем точки ввода
-            if self.canvas.primitive_type == 'rectangle':
-                self.on_rectangle_coordinates_changed()
+            self._handle_non_line_coordinate_preview()
             return
         if self.line_coordinate_system == "cartesian":
             self.preview_coordinates()
 
     def on_polar_changed(self):
-        # обработчик изменения полярных координат только предпросмотр
-        # Показываем предпросмотр только для отрезков
         if self.canvas.primitive_type != 'line':
-            # Для прямоугольника обновляем точки ввода
-            if self.canvas.primitive_type == 'rectangle':
-                self.on_rectangle_coordinates_changed()
+            self._handle_non_line_coordinate_preview()
             return
         if self.line_coordinate_system == "polar":
             self.preview_coordinates()
 
     def preview_coordinates(self):
-        # предпросмотр отрезка без сохранения
-        # Показываем предпросмотр только для отрезков
         if self.canvas.primitive_type != 'line':
             return
-        
-        start_point = QPointF(self.start_x_spin.value(), self.start_y_spin.value())
-        
-        if self.line_coordinate_system == "cartesian":
-            end_point = QPointF(self.end_x_spin.value(), self.end_y_spin.value())
-        else:
-            # преобразуем полярные координаты в декартовы ОТНОСИТЕЛЬНО НАЧАЛЬНОЙ ТОЧКИ
-            radius = self.radius_spin.value()
-            angle = self.angle_spin.value()
-            
-            if self.line_angle_units == "degrees":
-                angle_rad = math.radians(angle)
-            else:
-                angle_rad = angle
-            
-            # вычисляем смещение от начальной точки
-            delta_x = radius * math.cos(angle_rad)
-            delta_y = radius * math.sin(angle_rad)
-            
-            # конечная точка = начальная + смещение
-            end_x = start_point.x() + delta_x
-            end_y = start_point.y() + delta_y
-            end_point = QPointF(end_x, end_y)
-        
-        # только предпросмотр без сохранения (apply=False)
+        start_point = self._current_start_point()
+        end_point = self._line_preview_endpoint(start_point)
         self.canvas.set_points_from_input(start_point, end_point, apply=False)
         self.update_info()
     
@@ -3058,10 +2928,3 @@ class MainWindow(QMainWindow):
                 painter.drawLine(int(x1), int(y1), int(x2), int(y2))
         painter.end()
         return QIcon(pixmap)
-        self.info_label2.setText("Первая точка:")
-        self.info_value2.setText(f"({first_point.x():.2f}, {first_point.y():.2f})")
-        self.info_label3.setText("Последняя точка:")
-        self.info_value3.setText(f"({last_point.x():.2f}, {last_point.y():.2f})")
-        self.info_label4.setText("Длина:")
-        self.info_value4.setText(f"{length:.2f}")
-        self.info_value4.setText(f"{length:.2f}")

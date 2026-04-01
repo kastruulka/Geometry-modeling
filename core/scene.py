@@ -1,6 +1,7 @@
 """
 Класс для управления сценой (объектами на сцене)
 """
+import math
 from typing import List, Optional
 from PySide6.QtCore import QPointF
 
@@ -85,11 +86,7 @@ class Scene:
     def clear(self):
         """Очищает сцену"""
         self._objects.clear()
-        self._current_object = None
-        self._is_drawing = False
-        self._drawing_type = None
-        self._arc_start_point = None
-        self._arc_end_point = None
+        self._reset_drawing_state()
     
     def set_rectangle_size(self, width: float, height: float):
         """Устанавливает размеры прямоугольника для методов point_size и center_size"""
@@ -103,28 +100,13 @@ class Scene:
             from widgets.primitives import Rectangle
             if isinstance(self._current_object, Rectangle):
                 method = self._rectangle_creation_method or 'two_points'
-                if method == 'point_size' and self._rectangle_point1:
-                    # Для метода point_size: top_left = начальная точка, bottom_right = точка + размеры
-                    end_point = QPointF(
-                        self._rectangle_point1.x() + width,
-                        self._rectangle_point1.y() + height
-                    )
-                    self._current_object.top_left = QPointF(self._rectangle_point1)
-                    self._current_object.bottom_right = end_point
-                elif method == 'center_size' and self._rectangle_point1:
-                    # Для метода center_size: вычисляем углы от центра
-                    half_width = width / 2.0
-                    half_height = height / 2.0
-                    top_left = QPointF(
-                        self._rectangle_point1.x() - half_width,
-                        self._rectangle_point1.y() - half_height
-                    )
-                    bottom_right = QPointF(
-                        self._rectangle_point1.x() + half_width,
-                        self._rectangle_point1.y() + half_height
-                    )
-                    self._current_object.top_left = top_left
-                    self._current_object.bottom_right = bottom_right
+                self._apply_rectangle_size(
+                    self._current_object,
+                    method,
+                    self._rectangle_point1,
+                    width,
+                    height,
+                )
     
     def set_rectangle_fillet_radius(self, radius: float):
         """Устанавливает радиус скругления для метода with_fillets"""
@@ -174,10 +156,7 @@ class Scene:
                 if len(self._spline_control_points) >= 2:
                     # Проверяем, близко ли новая точка к первой точке (для замыкания сплайна)
                     first_point = self._spline_control_points[0]
-                    import math
-                    dx = point.x() - first_point.x()
-                    dy = point.y() - first_point.y()
-                    distance = math.sqrt(dx*dx + dy*dy)
+                    distance = self._distance_between_points(point, first_point)
                     
                     if distance <= tolerance:
                         # Замыкаем сплайн - добавляем первую точку в конец
@@ -200,6 +179,327 @@ class Scene:
     def get_lines(self) -> List[LineSegment]:
         """Возвращает все отрезки на сцене"""
         return [obj for obj in self._objects if isinstance(obj, LineSegment)]
+
+    def _distance_between_points(self, first: QPointF, second: QPointF) -> float:
+        return math.hypot(second.x() - first.x(), second.y() - first.y())
+
+    def _set_rectangle_corners(self, anchor: QPointF, width: float, height: float, from_center: bool = False):
+        if from_center:
+            half_width = width / 2.0
+            half_height = height / 2.0
+            top_left = QPointF(anchor.x() - half_width, anchor.y() - half_height)
+            bottom_right = QPointF(anchor.x() + half_width, anchor.y() + half_height)
+            return top_left, bottom_right
+
+        top_left = QPointF(anchor)
+        bottom_right = QPointF(anchor.x() + width, anchor.y() + height)
+        return top_left, bottom_right
+
+    def _apply_rectangle_size(self, rectangle, method: str, anchor: Optional[QPointF], width: float, height: float):
+        if rectangle is None or anchor is None:
+            return
+
+        if method == 'point_size':
+            top_left, bottom_right = self._set_rectangle_corners(anchor, width, height)
+        elif method == 'center_size':
+            top_left, bottom_right = self._set_rectangle_corners(anchor, width, height, from_center=True)
+        else:
+            return
+
+        rectangle.top_left = top_left
+        rectangle.bottom_right = bottom_right
+
+    def _reset_arc_state(self):
+        self._arc_creation_method = None
+        self._arc_start_point = None
+        self._arc_end_point = None
+        self._temp_arc_end_point = None
+        self._arc_center = None
+        self._arc_radius = 0.0
+
+    def _reset_ellipse_state(self):
+        self._ellipse_start_point = None
+        self._ellipse_end_point = None
+        self._temp_ellipse_end_point = None
+
+    def _reset_circle_state(self):
+        self._circle_creation_method = None
+        self._circle_point1 = None
+        self._circle_point2 = None
+        self._circle_point3 = None
+
+    def _reset_rectangle_state(self):
+        self._rectangle_creation_method = None
+        self._rectangle_point1 = None
+        self._rectangle_width = 0.0
+        self._rectangle_height = 0.0
+        self._rectangle_fillet_radius = 0.0
+
+    def _reset_polygon_state(self):
+        self._polygon_creation_method = None
+        self._polygon_center = None
+        self._polygon_radius = 0.0
+        self._polygon_num_vertices = 3
+
+    def _reset_spline_state(self):
+        self._spline_control_points = []
+
+    def _reset_drawing_state(self):
+        self._current_object = None
+        self._is_drawing = False
+        self._drawing_type = None
+        self._reset_arc_state()
+        self._reset_ellipse_state()
+        self._reset_circle_state()
+        self._reset_rectangle_state()
+        self._reset_polygon_state()
+        self._reset_spline_state()
+
+    def _restore_unfinished_drawing(self, obj: GeometricObject, drawing_type: str):
+        self._current_object = obj
+        self._is_drawing = True
+        self._drawing_type = drawing_type
+        if obj in self._objects:
+            self._objects.remove(obj)
+
+    def _circle_center_and_radius_from_diameter(self, first: QPointF, second: QPointF):
+        center = QPointF((first.x() + second.x()) / 2.0, (first.y() + second.y()) / 2.0)
+        radius = self._distance_between_points(first, second) / 2.0
+        return center, radius
+
+    def _apply_circle_preview_from_center(self, circle, point: QPointF, use_diameter: bool = False):
+        radius = self._distance_between_points(circle.center, point)
+        circle.radius = radius / 2.0 if use_diameter else radius
+
+    def _apply_circle_preview_from_diameter(self, circle, first: QPointF, second: QPointF):
+        center, radius = self._circle_center_and_radius_from_diameter(first, second)
+        circle.center = center
+        circle.radius = radius
+
+    def _create_polygon_object(
+        self,
+        center: QPointF,
+        radius: float,
+        num_vertices: int,
+        style=None,
+        color=None,
+        width=None,
+        construction_type: Optional[str] = None,
+    ):
+        from widgets.primitives import Polygon
+
+        polygon_kwargs = {
+            'style': style,
+            'color': color,
+            'width': width,
+            'start_angle': -math.pi / 2,
+        }
+        if construction_type is not None:
+            polygon_kwargs['construction_type'] = construction_type
+        return Polygon(center, radius, num_vertices, **polygon_kwargs)
+
+    def _spline_preview_points(self, point: QPointF, close_tolerance: float = 10.0) -> List[QPointF]:
+        temp_points = self._spline_control_points.copy()
+        if len(temp_points) < 2:
+            temp_points.append(point)
+            return temp_points
+
+        first_point = temp_points[0]
+        if self._distance_between_points(point, first_point) <= close_tolerance:
+            temp_points.append(QPointF(first_point))
+        else:
+            temp_points.append(point)
+        return temp_points
+
+    def _create_arc_object(self, point: QPointF, style=None, color=None, width=None):
+        from widgets.primitives import Arc
+
+        return Arc(point, 0, 0, 0, 0, style=style, color=color, width=width, rotation_angle=0.0)
+
+    def _create_circle_object(self, point: QPointF, style=None, color=None, width=None):
+        from widgets.primitives import Circle
+
+        return Circle(point, 0, style=style, color=color, width=width)
+
+    def _create_ellipse_object(self, point: QPointF, style=None, color=None, width=None):
+        from widgets.primitives import Ellipse
+
+        return Ellipse(point, 0, 0, style=style, color=color, width=width, rotation_angle=0.0)
+
+    def _create_rectangle_object(self, point: QPointF, style=None, color=None, width=None):
+        from widgets.primitives import Rectangle
+
+        return Rectangle(point, point, style=style, color=color, width=width)
+
+    def _reset_arc_preview(self, arc, center: Optional[QPointF] = None):
+        arc.center = center
+        arc.radius_x = 0
+        arc.radius_y = 0
+        arc.radius = 0
+        arc.start_angle = 0
+        arc.end_angle = 0
+        arc.rotation_angle = 0.0
+
+    def _apply_arc_geometry(
+        self,
+        arc,
+        center: QPointF,
+        radius_x: float,
+        radius_y: float,
+        start_angle: float,
+        end_angle: float,
+        rotation_angle: float,
+        vertex_point: Optional[QPointF] = None,
+        clamp_radii: bool = False,
+    ):
+        arc.center = center
+        arc.radius_x = max(radius_x, 1.0) if clamp_radii else radius_x
+        arc.radius_y = max(radius_y, 1.0) if clamp_radii else radius_y
+        arc.radius = max(arc.radius_x, arc.radius_y)
+        arc.start_angle = start_angle
+        arc.end_angle = end_angle
+        arc.rotation_angle = rotation_angle
+        if vertex_point is not None:
+            arc._start_point = self._arc_start_point
+            arc._end_point = self._arc_end_point
+            arc._original_vertex_point = QPointF(vertex_point)
+            arc._vertex_point = arc.get_vertex_point()
+
+    def _apply_ellipse_geometry(
+        self,
+        ellipse,
+        center: QPointF,
+        radius_x: float,
+        radius_y: float,
+        rotation_angle: float,
+        clamp_radii: bool = False,
+    ):
+        ellipse.center = center
+        ellipse.radius_x = max(radius_x, 1.0) if clamp_radii else radius_x
+        ellipse.radius_y = max(radius_y, 1.0) if clamp_radii else radius_y
+        ellipse.rotation_angle = rotation_angle
+
+    def _temporary_ellipse_third_point(self, first: QPointF, second: QPointF) -> QPointF:
+        dx = second.x() - first.x()
+        dy = second.y() - first.y()
+        distance = math.hypot(dx, dy)
+        if distance <= 1e-6:
+            return second
+
+        perp_x = -dy / distance
+        perp_y = dx / distance
+        mid_x = (first.x() + second.x()) / 2
+        mid_y = (first.y() + second.y()) / 2
+        return QPointF(mid_x + perp_x * distance * 0.3, mid_y + perp_y * distance * 0.3)
+
+    def _set_circle_start_point(self, start_point: QPointF, reset_three_point_state: bool = False):
+        self._circle_point1 = start_point
+        if reset_three_point_state:
+            self._circle_point2 = None
+            self._circle_point3 = None
+
+    def _set_rectangle_anchor(self, start_point: QPointF, reset_size: bool = False, reset_fillet: bool = False):
+        self._rectangle_point1 = start_point
+        if reset_size:
+            self._rectangle_width = 0.0
+            self._rectangle_height = 0.0
+        if reset_fillet:
+            self._rectangle_fillet_radius = 0.0
+
+    def _assign_layer_to_object(self, obj: GeometricObject):
+        if hasattr(self, '_current_layer_name') and self._current_layer_name:
+            obj.layer_name = self._current_layer_name
+
+    def _circle_creation_mode(self) -> str:
+        return self._circle_creation_method or 'center_radius'
+
+    def _arc_creation_mode(self) -> str:
+        return self._arc_creation_method or 'three_points'
+
+    def _rectangle_creation_mode(self) -> str:
+        return self._rectangle_creation_method or 'two_points'
+
+    def _polygon_creation_mode(self) -> str:
+        return self._polygon_creation_method or 'center_radius_vertices'
+
+    def _polygon_radius_and_angle(self, point: QPointF, center: QPointF):
+        dx = point.x() - center.x()
+        dy = point.y() - center.y()
+        return math.hypot(dx, dy), math.atan2(dy, dx)
+
+    def _chord_frame(self, p1: QPointF, p2: QPointF):
+        chord_mid = QPointF((p1.x() + p2.x()) / 2, (p1.y() + p2.y()) / 2)
+        chord_length = self._distance_between_points(p1, p2)
+        if chord_length < 1e-6:
+            return None
+
+        chord_angle = math.atan2(p2.y() - p1.y(), p2.x() - p1.x())
+        return chord_mid, chord_length, chord_angle
+
+    def _point_to_chord_local(self, point: QPointF, chord_mid: QPointF, chord_angle: float) -> QPointF:
+        cos_a = math.cos(-chord_angle)
+        sin_a = math.sin(-chord_angle)
+        dx = point.x() - chord_mid.x()
+        dy = point.y() - chord_mid.y()
+        return QPointF(
+            dx * cos_a - dy * sin_a,
+            dx * sin_a + dy * cos_a,
+        )
+
+    def _semi_axis_floor(self, value: float, fallback: float) -> float:
+        return value if value >= 1e-6 else fallback
+
+    def _can_finish_arc(self) -> bool:
+        if self._current_object is None:
+            return False
+        method = self._arc_creation_mode()
+        if method == 'three_points':
+            if self._arc_end_point is None:
+                return False
+            return (
+                self._current_object.radius_x != 0
+                and self._current_object.radius_y != 0
+                and self._current_object.start_angle != self._current_object.end_angle
+            )
+        return self._arc_radius != 0.0
+
+    def _can_finish_ellipse(self) -> bool:
+        if self._current_object is None:
+            return False
+        return (
+            self._ellipse_end_point is not None
+            and self._current_object.radius_x != 0
+            and self._current_object.radius_y != 0
+        )
+
+    def _can_finish_spline(self) -> bool:
+        return len(self._spline_control_points) >= 2
+
+    def _rectangle_has_required_size(self) -> bool:
+        return (
+            self._rectangle_point1 is not None
+            and self._rectangle_width > 0.0
+            and self._rectangle_height > 0.0
+        )
+
+    def _apply_rectangle_finish_state(self, rectangle, method: str) -> bool:
+        if method in ('point_size', 'center_size'):
+            if not self._rectangle_has_required_size():
+                return False
+            self._apply_rectangle_size(
+                rectangle,
+                method,
+                self._rectangle_point1,
+                self._rectangle_width,
+                self._rectangle_height,
+            )
+        elif method == 'with_fillets':
+            if self._rectangle_fillet_radius == 0.0:
+                bbox = rectangle.get_bounding_box()
+                min_side = min(bbox.width(), bbox.height())
+                self._rectangle_fillet_radius = min_side * 0.1
+            rectangle.fillet_radius = self._rectangle_fillet_radius
+        return True
     
     def start_drawing(self, start_point: QPointF, drawing_type: str = 'line',
                      style=None, color=None, width=None, layer_name=None, **kwargs):
@@ -212,31 +512,24 @@ class Scene:
             self._current_object = LineSegment(start_point, start_point, style=style, 
                                               color=color, width=width)
         elif drawing_type == 'circle':
-            from widgets.primitives import Circle
             # Получаем метод создания из kwargs или используем по умолчанию
             creation_method = kwargs.get('circle_method', 'center_radius')
             self._circle_creation_method = creation_method
+            self._current_object = self._create_circle_object(start_point, style=style, color=color, width=width)
             
             if creation_method == 'center_radius' or creation_method == 'center_diameter':
                 # Центр и радиус/диаметр - центр уже задан
-                self._current_object = Circle(start_point, 0, style=style, color=color, width=width)
-                self._circle_point1 = start_point
+                self._set_circle_start_point(start_point)
             elif creation_method == 'two_points':
                 # Две точки - первая точка задана
-                self._circle_point1 = start_point
-                self._current_object = Circle(start_point, 0, style=style, color=color, width=width)
+                self._set_circle_start_point(start_point)
             elif creation_method == 'three_points':
                 # Три точки - первая точка задана
-                self._circle_point1 = start_point
-                self._circle_point2 = None
-                self._circle_point3 = None
-                self._current_object = Circle(start_point, 0, style=style, color=color, width=width)
+                self._set_circle_start_point(start_point, reset_three_point_state=True)
             else:
                 # По умолчанию - центр и радиус
-                self._current_object = Circle(start_point, 0, style=style, color=color, width=width)
-                self._circle_point1 = start_point
+                self._set_circle_start_point(start_point)
         elif drawing_type == 'arc':
-            from widgets.primitives import Arc
             # Получаем метод создания из kwargs или используем по умолчанию
             creation_method = kwargs.get('arc_method', 'three_points')
             self._arc_creation_method = creation_method
@@ -246,77 +539,84 @@ class Scene:
                 self._arc_start_point = start_point
                 self._arc_end_point = None
                 # Создаем временный объект для предпросмотра
-                self._current_object = Arc(start_point, 0, 0, 0, 0, style=style, color=color, width=width, rotation_angle=0.0)
+                self._current_object = self._create_arc_object(start_point, style=style, color=color, width=width)
             elif creation_method == 'center_angles':
                 # Центр и углы - первый клик - центр
                 self._arc_center = start_point
                 self._arc_radius = 0.0
                 # Создаем временный объект для предпросмотра
-                self._current_object = Arc(start_point, 0, 0, 0, 0, style=style, color=color, width=width, rotation_angle=0.0)
+                self._current_object = self._create_arc_object(start_point, style=style, color=color, width=width)
         elif drawing_type == 'rectangle':
-            from widgets.primitives import Rectangle
             # Получаем метод создания из kwargs или используем по умолчанию
             creation_method = kwargs.get('rectangle_method', 'two_points')
             self._rectangle_creation_method = creation_method
+            self._current_object = self._create_rectangle_object(start_point, style=style, color=color, width=width)
             
             if creation_method == 'two_points':
                 # Две противоположные точки - первая точка задана
-                self._rectangle_point1 = start_point
-                self._current_object = Rectangle(start_point, start_point, style=style, 
-                                               color=color, width=width)
+                self._set_rectangle_anchor(start_point)
             elif creation_method == 'point_size':
                 # Одна точка, ширина и высота - точка задана
-                self._rectangle_point1 = start_point
-                self._rectangle_width = 0.0
-                self._rectangle_height = 0.0
-                self._current_object = Rectangle(start_point, start_point, style=style, 
-                                               color=color, width=width)
+                self._set_rectangle_anchor(start_point, reset_size=True)
             elif creation_method == 'center_size':
                 # Центр, ширина и высота - центр задан
-                self._rectangle_point1 = start_point
-                self._rectangle_width = 0.0
-                self._rectangle_height = 0.0
-                self._current_object = Rectangle(start_point, start_point, style=style, 
-                                               color=color, width=width)
+                self._set_rectangle_anchor(start_point, reset_size=True)
             elif creation_method == 'with_fillets':
                 # С фасками/скруглениями - первая точка задана
-                self._rectangle_point1 = start_point
-                self._rectangle_fillet_radius = 0.0
-                self._current_object = Rectangle(start_point, start_point, style=style, 
-                                               color=color, width=width)
+                self._set_rectangle_anchor(start_point, reset_fillet=True)
         elif drawing_type == 'ellipse':
             # Для эллипса первый клик - начальная точка
             self._ellipse_start_point = start_point
             self._ellipse_end_point = None
             # Создаем временный объект для предпросмотра
-            from widgets.primitives import Ellipse
-            self._current_object = Ellipse(start_point, 0, 0, style=style, color=color, width=width, rotation_angle=0.0)
+            self._current_object = self._create_ellipse_object(start_point, style=style, color=color, width=width)
         elif drawing_type == 'polygon':
-            from widgets.primitives import Polygon
             # Получаем метод создания из kwargs или используем по умолчанию
             creation_method = kwargs.get('polygon_method', 'center_radius_vertices')
             self._polygon_creation_method = creation_method
             
-            import math
             if creation_method == 'center_radius_vertices':
                 # Центр и радиус окружности и количество углов - центр уже задан
                 self._polygon_center = start_point
                 self._polygon_radius = 0.0
                 self._polygon_num_vertices = kwargs.get('num_vertices', 3)
                 # Начальный угол будет установлен при движении мыши
-                self._current_object = Polygon(start_point, 0, self._polygon_num_vertices, style=style, color=color, width=width, start_angle=-math.pi / 2)
+                self._current_object = self._create_polygon_object(
+                    start_point,
+                    0,
+                    self._polygon_num_vertices,
+                    style=style,
+                    color=color,
+                    width=width,
+                )
             elif creation_method == 'inscribed_manual':
                 # Вписанная окружность с ручным вводом радиуса
                 self._polygon_center = start_point
                 self._polygon_radius = kwargs.get('radius', 50.0)
                 self._polygon_num_vertices = kwargs.get('num_vertices', 3)
-                self._current_object = Polygon(start_point, self._polygon_radius, self._polygon_num_vertices, style=style, color=color, width=width, construction_type='inscribed', start_angle=-math.pi / 2)
+                self._current_object = self._create_polygon_object(
+                    start_point,
+                    self._polygon_radius,
+                    self._polygon_num_vertices,
+                    style=style,
+                    color=color,
+                    width=width,
+                    construction_type='inscribed',
+                )
             elif creation_method == 'circumscribed_manual':
                 # Описанная окружность с ручным вводом радиуса
                 self._polygon_center = start_point
                 self._polygon_radius = kwargs.get('radius', 50.0)
                 self._polygon_num_vertices = kwargs.get('num_vertices', 3)
-                self._current_object = Polygon(start_point, self._polygon_radius, self._polygon_num_vertices, style=style, color=color, width=width, construction_type='circumscribed', start_angle=-math.pi / 2)
+                self._current_object = self._create_polygon_object(
+                    start_point,
+                    self._polygon_radius,
+                    self._polygon_num_vertices,
+                    style=style,
+                    color=color,
+                    width=width,
+                    construction_type='circumscribed',
+                )
         elif drawing_type == 'spline':
             from widgets.primitives import Spline
             # Для сплайна первый клик - первая контрольная точка
@@ -337,38 +637,32 @@ class Scene:
         elif self._drawing_type == 'circle':
             from widgets.primitives import Circle
             if isinstance(self._current_object, Circle):
-                import math
-                method = self._circle_creation_method or 'center_radius'
+                method = self._circle_creation_mode()
                 
                 if method == 'center_radius' or method == 'center_diameter':
                     # Центр уже задан, точка определяет радиус
-                    dx = point.x() - self._current_object.center.x()
-                    dy = point.y() - self._current_object.center.y()
-                    radius = math.sqrt(dx*dx + dy*dy)
-                    if method == 'center_diameter':
-                        radius = radius / 2.0  # Диаметр -> радиус
-                    self._current_object.radius = radius
+                    self._apply_circle_preview_from_center(
+                        self._current_object,
+                        point,
+                        use_diameter=(method == 'center_diameter'),
+                    )
                 elif method == 'two_points':
                     # Две точки определяют диаметр
                     if self._circle_point1:
-                        dx = point.x() - self._circle_point1.x()
-                        dy = point.y() - self._circle_point1.y()
-                        radius = math.sqrt(dx*dx + dy*dy) / 2.0
-                        center_x = (self._circle_point1.x() + point.x()) / 2.0
-                        center_y = (self._circle_point1.y() + point.y()) / 2.0
-                        self._current_object.center = QPointF(center_x, center_y)
-                        self._current_object.radius = radius
+                        self._apply_circle_preview_from_diameter(
+                            self._current_object,
+                            self._circle_point1,
+                            point,
+                        )
                 elif method == 'three_points':
                     # Три точки - показываем предпросмотр по двум точкам
                     if self._circle_point1 and self._circle_point2 is None:
                         # Вторая точка еще не зафиксирована, показываем предпросмотр
-                        dx = point.x() - self._circle_point1.x()
-                        dy = point.y() - self._circle_point1.y()
-                        radius = math.sqrt(dx*dx + dy*dy) / 2.0
-                        center_x = (self._circle_point1.x() + point.x()) / 2.0
-                        center_y = (self._circle_point1.y() + point.y()) / 2.0
-                        self._current_object.center = QPointF(center_x, center_y)
-                        self._current_object.radius = radius
+                        self._apply_circle_preview_from_diameter(
+                            self._current_object,
+                            self._circle_point1,
+                            point,
+                        )
                     elif self._circle_point1 and self._circle_point2:
                         # Третья точка - вычисляем окружность по трем точкам
                         center, radius = self._calculate_circle_from_three_points(
@@ -380,20 +674,14 @@ class Scene:
         elif self._drawing_type == 'arc':
             from widgets.primitives import Arc
             if isinstance(self._current_object, Arc):
-                import math
-                method = self._arc_creation_method or 'three_points'
+                method = self._arc_creation_mode()
                 
                 if method == 'three_points':
                     if self._arc_end_point is None:
                         # Обновление предпросмотра второй точки (движение мыши)
                         # Показываем прямую линию от начала до текущей позиции
                         # Не фиксируем точку, только предпросмотр
-                        self._current_object.center = self._arc_start_point
-                        self._current_object.radius_x = 0
-                        self._current_object.radius_y = 0
-                        self._current_object.radius = 0
-                        self._current_object.start_angle = 0
-                        self._current_object.end_angle = 0
+                        self._reset_arc_preview(self._current_object, self._arc_start_point)
                     else:
                         # Третий этап - точка высоты (вершина)
                         # Вычисляем параметры дуги эллипса по трем точкам
@@ -402,59 +690,37 @@ class Scene:
                         )
                         if len(result) == 6 and result[0] is not None:
                             center, radius_x, radius_y, start_angle, end_angle, rotation_angle = result
-                            # Проверяем, что радиусы валидны
-                            if radius_x > 0 and radius_y > 0:
-                                self._current_object.center = center
-                                self._current_object.radius_x = radius_x
-                                self._current_object.radius_y = radius_y
-                                self._current_object.radius = max(radius_x, radius_y)
-                                self._current_object.start_angle = start_angle
-                                self._current_object.end_angle = end_angle
-                                self._current_object.rotation_angle = rotation_angle
-                                # Сохраняем исходные две точки для привязки (начало и конец)
-                                self._current_object._start_point = self._arc_start_point
-                                self._current_object._end_point = self._arc_end_point
-                                # Сохраняем исходную третью точку для определения правильной стороны дуги
-                                self._current_object._original_vertex_point = QPointF(point)
-                                # Вычисляем и сохраняем реальную вершину дуги (точку на дуге в середине углового диапазона)
-                                self._current_object._vertex_point = self._current_object.get_vertex_point()
-                            else:
-                                # Если радиусы невалидны, используем минимальные значения
-                                self._current_object.center = center
-                                self._current_object.radius_x = max(radius_x, 1.0)
-                                self._current_object.radius_y = max(radius_y, 1.0)
-                                self._current_object.radius = max(self._current_object.radius_x, self._current_object.radius_y)
-                                self._current_object.start_angle = start_angle
-                                self._current_object.end_angle = end_angle
-                                self._current_object.rotation_angle = rotation_angle
-                                # Сохраняем исходные две точки для привязки (начало и конец)
-                                self._current_object._start_point = self._arc_start_point
-                                self._current_object._end_point = self._arc_end_point
-                                # Сохраняем исходную третью точку для определения правильной стороны дуги
-                                self._current_object._original_vertex_point = QPointF(point)
-                                # Вычисляем и сохраняем реальную вершину дуги (точку на дуге в середине углового диапазона)
-                                self._current_object._vertex_point = self._current_object.get_vertex_point()
+                            self._apply_arc_geometry(
+                                self._current_object,
+                                center,
+                                radius_x,
+                                radius_y,
+                                start_angle,
+                                end_angle,
+                                rotation_angle,
+                                vertex_point=point,
+                                clamp_radii=not (radius_x > 0 and radius_y > 0),
+                            )
                 elif method == 'center_angles':
                     # Центр и углы - второй клик определяет радиус
                     if self._arc_radius == 0.0:
                         # Вычисляем радиус от центра до точки
-                        dx = point.x() - self._arc_center.x()
-                        dy = point.y() - self._arc_center.y()
-                        self._arc_radius = math.sqrt(dx*dx + dy*dy)
+                        self._arc_radius = self._distance_between_points(point, self._arc_center)
                     
                     # Обновляем дугу с текущим радиусом и углами (пока предпросмотр)
-                    self._current_object.center = self._arc_center
-                    self._current_object.radius_x = self._arc_radius
-                    self._current_object.radius_y = self._arc_radius
-                    self._current_object.radius = self._arc_radius
-                    # Углы будут установлены при завершении рисования
-                    self._current_object.start_angle = 0
-                    self._current_object.end_angle = 90
-                    self._current_object.rotation_angle = 0.0
+                    self._apply_arc_geometry(
+                        self._current_object,
+                        self._arc_center,
+                        self._arc_radius,
+                        self._arc_radius,
+                        0,
+                        90,
+                        0.0,
+                    )
         elif self._drawing_type == 'rectangle':
             from widgets.primitives import Rectangle
             if isinstance(self._current_object, Rectangle):
-                method = self._rectangle_creation_method or 'two_points'
+                method = self._rectangle_creation_mode()
                 
                 if method == 'two_points':
                     # Две противоположные точки - просто обновляем вторую точку
@@ -486,50 +752,42 @@ class Scene:
         elif self._drawing_type == 'ellipse':
             from widgets.primitives import Ellipse
             if isinstance(self._current_object, Ellipse):
-                import math
                 if self._ellipse_end_point is None:
                     # Обновление предпросмотра второй точки (движение мыши)
                     # Показываем предпросмотр эллипса с временной третьей точкой
                     # Используем текущую позицию мыши как вторую точку, а для третьей используем перпендикуляр
-                    import math
-                    # Вычисляем перпендикуляр к линии от первой точки до текущей позиции
-                    dx = point.x() - self._ellipse_start_point.x()
-                    dy = point.y() - self._ellipse_start_point.y()
-                    dist = math.sqrt(dx*dx + dy*dy)
-                    if dist > 1e-6:
-                        # Перпендикуляр к линии
-                        perp_x = -dy / dist
-                        perp_y = dx / dist
-                        # Третья точка на некотором расстоянии от середины
-                        mid_x = (self._ellipse_start_point.x() + point.x()) / 2
-                        mid_y = (self._ellipse_start_point.y() + point.y()) / 2
-                        temp_third_point = QPointF(mid_x + perp_x * dist * 0.3, mid_y + perp_y * dist * 0.3)
-                    else:
-                        temp_third_point = point
+                    temp_third_point = self._temporary_ellipse_third_point(self._ellipse_start_point, point)
                     result = self._calculate_ellipse_from_three_points(
                         self._ellipse_start_point, point, temp_third_point
                     )
                     if len(result) == 4 and result[0] is not None:
                         center, radius_x, radius_y, rotation_angle = result
                         if radius_x > 0 and radius_y > 0:
-                            self._current_object.center = center
-                            self._current_object.radius_x = radius_x
-                            self._current_object.radius_y = radius_y
-                            self._current_object.rotation_angle = rotation_angle
+                            self._apply_ellipse_geometry(
+                                self._current_object,
+                                center,
+                                radius_x,
+                                radius_y,
+                                rotation_angle,
+                            )
                         else:
-                            self._current_object.center = self._ellipse_start_point
-                            self._current_object.radius_x = 0
-                            self._current_object.radius_y = 0
+                            self._apply_ellipse_geometry(
+                                self._current_object,
+                                self._ellipse_start_point,
+                                0,
+                                0,
+                                0.0,
+                            )
                     else:
                         # Если не удалось вычислить, показываем окружность
-                        import math
-                        dx = point.x() - self._ellipse_start_point.x()
-                        dy = point.y() - self._ellipse_start_point.y()
-                        radius = math.sqrt(dx*dx + dy*dy)
-                        self._current_object.center = self._ellipse_start_point
-                        self._current_object.radius_x = radius
-                        self._current_object.radius_y = radius
-                        self._current_object.rotation_angle = 0.0
+                        radius = self._distance_between_points(point, self._ellipse_start_point)
+                        self._apply_ellipse_geometry(
+                            self._current_object,
+                            self._ellipse_start_point,
+                            radius,
+                            radius,
+                            0.0,
+                        )
                 else:
                     # Третий этап - точка высоты (вершина)
                     # Вычисляем параметры эллипса по трем точкам
@@ -540,84 +798,54 @@ class Scene:
                         center, radius_x, radius_y, rotation_angle = result
                         # Проверяем, что радиусы валидны
                         if radius_x > 0 and radius_y > 0:
-                            self._current_object.center = center
-                            self._current_object.radius_x = radius_x
-                            self._current_object.radius_y = radius_y
-                            self._current_object.rotation_angle = rotation_angle
+                            self._apply_ellipse_geometry(
+                                self._current_object,
+                                center,
+                                radius_x,
+                                radius_y,
+                                rotation_angle,
+                            )
                         else:
                             # Если радиусы невалидны, используем минимальные значения
-                            self._current_object.center = center
-                            self._current_object.radius_x = max(radius_x, 1.0)
-                            self._current_object.radius_y = max(radius_y, 1.0)
-                            self._current_object.rotation_angle = rotation_angle
+                            self._apply_ellipse_geometry(
+                                self._current_object,
+                                center,
+                                radius_x,
+                                radius_y,
+                                rotation_angle,
+                                clamp_radii=True,
+                            )
         elif self._drawing_type == 'polygon':
             from widgets.primitives import Polygon
             if isinstance(self._current_object, Polygon):
-                import math
-                method = self._polygon_creation_method or 'center_radius_vertices'
+                method = self._polygon_creation_mode()
                 
                 if method == 'center_radius_vertices':
                     # Центр уже задан, точка определяет радиус и направление
-                    dx = point.x() - self._current_object.center.x()
-                    dy = point.y() - self._current_object.center.y()
-                    radius = math.sqrt(dx*dx + dy*dy)
-                    # Вычисляем угол направления первой вершины на основе позиции курсора
-                    start_angle = math.atan2(dy, dx)
+                    radius, start_angle = self._polygon_radius_and_angle(point, self._current_object.center)
                     self._current_object.radius = radius
                     self._current_object.start_angle = start_angle
                     self._polygon_radius = radius
                 elif method == 'inscribed_manual' or method == 'circumscribed_manual':
                     # Для ручного ввода радиуса точка определяет только направление
-                    dx = point.x() - self._current_object.center.x()
-                    dy = point.y() - self._current_object.center.y()
-                    # Вычисляем угол направления первой вершины
-                    start_angle = math.atan2(dy, dx)
+                    _, start_angle = self._polygon_radius_and_angle(point, self._current_object.center)
                     self._current_object.start_angle = start_angle
                     # Радиус берется из UI (устанавливается через set_polygon_radius)
         elif self._drawing_type == 'spline':
             from widgets.primitives import Spline
             if isinstance(self._current_object, Spline):
                 # Обновляем предпросмотр сплайна с текущей позицией мыши как временной точкой
-                temp_points = self._spline_control_points.copy()
-                
-                # Проверяем, близко ли точка к первой точке (для предпросмотра замыкания)
-                if len(temp_points) >= 2:
-                    import math
-                    first_point = temp_points[0]
-                    dx = point.x() - first_point.x()
-                    dy = point.y() - first_point.y()
-                    distance = math.sqrt(dx*dx + dy*dy)
-                    tolerance = 10.0
-                    
-                    if distance <= tolerance:
-                        # Показываем предпросмотр замкнутого сплайна
-                        temp_points.append(QPointF(first_point))
-                    else:
-                        # Обычный предпросмотр
-                        temp_points.append(point)
-                else:
-                    # Обычный предпросмотр
-                    temp_points.append(point)
-                
-                self._current_object.control_points = temp_points
+                self._current_object.control_points = self._spline_preview_points(point)
     
     def finish_drawing(self) -> Optional[GeometricObject]:
         """Завершает рисование и возвращает созданный объект"""
-        if self._drawing_type == 'arc':
-            method = self._arc_creation_method or 'three_points'
-            if method == 'three_points' and self._arc_end_point is None:
-                # Для дуги по трем точкам нужно минимум 2 точки, не завершаем
-                return None
-            elif method == 'center_angles' and self._arc_radius == 0.0:
-                # Для дуги по центру и углам нужен радиус, не завершаем
-                return None
-        
-        if self._drawing_type == 'ellipse' and self._ellipse_end_point is None:
-            # Для эллипса нужно минимум 2 точки, не завершаем
+        if self._drawing_type == 'arc' and not self._can_finish_arc():
             return None
-        
-        if self._drawing_type == 'spline' and len(self._spline_control_points) < 2:
-            # Для сплайна нужно минимум 2 контрольные точки
+
+        if self._drawing_type == 'ellipse' and self._ellipse_end_point is None:
+            return None
+
+        if self._drawing_type == 'spline' and not self._can_finish_spline():
             return None
         
         if self._current_object:
@@ -625,102 +853,54 @@ class Scene:
             if self._drawing_type == 'arc':
                 from widgets.primitives import Arc
                 if isinstance(self._current_object, Arc):
-                    method = self._arc_creation_method or 'three_points'
-                    if method == 'three_points' and self._arc_end_point is not None:
-                        # Проверяем, что радиусы установлены (третья точка была установлена)
-                        if self._current_object.radius_x == 0 or self._current_object.radius_y == 0:
-                            # Еще не установлена третья точка (высота), не завершаем
-                            return None
-                        # Проверяем, что углы валидны
-                        if self._current_object.start_angle == self._current_object.end_angle:
-                            # Углы одинаковые, дуга не может быть построена
-                            return None
-                    elif method == 'center_angles':
-                        # Для метода центр+углы углы должны быть установлены через UI
-                        # Здесь мы просто проверяем, что радиус установлен
-                        if self._arc_radius == 0.0:
-                            return None
+                    if not self._can_finish_arc():
+                        return None
             
             # Для эллипса проверяем, что все три точки установлены
             if self._drawing_type == 'ellipse' and self._ellipse_end_point is not None:
                 from widgets.primitives import Ellipse
                 if isinstance(self._current_object, Ellipse):
-                    # Проверяем, что радиусы установлены (третья точка была установлена)
-                    if self._current_object.radius_x == 0 or self._current_object.radius_y == 0:
-                        # Еще не установлена третья точка (высота), не завершаем
+                    if not self._can_finish_ellipse():
                         return None
             
             # Сохраняем тип рисования перед сбросом для проверок
             drawing_type = self._drawing_type
             
             obj = self._current_object
-            # Назначаем слой
-            if hasattr(self, '_current_layer_name') and self._current_layer_name:
-                obj.layer_name = self._current_layer_name
+            self._assign_layer_to_object(obj)
             self.add_object(obj)
             self._current_object = None
             self._is_drawing = False
             self._drawing_type = None
-            self._arc_creation_method = None
-            self._arc_start_point = None
-            self._arc_end_point = None
-            self._arc_center = None
-            self._arc_radius = 0.0
-            self._ellipse_start_point = None
-            self._ellipse_end_point = None
+            self._reset_arc_state()
+            self._reset_ellipse_state()
             
             # Для окружности проверяем метод создания (используем сохраненный тип)
             if drawing_type == 'circle':
-                method = self._circle_creation_method or 'center_radius'
+                method = self._circle_creation_mode()
                 if method == 'three_points':
                     # Для трех точек нужно все три точки
                     if self._circle_point2 is None or self._circle_point3 is None:
-                        # Восстанавливаем состояние, если проверка не прошла
-                        self._current_object = obj
-                        self._is_drawing = True
-                        self._drawing_type = drawing_type
-                        # Удаляем объект из списка, так как мы его вернули
-                        if obj in self._objects:
-                            self._objects.remove(obj)
+                        self._restore_unfinished_drawing(obj, drawing_type)
                         return None
             
-            # Сбрасываем все переменные окружности
-            self._circle_creation_method = None
-            self._circle_point1 = None
-            self._circle_point2 = None
-            self._circle_point3 = None
+            self._reset_circle_state()
             
             # Для многоугольника проверяем метод создания
             if drawing_type == 'polygon':
-                method = self._polygon_creation_method or 'center_radius_vertices'
+                method = self._polygon_creation_mode()
                 from widgets.primitives import Polygon
                 if isinstance(obj, Polygon):
                     if method == 'center_radius_vertices':
                         # Проверяем, что радиус и количество вершин установлены
                         if self._polygon_radius <= 0.0:
-                            # Восстанавливаем состояние, если проверка не прошла
-                            self._current_object = obj
-                            self._is_drawing = True
-                            self._drawing_type = drawing_type
-                            # Удаляем объект из списка, так как мы его вернули
-                            if obj in self._objects:
-                                self._objects.remove(obj)
+                            self._restore_unfinished_drawing(obj, drawing_type)
                             return None
                         if self._polygon_num_vertices < 3:
-                            # Восстанавливаем состояние, если проверка не прошла
-                            self._current_object = obj
-                            self._is_drawing = True
-                            self._drawing_type = drawing_type
-                            # Удаляем объект из списка, так как мы его вернули
-                            if obj in self._objects:
-                                self._objects.remove(obj)
+                            self._restore_unfinished_drawing(obj, drawing_type)
                             return None
                 
-            # Сбрасываем все переменные многоугольника
-            self._polygon_creation_method = None
-            self._polygon_center = None
-            self._polygon_radius = 0.0
-            self._polygon_num_vertices = 3
+            self._reset_polygon_state()
             
             # Для сплайна проверяем количество контрольных точек
             if drawing_type == 'spline':
@@ -728,148 +908,46 @@ class Scene:
                 if isinstance(obj, Spline):
                     # Убеждаемся, что у сплайна есть минимум 2 зафиксированные точки
                     if len(self._spline_control_points) < 2:
-                        # Восстанавливаем состояние, если проверка не прошла
-                        self._current_object = obj
-                        self._is_drawing = True
-                        self._drawing_type = drawing_type
-                        # Удаляем объект из списка, так как мы его вернули
-                        if obj in self._objects:
-                            self._objects.remove(obj)
+                        self._restore_unfinished_drawing(obj, drawing_type)
                         return None
                     # Обновляем контрольные точки объекта из списка зафиксированных точек
                     obj.control_points = self._spline_control_points.copy()
                 
-                # Сбрасываем все переменные сплайна
-                self._spline_control_points = []
+                self._reset_spline_state()
             
             return obj
         
         # Для прямоугольника проверяем метод создания
         if drawing_type == 'rectangle':
-            method = self._rectangle_creation_method or 'two_points'
+            method = self._rectangle_creation_mode()
             from widgets.primitives import Rectangle
             if isinstance(obj, Rectangle):
-                if method == 'point_size':
-                    # Одна точка, ширина и высота - нужно убедиться, что размеры установлены
-                    if self._rectangle_width <= 0.0 or self._rectangle_height <= 0.0:
-                        # Размеры не установлены, не завершаем
+                if not self._apply_rectangle_finish_state(obj, method):
                         return None
-                    if not self._rectangle_point1:
-                        # Начальная точка не установлена, не завершаем
-                        return None
-                    # Устанавливаем правильные координаты прямоугольника
-                    end_point = QPointF(
-                        self._rectangle_point1.x() + self._rectangle_width,
-                        self._rectangle_point1.y() + self._rectangle_height
-                    )
-                    obj.top_left = QPointF(self._rectangle_point1)
-                    obj.bottom_right = end_point
-                elif method == 'center_size':
-                    # Центр, ширина и высота - нужно убедиться, что размеры установлены
-                    if self._rectangle_width <= 0.0 or self._rectangle_height <= 0.0:
-                        # Размеры не установлены, не завершаем
-                        return None
-                    if not self._rectangle_point1:
-                        # Центр не установлен, не завершаем
-                        return None
-                    # Устанавливаем правильные координаты прямоугольника
-                    half_width = self._rectangle_width / 2.0
-                    half_height = self._rectangle_height / 2.0
-                    top_left = QPointF(
-                        self._rectangle_point1.x() - half_width,
-                        self._rectangle_point1.y() - half_height
-                    )
-                    bottom_right = QPointF(
-                        self._rectangle_point1.x() + half_width,
-                        self._rectangle_point1.y() + half_height
-                    )
-                    obj.top_left = top_left
-                    obj.bottom_right = bottom_right
-                elif method == 'with_fillets':
-                    # Для метода с фасками/скруглениями нужно установить радиус скругления
-                    # Если радиус не установлен, используем значение по умолчанию
-                    if self._rectangle_fillet_radius == 0.0:
-                        # Вычисляем радиус скругления как 10% от меньшей стороны
-                        bbox = obj.get_bounding_box()
-                        min_side = min(bbox.width(), bbox.height())
-                        self._rectangle_fillet_radius = min_side * 0.1
-                    # Устанавливаем радиус скругления в объект
-                    obj.fillet_radius = self._rectangle_fillet_radius
             
-            # Сбрасываем все переменные прямоугольника
-            self._rectangle_creation_method = None
-            self._rectangle_point1 = None
-            self._rectangle_width = 0.0
-            self._rectangle_height = 0.0
-            self._rectangle_fillet_radius = 0.0
+            self._reset_rectangle_state()
             
             return obj
         return None
     
     def cancel_drawing(self):
         """Отменяет текущее рисование"""
-        self._current_object = None
-        self._is_drawing = False
-        self._drawing_type = None
-        self._arc_creation_method = None
-        self._arc_start_point = None
-        self._arc_end_point = None
-        self._arc_center = None
-        self._arc_radius = 0.0
-        self._ellipse_start_point = None
-        self._ellipse_end_point = None
-        self._circle_creation_method = None
-        self._circle_point1 = None
-        self._circle_point2 = None
-        self._circle_point3 = None
-        self._rectangle_creation_method = None
-        self._rectangle_point1 = None
-        self._rectangle_width = 0.0
-        self._rectangle_height = 0.0
-        self._rectangle_fillet_radius = 0.0
-        self._polygon_creation_method = None
-        self._polygon_center = None
-        self._polygon_radius = 0.0
-        self._polygon_num_vertices = 3
-        self._spline_control_points = []
+        self._reset_drawing_state()
     
     def _calculate_ellipse_arc_from_three_points(self, p1: QPointF, p2: QPointF, p3: QPointF):
         """Вычисляет параметры дуги эллипса по трем точкам (начало, конец, вершина)
         Высота определяется перпендикулярно линии между крайними точками"""
-        import math
-        
         # Проверяем, что точки не совпадают
         if (p1 == p2) or (p1 == p3) or (p2 == p3):
             return None, 0, 0, 0, 0, 0.0
         
-        # Середина хорды p1-p2
-        chord_mid = QPointF((p1.x() + p2.x()) / 2, (p1.y() + p2.y()) / 2)
-        chord_length = math.sqrt((p2.x() - p1.x())**2 + (p2.y() - p1.y())**2)
-        
-        if chord_length < 1e-6:
+        chord_frame = self._chord_frame(p1, p2)
+        if chord_frame is None:
             return None, 0, 0, 0, 0, 0.0
-        
-        # Вектор хорды
-        chord_vec = QPointF(p2.x() - p1.x(), p2.y() - p1.y())
-        chord_angle = math.atan2(chord_vec.y(), chord_vec.x())
-        
-        # Преобразуем координаты в систему, где хорда горизонтальна
-        cos_a = math.cos(-chord_angle)
-        sin_a = math.sin(-chord_angle)
-        
-        # Транслируем так, чтобы середина хорды была в начале координат
-        p1_local = QPointF(
-            (p1.x() - chord_mid.x()) * cos_a - (p1.y() - chord_mid.y()) * sin_a,
-            (p1.x() - chord_mid.x()) * sin_a + (p1.y() - chord_mid.y()) * cos_a
-        )
-        p2_local = QPointF(
-            (p2.x() - chord_mid.x()) * cos_a - (p2.y() - chord_mid.y()) * sin_a,
-            (p2.x() - chord_mid.x()) * sin_a + (p2.y() - chord_mid.y()) * cos_a
-        )
-        p3_local = QPointF(
-            (p3.x() - chord_mid.x()) * cos_a - (p3.y() - chord_mid.y()) * sin_a,
-            (p3.x() - chord_mid.x()) * sin_a + (p3.y() - chord_mid.y()) * cos_a
-        )
+        chord_mid, chord_length, chord_angle = chord_frame
+        p1_local = self._point_to_chord_local(p1, chord_mid, chord_angle)
+        p2_local = self._point_to_chord_local(p2, chord_mid, chord_angle)
+        p3_local = self._point_to_chord_local(p3, chord_mid, chord_angle)
         
         # В локальной системе p1 и p2 находятся на оси X
         # p1_local.x() = -chord_length/2, p2_local.x() = chord_length/2
@@ -920,8 +998,7 @@ class Scene:
             b = abs(y3)  # Полуось по Y равна абсолютному значению высоты
         
         # Убеждаемся, что b не равен 0
-        if b < 1e-6:
-            b = a * 0.1  # Минимальное значение
+        b = self._semi_axis_floor(b, a * 0.1)
         
         # Центр эллипса в локальной системе - начало координат (середина хорды)
         # Преобразуем обратно в мировые координаты
@@ -996,40 +1073,17 @@ class Scene:
         """Вычисляет параметры эллипса по трем точкам
         Эллипс проходит через все три точки и симметричен относительно перпендикуляра к хорде p1-p2
         Возвращает центр, радиусы и угол поворота эллипса"""
-        import math
-        
         # Проверяем, что точки не совпадают
         if (p1 == p2) or (p1 == p3) or (p2 == p3):
             return None, 0, 0, 0.0
         
-        # Середина хорды p1-p2
-        chord_mid = QPointF((p1.x() + p2.x()) / 2, (p1.y() + p2.y()) / 2)
-        chord_length = math.sqrt((p2.x() - p1.x())**2 + (p2.y() - p1.y())**2)
-        
-        if chord_length < 1e-6:
+        chord_frame = self._chord_frame(p1, p2)
+        if chord_frame is None:
             return None, 0, 0, 0.0
-        
-        # Вектор хорды
-        chord_vec = QPointF(p2.x() - p1.x(), p2.y() - p1.y())
-        chord_angle = math.atan2(chord_vec.y(), chord_vec.x())
-        
-        # Преобразуем координаты в систему, где хорда горизонтальна
-        cos_a = math.cos(-chord_angle)
-        sin_a = math.sin(-chord_angle)
-        
-        # Транслируем так, чтобы середина хорды была в начале координат
-        p1_local = QPointF(
-            (p1.x() - chord_mid.x()) * cos_a - (p1.y() - chord_mid.y()) * sin_a,
-            (p1.x() - chord_mid.x()) * sin_a + (p1.y() - chord_mid.y()) * cos_a
-        )
-        p2_local = QPointF(
-            (p2.x() - chord_mid.x()) * cos_a - (p2.y() - chord_mid.y()) * sin_a,
-            (p2.x() - chord_mid.x()) * sin_a + (p2.y() - chord_mid.y()) * cos_a
-        )
-        p3_local = QPointF(
-            (p3.x() - chord_mid.x()) * cos_a - (p3.y() - chord_mid.y()) * sin_a,
-            (p3.x() - chord_mid.x()) * sin_a + (p3.y() - chord_mid.y()) * cos_a
-        )
+        chord_mid, chord_length, chord_angle = chord_frame
+        p1_local = self._point_to_chord_local(p1, chord_mid, chord_angle)
+        p2_local = self._point_to_chord_local(p2, chord_mid, chord_angle)
+        p3_local = self._point_to_chord_local(p3, chord_mid, chord_angle)
         
         # В локальной системе p1 и p2 находятся на оси X
         # p1_local.x() = -chord_length/2, p2_local.x() = chord_length/2
@@ -1062,9 +1116,7 @@ class Scene:
                 b_sq = (y3 ** 2) / (1.0 - x3_over_a_sq)
                 b = math.sqrt(b_sq) if b_sq > 0 else a * 0.1
         
-        # Убеждаемся, что b не равен 0
-        if b < 1e-6:
-            b = a * 0.1  # Минимальное значение
+        b = self._semi_axis_floor(b, a * 0.1)
         
         # Центр эллипса - середина хорды
         center = chord_mid
@@ -1081,8 +1133,6 @@ class Scene:
     
     def _calculate_circle_from_three_points(self, p1: QPointF, p2: QPointF, p3: QPointF):
         """Вычисляет центр и радиус окружности по трем точкам"""
-        import math
-        
         # Проверяем, что точки не совпадают
         if (p1 == p2) or (p1 == p3) or (p2 == p3):
             return None, 0
@@ -1113,9 +1163,7 @@ class Scene:
         center = QPointF(center_x, center_y)
         
         # Радиус
-        dx = x1 - center_x
-        dy = y1 - center_y
-        radius = math.sqrt(dx*dx + dy*dy)
+        radius = self._distance_between_points(p1, center)
         
         return center, radius
     

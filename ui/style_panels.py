@@ -1,4 +1,4 @@
-"""
+﻿"""
 UI панели для управления стилями линий
 """
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox,
@@ -576,6 +576,30 @@ class ObjectPropertiesPanel(QGroupBox):
         self.selected_objects = objects
         self.update_display()
     
+
+    def _object_style_name(self, obj):
+        if hasattr(obj, 'style') and obj.style:
+            style_name = getattr(obj.style, 'name', None)
+            if style_name:
+                return style_name
+        if hasattr(obj, 'style_name') and obj.style_name:
+            return obj.style_name
+        return None
+
+    def _apply_style_to_object(self, obj, style):
+        if not (hasattr(obj, 'style') and hasattr(style, 'name')):
+            return
+
+        from widgets.primitives import Rectangle
+
+        if isinstance(obj, Rectangle):
+            original_fillet_radius = getattr(obj, 'fillet_radius', 0.0)
+            obj.style = style
+            obj.fillet_radius = original_fillet_radius
+            return
+
+        obj.style = style
+
     def update_display(self):
         """Обновляет отображение панели"""
         if not self.selected_objects:
@@ -586,12 +610,9 @@ class ObjectPropertiesPanel(QGroupBox):
         # Проверяем, все ли объекты имеют один стиль
         styles = set()
         for obj in self.selected_objects:
-            if hasattr(obj, 'style') and obj.style:
-                style_name = getattr(obj.style, 'name', None)
-                if style_name:
-                    styles.add(style_name)
-            elif hasattr(obj, 'style_name') and obj.style_name:
-                styles.add(obj.style_name)
+            style_name = self._object_style_name(obj)
+            if style_name:
+                styles.add(style_name)
         
         if len(styles) == 1:
             # Все объекты имеют один стиль
@@ -619,18 +640,7 @@ class ObjectPropertiesPanel(QGroupBox):
         if style and self.selected_objects:
             # Применяем стиль ко всем выделенным объектам
             for obj in self.selected_objects:
-                if hasattr(obj, 'style') and hasattr(style, 'name'):
-                    # Для уже зафиксированных прямоугольников сохраняем fillet_radius
-                    # Скругленные углы применяются только при создании нового прямоугольника
-                    from widgets.primitives import Rectangle
-                    if isinstance(obj, Rectangle):
-                        # Сохраняем текущий fillet_radius перед применением стиля
-                        original_fillet_radius = getattr(obj, 'fillet_radius', 0.0)
-                        obj.style = style
-                        # Восстанавливаем fillet_radius для зафиксированных прямоугольников
-                        obj.fillet_radius = original_fillet_radius
-                    else:
-                        obj.style = style
+                self._apply_style_to_object(obj, style)
             # Обновляем отображение панели
             self.update_display()
             # Отправляем сигнал об изменении стиля
@@ -939,22 +949,26 @@ class StyleEditDialog(QDialog):
         self.dash_length_spin.setVisible(is_dashed)
         self.dash_gap_label.setVisible(is_dashed)
         self.dash_gap_spin.setVisible(is_dashed)
+
+    def _style_kwargs(self, name=None, is_gost_base=False):
+        return {
+            "name": name or self.name_edit.text().strip(),
+            "line_type": self.type_combo.currentData(),
+            "thickness_mm": self.thickness_spin.value(),
+            "dash_length": self.dash_length_spin.value(),
+            "dash_gap": self.dash_gap_spin.value(),
+            "is_gost_base": is_gost_base,
+            "zigzag_count": self.zigzag_count_spin.value(),
+            "zigzag_step_mm": self.zigzag_step_spin.value(),
+            "wavy_amplitude_mm": self.wavy_amplitude_spin.value(),
+        }
     
     def update_preview(self):
         """Обновляет превью стиля"""
         from widgets.line_style import LineStyle
         
         # Создаем временный стиль для превью
-        temp_style = LineStyle(
-            name="preview",
-            line_type=self.type_combo.currentData(),
-            thickness_mm=self.thickness_spin.value(),
-            dash_length=self.dash_length_spin.value(),
-            dash_gap=self.dash_gap_spin.value(),
-            zigzag_count=self.zigzag_count_spin.value(),
-            zigzag_step_mm=self.zigzag_step_spin.value(),
-            wavy_amplitude_mm=self.wavy_amplitude_spin.value()
-        )
+        temp_style = LineStyle(**self._style_kwargs(name="preview"))
         self.preview_widget.set_style(temp_style)
     
     def accept(self):
@@ -968,31 +982,22 @@ class StyleEditDialog(QDialog):
             if self.is_new:
                 # Создаем новый стиль
                 from widgets.line_style import LineStyle
-                new_style = LineStyle(
-                    name=name,
-                    line_type=self.type_combo.currentData(),
-                    thickness_mm=self.thickness_spin.value(),
-                    dash_length=self.dash_length_spin.value(),
-                    dash_gap=self.dash_gap_spin.value(),
-                    is_gost_base=False,
-                    zigzag_count=self.zigzag_count_spin.value(),
-                    zigzag_step_mm=self.zigzag_step_spin.value(),
-                    wavy_amplitude_mm=self.wavy_amplitude_spin.value()
-                )
+                new_style = LineStyle(**self._style_kwargs(name=name, is_gost_base=False))
                 self.style_manager.add_style(new_style)
             else:
                 # Обновляем существующий стиль
                 if not self.style.is_gost_base:
                     if name != self.style.name:
                         self.style_manager.rename_style(self.style.name, name)
-                
-                self.style.line_type = self.type_combo.currentData()
-                self.style.thickness_mm = self.thickness_spin.value()
-                self.style.dash_length = self.dash_length_spin.value()
-                self.style.dash_gap = self.dash_gap_spin.value()
-                self.style.zigzag_count = self.zigzag_count_spin.value()
-                self.style.zigzag_step_mm = self.zigzag_step_spin.value()
-                self.style.wavy_amplitude_mm = self.wavy_amplitude_spin.value()
+
+                style_kwargs = self._style_kwargs(name=name, is_gost_base=self.style.is_gost_base)
+                self.style.line_type = style_kwargs["line_type"]
+                self.style.thickness_mm = style_kwargs["thickness_mm"]
+                self.style.dash_length = style_kwargs["dash_length"]
+                self.style.dash_gap = style_kwargs["dash_gap"]
+                self.style.zigzag_count = style_kwargs["zigzag_count"]
+                self.style.zigzag_step_mm = style_kwargs["zigzag_step_mm"]
+                self.style.wavy_amplitude_mm = style_kwargs["wavy_amplitude_mm"]
             
             super().accept()
         except ValueError as e:
